@@ -142,10 +142,11 @@ sudo bash scripts/sriov-selftest.sh sfp0     # 拔掉 sfp0 的光纤再跑一次
    curl -x http://127.0.0.1:7890 -s -o /dev/null -w '%{http_code}\n' https://registry-1.docker.io/v2/   # 应为 401
    ```
 
-   代理固定走 `PITS` 组：订阅里的所有节点，自动选延迟最低的那个。订阅自带的模式、分组和规则都不起作用。查看当前用的是哪个节点（订阅里设了 `secret` 的话，加上 `-H "Authorization: Bearer <secret>"`）：
+   代理固定走 `PITS` 组：订阅里的所有节点，自动选延迟最低的那个。订阅自带的模式、分组和规则都不起作用。查看当前用的是哪个节点（控制接口的密码沿用订阅配置里的 `secret`，没有就是空的）：
 
    ```sh
-   curl -s 127.0.0.1:9090/proxies/PITS | jq -r .now
+   S=$(sudo jq -r '.secret // ""' /run/pits-mihomo/config.yaml)
+   curl -s -H "Authorization: Bearer $S" 127.0.0.1:9090/proxies/PITS | jq -r .now
    ```
 
 4. 等 RKE2 起来。切换时 rke2-server 会带着代理设置重启，之前卡在拉镜像的话会接着拉：
