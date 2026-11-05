@@ -1,0 +1,45 @@
+# KubeVirt 和 CDI 的配置。
+#
+# permittedHostDevices 按 vendor:device ID 列出可以交给 VM 的设备；KubeVirt 只会分配
+# 已经绑在 vfio-pci 上的设备（绑定由宿主的 modules/vfio.nix 按 PCI 地址完成），
+# 所以即使系统盘和数据盘同型号，系统盘也不会被分出去。
+#
+# P0 时用 `lspci -nn` 核对下面的 ID；数据盘的 ID 必须填。
+---
+apiVersion: kubevirt.io/v1
+kind: KubeVirt
+metadata:
+  name: kubevirt
+  namespace: kubevirt
+spec:
+  certificateRotateStrategy: {}
+  configuration:
+    developerConfiguration:
+      # 在 KubeVirt 1.9 里这两个都还是 Alpha，需要显式打开。
+      featureGates:
+        - HostDevices
+        - CPUManager
+    permittedHostDevices:
+      pciHostDevices:
+        - pciVendorSelector: "8086:125B" # I226-LM（网络节点上行）
+          resourceName: pits.io/i226-lm
+        - pciVendorSelector: "8086:1572" # X710 10G SFP+（网络节点）
+          resourceName: pits.io/x710
+        - pciVendorSelector: "FFFF:FFFF" # TODO：数据盘的 vendor:device（存储节点）
+          resourceName: pits.io/nvme-data
+  customizeComponents: {}
+  imagePullPolicy: IfNotPresent
+  workloadUpdateStrategy: {}
+---
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: CDI
+metadata:
+  name: cdi
+spec:
+  config:
+    featureGates:
+      # local-path 是 WaitForFirstConsumer，CDI 要等 VM 调度后再导入镜像。
+      - HonorWaitForFirstConsumer
+  imagePullPolicy: IfNotPresent
+  infra: {}
+  workload: {}

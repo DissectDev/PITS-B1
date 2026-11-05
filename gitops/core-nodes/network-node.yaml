@@ -1,0 +1,70 @@
+# 网络节点（PITS Network）：直通 I226-LM 和 X710 的两个口，再用一块 virtio 网卡接 br-core。
+# 内部用什么路由系统、怎么配置，由 PITS Network 的设计决定；这里只管资源、直通和启动。
+#
+# 系统盘必须能从镜像重建：配置放在 Git 里，系统盘丢了就重新导入镜像、重新下发配置。
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: network-node
+  namespace: core-nodes
+  labels:
+    pits.io/fault-domain: core
+    pits.io/tier: business
+    pits.io/node-role: network
+spec:
+  runStrategy: Always
+  dataVolumeTemplates:
+    - metadata:
+        name: network-node-root
+      spec:
+        storage:
+          storageClassName: local-path
+          resources:
+            requests:
+              storage: 16Gi
+        source:
+          http:
+            url: "https://TODO/network-node.qcow2" # TODO：PITS Network 的系统镜像
+  template:
+    metadata:
+      labels:
+        pits.io/fault-domain: core
+        pits.io/tier: business
+        pits.io/node-role: network
+    spec:
+      domain:
+        cpu:
+          # 2 个 P 核 × 2 线程。能否真的分到 P 核要在 P3 实测（见 docs/plan.md 风险表）。
+          sockets: 1
+          cores: 2
+          threads: 2
+          dedicatedCpuPlacement: true
+        memory:
+          guest: 4Gi
+        resources:
+          requests:
+            memory: 4Gi
+        devices:
+          disks:
+            - name: root
+              disk:
+                bus: virtio
+          hostDevices:
+            - name: uplink # I226-LM，建议接光猫做上行
+              deviceName: pits.io/i226-lm
+            - name: sfp1
+              deviceName: pits.io/x710
+            - name: sfp2
+              deviceName: pits.io/x710
+          interfaces:
+            - name: core
+              bridge: {}
+      networks:
+        # 不接 Pod 网络：网络节点只通过直通网卡和 br-core 收发流量。
+        - name: core
+          multus:
+            networkName: pits-net/br-core
+      volumes:
+        - name: root
+          dataVolume:
+            name: network-node-root

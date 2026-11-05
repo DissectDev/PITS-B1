@@ -1,0 +1,17 @@
+# br-core：核心机内部 VM 互联用的二层网。网桥由宿主创建（modules/network.nix），
+# 不接物理口、宿主不配地址。地址由网络节点分配，所以这里不设 IPAM。
+# 其他命名空间里的 VM 用 networkName: pits-net/br-core 引用它。
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: br-core
+  namespace: pits-net
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "name": "br-core",
+      "type": "bridge",
+      "bridge": "br-core",
+      "ipam": {}
+    }

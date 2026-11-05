@@ -1,0 +1,8 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - helm-releases.yaml
+  # KubeVirt 和 CDI 的 operator 来自官方 release，原样存放。升级时下载新版本替换文件，
+  # 并核对 KubeVirt 支持的 K8s 版本（https://github.com/kubevirt/sig-release/blob/main/releases/k8s-support-matrix.md）。
+  - kubevirt-operator-v1.9.1.yaml
+  - cdi-operator-v1.66.1.yaml

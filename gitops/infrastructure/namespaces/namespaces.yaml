@@ -1,0 +1,101 @@
+# 由本仓库管理的命名空间。故障域和层级标签打在命名空间上，
+# 由 Kyverno（gitops/policies）继承到其中的 Pod、PVC 和 VM。
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pits-net
+  labels:
+    pits.io/fault-domain: core
+    pits.io/tier: control
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: core-nodes
+  labels:
+    pits.io/fault-domain: core
+    pits.io/tier: business
+    # virt-launcher 需要特权（直通设备）
+    pod-security.kubernetes.io/enforce: privileged
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: zones
+  labels:
+    pits.io/fault-domain: core
+    pits.io/tier: control
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: keycloak
+  labels:
+    pits.io/fault-domain: core
+    pits.io/tier: mgmt
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: manageiq
+  labels:
+    pits.io/fault-domain: core
+    pits.io/tier: mgmt
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pits-monitoring
+  labels:
+    pits.io/fault-domain: core
+    pits.io/tier: mgmt
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pits-registry
+  labels:
+    pits.io/fault-domain: core
+    pits.io/tier: mgmt
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pits-compliance
+  labels:
+    pits.io/fault-domain: core
+    pits.io/tier: mgmt
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pits-boot
+  labels:
+    pits.io/fault-domain: core
+    pits.io/tier: control
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: velero
+  labels:
+    pits.io/fault-domain: core
+    pits.io/tier: mgmt
+    # node-agent 需要读宿主上的卷目录
+    pod-security.kubernetes.io/enforce: privileged
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kyverno
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cnpg-system

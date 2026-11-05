@@ -1,0 +1,6 @@
+# 两台核心节点由 GitOps 声明，不走 ManageIQ 的申领流程；ManageIQ 只把它们记进台账。
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - network-node.yaml
+  - storage-node.yaml

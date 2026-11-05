@@ -1,0 +1,97 @@
+# 核心集群用到的外部来源。版本全部固定，升级时改这里并走维护窗口。
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: jetstack
+  namespace: flux-system
+spec:
+  interval: 12h
+  url: https://charts.jetstack.io
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: kyverno
+  namespace: flux-system
+spec:
+  interval: 12h
+  url: https://kyverno.github.io/kyverno/
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: cnpg
+  namespace: flux-system
+spec:
+  interval: 12h
+  url: https://cloudnative-pg.github.io/charts
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: prometheus-community
+  namespace: flux-system
+spec:
+  interval: 12h
+  url: https://prometheus-community.github.io/helm-charts
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: zot
+  namespace: flux-system
+spec:
+  interval: 12h
+  url: https://zotregistry.dev/helm-charts
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: vmware-tanzu
+  namespace: flux-system
+spec:
+  interval: 12h
+  url: https://vmware-tanzu.github.io/helm-charts
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: local-path-provisioner
+  namespace: flux-system
+spec:
+  interval: 12h
+  url: https://github.com/rancher/local-path-provisioner
+  ref:
+    tag: v0.0.37
+  ignore: |
+    /*
+    !/deploy/
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: keycloak-k8s-resources
+  namespace: flux-system
+spec:
+  interval: 12h
+  url: https://github.com/keycloak/keycloak-k8s-resources
+  ref:
+    tag: 26.8.1
+  ignore: |
+    /*
+    !/kubernetes/
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: manageiq-pods
+  namespace: flux-system
+spec:
+  interval: 12h
+  url: https://github.com/ManageIQ/manageiq-pods
+  ref:
+    tag: spassky-1
+  ignore: |
+    /*
+    !/manageiq-operator/config/

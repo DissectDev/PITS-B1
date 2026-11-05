@@ -1,0 +1,209 @@
+# 核心集群的部署顺序。每一层只依赖它前面的层；core-nodes 和 zones 默认暂停，
+# 分别在 P3 和 P6 填好镜像地址与 PCI ID 后再打开（把 suspend 改成 false）。
+#
+#   namespaces → controllers → config ─┬→ policies
+#                local-path ───────────┤
+#                keycloak-operator ────┤
+#                manageiq-operator ────┤
+#                                      ├→ core-nodes（P3）
+#                                      ├→ management（P4–P5）
+#                                      └→ zones（P6）
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: namespaces
+  namespace: flux-system
+spec:
+  interval: 1h
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./gitops/infrastructure/namespaces
+  prune: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: controllers
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: namespaces
+  interval: 1h
+  retryInterval: 2m
+  timeout: 15m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./gitops/infrastructure/controllers
+  prune: true
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: local-path
+  namespace: flux-system
+spec:
+  interval: 1h
+  timeout: 5m
+  sourceRef:
+    kind: GitRepository
+    name: local-path-provisioner
+  path: ./deploy
+  prune: true
+  wait: true
+  patches:
+    # 本地卷放在系统盘的 /var/lib/pits-local（由 modules/rke2.nix 创建）
+    - target:
+        kind: ConfigMap
+        name: local-path-config
+      patch: |
+        - op: replace
+          path: /data/config.json
+          value: |-
+            {"nodePathMap":[{"node":"DEFAULT_PATH_FOR_NON_LISTED_NODES","paths":["/var/lib/pits-local"]}]}
+    # 设为默认存储类
+    - target:
+        kind: StorageClass
+        name: local-path
+      patch: |
+        - op: add
+          path: /metadata/annotations
+          value:
+            storageclass.kubernetes.io/is-default-class: "true"
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: keycloak-operator
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: namespaces
+  interval: 1h
+  timeout: 5m
+  sourceRef:
+    kind: GitRepository
+    name: keycloak-k8s-resources
+  path: ./kubernetes
+  prune: true
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: manageiq-operator
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: namespaces
+  interval: 1h
+  timeout: 5m
+  sourceRef:
+    kind: GitRepository
+    name: manageiq-pods
+  path: ./manageiq-operator/config/default
+  # operator 只监视自己所在的命名空间，所以整体放进 manageiq，ManageIQ CR 也放在那里。
+  targetNamespace: manageiq
+  prune: true
+  wait: true
+  images:
+    - name: docker.io/manageiq/manageiq-operator
+      # 和 GitRepository 的 tag 保持一致。P4 时核对该镜像 tag 是否存在。
+      newTag: spassky-1
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: config
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: controllers
+  interval: 1h
+  timeout: 10m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./gitops/infrastructure/config
+  prune: true
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: policies
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: controllers
+  interval: 1h
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./gitops/policies
+  prune: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: core-nodes
+  namespace: flux-system
+spec:
+  # P3：在 gitops/core-nodes 和 gitops/infrastructure/config/kubevirt.yaml 里填好
+  # 镜像地址和数据盘的 PCI ID 之后，改成 false。
+  suspend: true
+  dependsOn:
+    - name: config
+    - name: local-path
+    - name: policies
+  interval: 1h
+  timeout: 20m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./gitops/core-nodes
+  # 核心节点被误删的代价太大，关掉 prune：从 Git 里删掉文件不会删除 VM。
+  prune: false
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: management
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: config
+    - name: local-path
+    - name: policies
+    - name: keycloak-operator
+    - name: manageiq-operator
+  interval: 1h
+  timeout: 20m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./gitops/management
+  prune: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: zones
+  namespace: flux-system
+spec:
+  # P6：控制面 VM 镜像就绪后改成 false。
+  suspend: true
+  dependsOn:
+    - name: config
+    - name: local-path
+    - name: policies
+  interval: 1h
+  timeout: 20m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./gitops/zones/clusters
+  prune: false
