@@ -120,21 +120,75 @@ sudo bash scripts/sriov-selftest.sh sfp0     # 拔掉 sfp0 的光纤再跑一次
 
 ## P2 核心集群
 
-1. 如果打开了 etcd 机外 S3，先写好 `/etc/rancher/rke2/config.yaml.d/90-secrets.yaml`，再重启 rke2-server。
-2. 确认集群起来了：`kubectl get nodes`（宿主上已设好 `KUBECONFIG`）。
-3. 让 Flux 接管：
+核心机要从 docker.io、ghcr.io、quay.io 拉镜像，从 github.io 和 GitHub 拉 Helm chart 和 Git 仓库，这些来源在国内慢或者拉不到。宿主上跑一个 mihomo 代理（`modules/proxy.nix`），只给 RKE2、Flux 的 source-controller 和 nix-daemon 用；宿主的其他流量、VM 和分支都不走它。
+
+1. 放好代理的订阅配置，格式和要求见 [secrets.md](secrets.md)：
 
    ```sh
-   export GITHUB_TOKEN=...
-   flux bootstrap github --owner=DissectDev --repository=PITS-B1 \
-     --branch=main --path=gitops/clusters/core
+   sudo install -m 600 <你的 Clash/mihomo 配置文件> /var/lib/pits/secrets/mihomo.yaml
    ```
 
-4. `flux get kustomizations` 应当看到：`namespaces`、`controllers`、`local-path`、`config`、`policies` 等就绪，`core-nodes` 和 `zones` 处于暂停状态。
+2. 更新仓库并切换。这次不改网卡和直通，可以直接 `switch`：
+
+   ```sh
+   cd PITS-B1 && git pull
+   sudo nixos-rebuild switch --flake .#core
+   ```
+
+3. 确认代理可用：
+
+   ```sh
+   systemctl status mihomo --no-pager | head -5
+   curl -x http://127.0.0.1:7890 -s -o /dev/null -w '%{http_code}\n' https://registry-1.docker.io/v2/   # 应为 401
+   ```
+
+   每个分组默认用第一个节点。要换节点，用只监听本机的控制接口（订阅里设了 `secret` 的话，加上 `-H "Authorization: Bearer <secret>"`）：
+
+   ```sh
+   curl -s 127.0.0.1:9090/proxies | jq -r '.proxies[] | select(.type == "Selector") | "\(.name): \(.now)"'
+   curl -X PUT 127.0.0.1:9090/proxies/<分组名> -d '{"name": "<节点名>"}'
+   ```
+
+4. 等 RKE2 起来。切换时 rke2-server 会带着代理设置重启，之前卡在拉镜像的话会接着拉：
+
+   ```sh
+   sudo kubectl get nodes          # pits-core 为 Ready
+   sudo kubectl get pods -A        # 全部 Running 或 Completed
+   ```
+
+5. 让 Flux 接管。Flux 的安装清单就在仓库里（`gitops/clusters/core/flux-system`），手动应用一次，之后 Flux 按这个目录管理自己。仓库是公开的，不需要 GitHub token：
+
+   ```sh
+   sudo kubectl apply --server-side -k gitops/clusters/core/flux-system
+   sudo kubectl wait --for=condition=Established --timeout=2m \
+     crd/gitrepositories.source.toolkit.fluxcd.io crd/kustomizations.kustomize.toolkit.fluxcd.io
+   sudo kubectl apply --server-side -k gitops/clusters/core/flux-system
+   ```
+
+   第一次应用时 CRD 还没就绪，最后两个资源（GitRepository 和 Kustomization）会报错；等 CRD 就绪后再应用一次就好。
+
+6. 检查：
+
+   ```sh
+   sudo flux get sources all
+   sudo flux get kustomizations
+   ```
+
+   `namespaces`、`controllers`、`local-path`、`config`、`policies`、`keycloak-operator`、`manageiq-operator` 应当都是 Ready；`core-nodes`、`management-platform`、`management`、`compliance`、`zones` 处于暂停状态。`controllers` 要拉的镜像最多，第一次可能要十几分钟。
+
+7. 代理跑通后，打开 RKE2 的离线镜像包：把 `site/core.nix` 里的 `rke2.airgapImages` 改成 `true` 再构建一次。镜像包由 nix-daemon 经代理从 GitHub 下载，有几百 MB。打开之后，即使重装，核心集群启动也不依赖 docker.io。
 
 **验收：**
-- `sudo rke2 etcd-snapshot save` 能生成快照，`sudo rke2 etcd-snapshot list` 能看到它。
-- 用这份快照（`rke2 server --cluster-reset --cluster-reset-restore-path=...`）恢复出原来的集群。
+- `sudo rke2 etcd-snapshot save --name p2` 能生成快照，`sudo rke2 etcd-snapshot list` 能看到它。
+- 用这份快照恢复出原来的集群。恢复会把集群状态退回到快照那一刻，所以紧接着拍完快照做：
+
+  ```sh
+  sudo systemctl stop rke2-server
+  sudo rke2 server --cluster-reset --cluster-reset-restore-path=/var/lib/rancher/rke2/server/db/snapshots/<快照文件名>
+  sudo systemctl start rke2-server
+  ```
+
+- 停掉代理（`sudo systemctl stop mihomo`）后重启 rke2-server，集群照样起来：镜像已经在本地，不再需要外网。验完再 `sudo systemctl start mihomo`。
 
 机外 S3 目前还没有，快照只留在本机。机外这一份在 P5 之前补上，补法见 `gitops/management/platform/backup.yaml` 末尾。补上之后，再用机外的快照做一次恢复。
 
@@ -172,6 +226,8 @@ sudo bash scripts/sriov-selftest.sh sfp0     # 拔掉 sfp0 的光纤再跑一次
 - 在网络节点里改干道 VF 的 VLAN 或 MAC 设置，存储节点那块 VF 不受影响（`ip link show sfp0` 里 vf1 不变）。
 
 ## P4 管理与治理（关卡）
+
+先把 `gitops/clusters/core/stack.yaml` 里 `management-platform`、`management`、`compliance` 的 `suspend` 改成 `false`，提交后由 Flux 部署。
 
 1. 创建 Steampipe 的数据库密码：
 

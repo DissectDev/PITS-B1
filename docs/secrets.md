@@ -6,6 +6,7 @@
 | --- | --- | --- | --- |
 | 管理员密码哈希 | 宿主 `/var/lib/pits/secrets/admin.hash` | P1：就地 rebuild 前手动放好；重装时随 `--extra-files` 放入 | 控制台登录、sudo。生成：`mkpasswd -m yescrypt` |
 | Tailscale auth key | 宿主 `/var/lib/pits/secrets/tailscale-authkey` | 只在用 nixos-anywhere 重装时需要 | 一次性、带 `tag:pits-core`、短有效期。就地 rebuild 时沿用已有的登录状态 |
+| 代理订阅配置 | 宿主 `/var/lib/pits/secrets/mihomo.yaml` | P2 | mihomo 的配置（Clash/mihomo 格式），含代理节点的凭据。服务商给的完整配置可以直接放；只有订阅链接时，用下方的最小配置 |
 | NUT 密码 | 宿主 `/var/lib/pits/secrets/nut-upsmon` | 有 UPS 时 | upsmon 连 upsd |
 | etcd 机外 S3 密钥 | 宿主 `/etc/rancher/rke2/config.yaml.d/90-secrets.yaml` | 配置机外 S3 时（目前未配置） | 见下方示例 |
 | Steampipe 数据库密码 | Secret `pits-compliance/steampipe-db`（键 `password`） | P4 | Steampipe 服务和 Powerpipe |
@@ -30,3 +31,28 @@ Velero 的 `cloud` 文件是 AWS credentials 格式：
 aws_access_key_id = ...
 aws_secret_access_key = ...
 ```
+
+`mihomo.yaml` 不用自己改端口和监听地址。每次启动前 `pits-mihomo-config` 会改写几项：只留 7890 一个端口，只允许本机和核心集群的 Pod 使用，控制接口只监听 127.0.0.1:9090，关掉 TUN 和 DNS 监听（见 `modules/proxy.nix`）。只有订阅链接时的最小配置：
+
+```yaml
+proxy-providers:
+  sub:
+    type: http
+    url: "https://<你的订阅链接>"
+    interval: 86400
+    path: ./providers/sub.yaml
+    health-check:
+      enable: true
+      url: https://www.gstatic.com/generate_204
+      interval: 300
+proxy-groups:
+  - name: PROXY
+    type: url-test
+    use: [sub]
+    url: https://www.gstatic.com/generate_204
+    interval: 300
+rules:
+  - MATCH,PROXY
+```
+
+走这个代理的只有拉镜像、拉 chart 和 Git 的几个进程，所以规则里全部走代理即可。改了这个文件后执行 `sudo systemctl restart mihomo`。

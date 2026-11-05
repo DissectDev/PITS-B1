@@ -1,0 +1,26 @@
+# Flux 从这个仓库同步核心集群。仓库是公开的，用 HTTPS 拉取，不需要 token 和 deploy key；
+# 拉取经宿主上的代理（见 kustomization.yaml 里给 source-controller 加的环境变量）。
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: flux-system
+  namespace: flux-system
+spec:
+  interval: 1m
+  url: https://github.com/DissectDev/PITS-B1
+  ref:
+    branch: main
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: flux-system
+  namespace: flux-system
+spec:
+  interval: 10m
+  path: ./gitops/clusters/core
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
