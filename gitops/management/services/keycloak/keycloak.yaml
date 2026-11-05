@@ -1,0 +1,62 @@
+# Keycloak：统一登录（OIDC）。数据库由 CloudNativePG 提供。
+# Keycloak 跑在核心集群里，集群一倒它也不可用，所以每一层都保留不依赖它的本地应急入口。
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: keycloak-db
+  namespace: keycloak
+spec:
+  instances: 1
+  storage:
+    storageClass: local-path
+    size: 5Gi
+  bootstrap:
+    initdb:
+      database: keycloak
+      owner: keycloak
+  resources:
+    requests:
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: keycloak-tls
+  namespace: keycloak
+spec:
+  secretName: keycloak-tls
+  dnsNames:
+    - keycloak.${PITS_DOMAIN}
+  issuerRef:
+    name: pits-ca
+    kind: ClusterIssuer
+---
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: Keycloak
+metadata:
+  name: keycloak
+  namespace: keycloak
+spec:
+  instances: 1
+  db:
+    vendor: postgres
+    host: keycloak-db-rw
+    database: keycloak
+    usernameSecret:
+      name: keycloak-db-app
+      key: username
+    passwordSecret:
+      name: keycloak-db-app
+      key: password
+  hostname:
+    hostname: https://keycloak.${PITS_DOMAIN}
+  http:
+    tlsSecret: keycloak-tls
+  resources:
+    requests:
+      memory: 1Gi
+    limits:
+      memory: 1536Mi

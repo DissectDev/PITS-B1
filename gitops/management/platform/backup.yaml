@@ -1,0 +1,79 @@
+# Velero + Kopia：备份管理服务的数据，推到两处——存储节点的 S3 和机外 S3。
+#
+# 不备份 core-nodes 和 zones 里的 VM 系统盘：它们必须能从镜像重建。
+# etcd 快照不在这里，由宿主上的 RKE2 直接推到机外 S3（存储节点自己要靠集群才能启动）。
+#
+# 访问密钥不进 Git。P5 时手动创建两个 Secret（键名都是 cloud，内容是 AWS credentials 文件格式）：
+#   kubectl -n velero create secret generic velero-s3-storage --from-file=cloud=./storage.ini
+#   kubectl -n velero create secret generic velero-s3-offsite --from-file=cloud=./offsite.ini
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: velero
+  namespace: velero
+spec:
+  interval: 1h
+  chart:
+    spec:
+      chart: velero
+      version: 12.2.3 # Velero 1.18
+      sourceRef:
+        kind: HelmRepository
+        name: vmware-tanzu
+        namespace: flux-system
+  install:
+    crds: CreateReplace
+  upgrade:
+    crds: CreateReplace
+  values:
+    initContainers:
+      - name: velero-plugin-for-aws
+        image: velero/velero-plugin-for-aws:v1.14.4
+        volumeMounts:
+          - mountPath: /target
+            name: plugins
+    deployNodeAgent: true
+    snapshotsEnabled: false
+    credentials:
+      useSecret: true
+      existingSecret: velero-s3-storage
+    configuration:
+      defaultVolumesToFsBackup: true
+      backupStorageLocation:
+        - name: storage-node
+          provider: aws
+          bucket: ${PITS_S3_STORAGE_BUCKET}
+          default: true
+          config:
+            region: ${PITS_S3_STORAGE_REGION}
+            s3ForcePathStyle: "true"
+            s3Url: ${PITS_S3_STORAGE_URL}
+        - name: offsite
+          provider: aws
+          bucket: ${PITS_S3_OFFSITE_BUCKET}
+          credential:
+            name: velero-s3-offsite
+            key: cloud
+          config:
+            region: ${PITS_S3_OFFSITE_REGION}
+            s3ForcePathStyle: "true"
+            s3Url: ${PITS_S3_OFFSITE_URL}
+    schedules:
+      daily-storage-node:
+        schedule: "0 3 * * *"
+        template:
+          ttl: 168h
+          storageLocation: storage-node
+          includedNamespaces:
+            - keycloak
+            - manageiq
+            - pits-compliance
+      daily-offsite:
+        schedule: "30 3 * * *"
+        template:
+          ttl: 720h
+          storageLocation: offsite
+          includedNamespaces:
+            - keycloak
+            - manageiq
+            - pits-compliance

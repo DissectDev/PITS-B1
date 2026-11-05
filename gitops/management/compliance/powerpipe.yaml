@@ -1,0 +1,139 @@
+# Powerpipe：合规基准的界面（端口 9033，只在集群内）和定时运行。
+#
+# 定时任务每 2 小时跑一次基准：
+#   1. 运行基准，结果写成 JSON；
+#   2. 打开写回（MIQ_WRITEBACK=true）后，把不合规的 VM 在 ManageIQ 里打上 pits_compliance/noncompliant 标签，
+#      合规的去掉该标签。写回在 P4 关卡通过后再打开，见 docs/compliance.md。
+# 任务是否按时成功由 Prometheus 告警（gitops/management/services/alerts）盯着。
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: powerpipe
+  namespace: pits-compliance
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: powerpipe
+  template:
+    metadata:
+      labels:
+        app: powerpipe
+    spec:
+      initContainers:
+        - name: copy-mod
+          image: docker.io/mikefarah/yq:4.54.1
+          command: ["/bin/sh", "-c", "cp -r /mod-src/. /mod/"]
+          volumeMounts:
+            - { name: mod-src, mountPath: /mod-src }
+            - { name: mod, mountPath: /mod }
+      containers:
+        - name: powerpipe
+          # P4 时核对镜像地址和 tag。
+          image: ghcr.io/turbot/powerpipe:1.5.7
+          workingDir: /mod
+          args:
+            - server
+            - --listen
+            - network
+            - --port
+            - "9033"
+            - --database
+            - postgres://steampipe:$(STEAMPIPE_PASSWORD)@steampipe.pits-compliance.svc:9193/steampipe
+          env:
+            - name: STEAMPIPE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: steampipe-db, key: password }
+          ports:
+            - containerPort: 9033
+              name: http
+          volumeMounts:
+            - { name: mod, mountPath: /mod }
+          resources:
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: mod-src
+          configMap:
+            name: pits-powerpipe-mod
+        - name: mod
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: powerpipe
+  namespace: pits-compliance
+spec:
+  selector:
+    app: powerpipe
+  ports:
+    - name: http
+      port: 9033
+      targetPort: 9033
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pits-benchmark
+  namespace: pits-compliance
+spec:
+  schedule: "15 */2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: Never
+          initContainers:
+            - name: copy-mod
+              image: docker.io/mikefarah/yq:4.54.1
+              command: ["/bin/sh", "-c", "cp -r /mod-src/. /mod/"]
+              volumeMounts:
+                - { name: mod-src, mountPath: /mod-src }
+                - { name: mod, mountPath: /mod }
+            - name: run-benchmark
+              image: ghcr.io/turbot/powerpipe:1.5.7
+              workingDir: /mod
+              command: ["/bin/sh", "/scripts/run-benchmark.sh"]
+              env:
+                - name: STEAMPIPE_PASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: steampipe-db, key: password }
+              volumeMounts:
+                - { name: mod, mountPath: /mod }
+                - { name: out, mountPath: /out }
+                - { name: scripts, mountPath: /scripts }
+          containers:
+            - name: writeback
+              image: docker.io/library/alpine:3.22
+              command: ["/bin/sh", "/scripts/writeback.sh"]
+              env:
+                - name: MIQ_WRITEBACK
+                  value: "false"
+                - name: MIQ_URL
+                  value: http://httpd.manageiq.svc:8080
+                - name: MIQ_USER
+                  valueFrom:
+                    secretKeyRef: { name: pits-miq-api, key: user, optional: true }
+                - name: MIQ_PASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: pits-miq-api, key: password, optional: true }
+              volumeMounts:
+                - { name: out, mountPath: /out }
+                - { name: scripts, mountPath: /scripts }
+          volumes:
+            - name: mod-src
+              configMap:
+                name: pits-powerpipe-mod
+            - name: mod
+              emptyDir: {}
+            - name: out
+              emptyDir: {}
+            - name: scripts
+              configMap:
+                name: pits-compliance-scripts

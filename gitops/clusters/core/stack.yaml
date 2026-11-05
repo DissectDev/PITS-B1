@@ -6,7 +6,7 @@
 #                keycloak-operator ────┤
 #                manageiq-operator ────┤
 #                                      ├→ core-nodes（P3）
-#                                      ├→ management（P4–P5）
+#                                      ├→ management-platform → management、compliance（P4–P5）
 #                                      └→ zones（P6）
 ---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
@@ -168,6 +168,31 @@ spec:
   # 核心节点被误删的代价太大，关掉 prune：从 Git 里删掉文件不会删除 VM。
   prune: false
 ---
+# 管理服务分三段：platform 是带 CRD 的 Helm chart，services 和 compliance 用到这些 CRD，
+# 放在同一个 Kustomization 里会因为 CRD 还不存在而整体失败。
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: management-platform
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: config
+    - name: local-path
+    - name: policies
+  interval: 1h
+  timeout: 20m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./gitops/management/platform
+  prune: true
+  wait: true
+  postBuild:
+    substituteFrom:
+      - kind: ConfigMap
+        name: pits-site
+---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
@@ -175,9 +200,7 @@ metadata:
   namespace: flux-system
 spec:
   dependsOn:
-    - name: config
-    - name: local-path
-    - name: policies
+    - name: management-platform
     - name: keycloak-operator
     - name: manageiq-operator
   interval: 1h
@@ -185,7 +208,28 @@ spec:
   sourceRef:
     kind: GitRepository
     name: flux-system
-  path: ./gitops/management
+  path: ./gitops/management/services
+  prune: true
+  postBuild:
+    substituteFrom:
+      - kind: ConfigMap
+        name: pits-site
+---
+# 合规检查里有 shell 脚本和 SQL，不做 ${VAR} 替换，所以单独一段。
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: compliance
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: management-platform
+  interval: 1h
+  timeout: 10m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./gitops/management/compliance
   prune: true
 ---
 apiVersion: kustomize.toolkit.fluxcd.io/v1

@@ -1,0 +1,18 @@
+# GitOps 这边的站点参数，作用和宿主的 site/core.nix 一样：因环境而异的值只在这里填。
+# Flux 在 management-platform、management 两个阶段里用它替换 ${VAR}。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pits-site
+  namespace: flux-system
+data:
+  # 管理服务的域名后缀，例如 keycloak.<域名>。需要在局域网 DNS 里把这些名字指向宿主管理口。
+  PITS_DOMAIN: "pits.home.arpa"
+  # 存储节点上的 S3（Garage）。P5 时填写。
+  PITS_S3_STORAGE_URL: "http://TODO-storage-node:3900"
+  PITS_S3_STORAGE_BUCKET: "pits-backup"
+  PITS_S3_STORAGE_REGION: "garage"
+  # 机外 S3。etcd 快照另由宿主直接推送（见 site/core.nix 的 rke2.etcdS3）。
+  PITS_S3_OFFSITE_URL: "https://TODO-offsite-s3"
+  PITS_S3_OFFSITE_BUCKET: "pits-core-offsite"
+  PITS_S3_OFFSITE_REGION: "auto"

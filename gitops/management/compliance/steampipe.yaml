@@ -1,0 +1,150 @@
+# Steampipe：只读查询核心集群和各实验区集群。
+#
+# 连接配置在 Pod 启动时由区清单（ConfigMap pits-zones）生成：
+#   k8s_core          核心集群（Pod 自己的 ServiceAccount，只有 view 权限）
+#   k8s_zone_<区名>   每个区一个，kubeconfig 来自 Secret steampipe-zone-kubeconfigs 里同名的键
+#   all_k8s           以上全部的聚合连接
+# 区清单变化时 ConfigMap 名字里的哈希会变，Pod 随之重建，连接跟着更新。
+#
+# 首次部署前手动创建数据库密码（不进 Git）：
+#   kubectl -n pits-compliance create secret generic steampipe-db --from-literal=password=$(openssl rand -hex 16)
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: steampipe
+  namespace: pits-compliance
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pits-steampipe-view
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: ServiceAccount
+    name: steampipe
+    namespace: pits-compliance
+---
+# view 不含 CRD 定义和 RKE2 的快照记录，另外补上只读权限。
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pits-steampipe-extra-read
+rules:
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["k3s.cattle.io"]
+    resources: ["etcdsnapshotfiles"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pits-steampipe-extra-read
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pits-steampipe-extra-read
+subjects:
+  - kind: ServiceAccount
+    name: steampipe
+    namespace: pits-compliance
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: steampipe-home
+  namespace: pits-compliance
+spec:
+  storageClassName: local-path
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: steampipe
+  namespace: pits-compliance
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: steampipe
+  template:
+    metadata:
+      labels:
+        app: steampipe
+    spec:
+      serviceAccountName: steampipe
+      initContainers:
+        - name: render-connections
+          image: docker.io/mikefarah/yq:4.54.1
+          command: ["/bin/sh", "/scripts/render-connections.sh"]
+          volumeMounts:
+            - { name: scripts, mountPath: /scripts }
+            - { name: zones, mountPath: /registry }
+            - { name: zone-kubeconfigs, mountPath: /zone-kubeconfigs }
+            - { name: home, mountPath: /home/steampipe/.steampipe }
+        - name: install-plugins
+          # P4 时核对镜像地址和 tag。
+          image: ghcr.io/turbot/steampipe:2.4.9
+          command: ["steampipe", "plugin", "install", "kubernetes"]
+          volumeMounts:
+            - { name: home, mountPath: /home/steampipe/.steampipe }
+      containers:
+        - name: steampipe
+          image: ghcr.io/turbot/steampipe:2.4.9
+          args: ["service", "start", "--foreground", "--database-listen", "network"]
+          env:
+            - name: STEAMPIPE_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: steampipe-db, key: password }
+          ports:
+            - containerPort: 9193
+              name: postgres
+          volumeMounts:
+            - { name: home, mountPath: /home/steampipe/.steampipe }
+            - { name: zone-kubeconfigs, mountPath: /zone-kubeconfigs, readOnly: true }
+          resources:
+            requests:
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+      volumes:
+        - name: home
+          persistentVolumeClaim:
+            claimName: steampipe-home
+        - name: scripts
+          configMap:
+            name: pits-compliance-scripts
+        - name: zones
+          configMap:
+            name: pits-zones
+        - name: zone-kubeconfigs
+          secret:
+            secretName: steampipe-zone-kubeconfigs
+            optional: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: steampipe
+  namespace: pits-compliance
+spec:
+  selector:
+    app: steampipe
+  ports:
+    - name: postgres
+      port: 9193
+      targetPort: 9193

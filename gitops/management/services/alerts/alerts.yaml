@@ -1,0 +1,43 @@
+# 检查本身也要被监控：定时任务停了、备份没跑，都要告警。
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: pits-core
+  namespace: pits-monitoring
+  annotations:
+    # {{ $labels.x }} 是 Prometheus 模板，不让 Flux 的变量替换碰
+    kustomize.toolkit.fluxcd.io/substitute: disabled
+spec:
+  groups:
+    - name: pits-compliance
+      rules:
+        - alert: PitsBenchmarkStale
+          expr: time() - max(kube_cronjob_status_last_successful_time{namespace="pits-compliance", cronjob="pits-benchmark"}) > 4 * 3600
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: 合规基准超过 4 小时没有成功运行
+        - alert: PitsBenchmarkJobFailed
+          expr: max(kube_job_status_failed{namespace="pits-compliance", job_name=~"pits-benchmark-.*"}) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: 合规基准任务运行失败
+    - name: pits-backup
+      rules:
+        - alert: PitsVeleroBackupStale
+          expr: time() - max by (schedule) (velero_backup_last_successful_timestamp) > 26 * 3600
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Velero 计划 {{ $labels.schedule }} 超过 26 小时没有成功备份"
+        - alert: PitsManageIQDumpStale
+          expr: time() - max(kube_cronjob_status_last_successful_time{namespace="manageiq", cronjob="manageiq-pg-dump"}) > 26 * 3600
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: ManageIQ 数据库导出超过 26 小时没有成功

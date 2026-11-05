@@ -1,0 +1,25 @@
+# 部署到实验区集群里：拒绝任何标为 core 的工作负载。核心业务只能跑在核心机上。
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: pits-deny-core-in-zone
+spec:
+  background: true
+  rules:
+    - name: deny-core-fault-domain
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+                - PersistentVolumeClaim
+                - kubevirt.io/v1/VirtualMachine
+      validate:
+        failureAction: Enforce
+        message: "标为 pits.io/fault-domain=core 的资源只能跑在核心机上。"
+        deny:
+          conditions:
+            any:
+              - key: "{{ request.object.metadata.labels.\"pits.io/fault-domain\" || '' }}"
+                operator: Equals
+                value: core

@@ -49,11 +49,14 @@
 
   networking.firewall = {
     enable = true;
-    # 管理口只开 SSH、ingress 和 RKE2 API；Tailscale 自己的 UDP 端口由 tailscale 模块打开。
+    # 管理口只开 SSH、ingress、RKE2 API，以及给分支用的两个 NodePort；
+    # Tailscale 自己的 UDP 端口由 tailscale 模块打开。
     allowedTCPPorts = [
       22
       443
       6443
+      30080 # 启动镜像（gitops/management/services/boot-images）
+      30500 # zot 镜像缓存（gitops/management/platform/registry.yaml）
     ];
     # Pod 网络（Canal：cali* 和 flannel.1）和 tailnet 视为可信。
     trustedInterfaces = [

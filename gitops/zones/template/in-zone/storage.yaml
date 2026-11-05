@@ -1,0 +1,22 @@
+# 部署到实验区集群里（不是核心集群）：让这个区的 Piraeus 使用存储节点里的 LINSTOR controller。
+# 分支是无盘节点，作为 DRBD 无盘客户端挂载存储节点上的卷。
+# 前提：这个区里已经装好 Piraeus operator v2。
+---
+apiVersion: piraeus.io/v1
+kind: LinstorCluster
+metadata:
+  name: linstorcluster
+spec:
+  externalController:
+    # TODO（P6）：存储节点在 br-core 上的地址
+    url: http://TODO-storage-node:3370
+---
+# 外部 controller 要能连到 satellite，satellite 必须用宿主网络。
+apiVersion: piraeus.io/v1
+kind: LinstorSatelliteConfiguration
+metadata:
+  name: host-network
+spec:
+  podTemplate:
+    spec:
+      hostNetwork: true
