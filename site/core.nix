@@ -13,6 +13,9 @@
   # 管理口：2.5G 口 A（I226-V，8086:125c），接光猫。按 PCI 地址匹配，并改名为 mgmt0。
   mgmt = {
     pciAddress = "0000:58:00.0";
+    # 光猫局域网。SSH、ingress 和 RKE2 API 只对这个网段、br-core/实验区和 tailnet 开放；
+    # 光猫会下发公网 IPv6，宿主的管理端口不对 IPv6 开放。
+    lanCidr = "192.168.71.0/24";
     # 地址由上游光猫保证（P0 时 DHCP 拿到 192.168.71.35，建议在光猫上做 DHCP 保留）。
     # 改用静态地址时，把 dhcp 设为 false 并填下面三项。
     dhcp = true;

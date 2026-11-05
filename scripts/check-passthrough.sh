@@ -17,15 +17,19 @@ for d in /sys/bus/pci/drivers/vfio-pci/0000:*; do
 done
 
 echo
-echo "== 宿主可见的物理网卡（应当只有 mgmt0）"
+echo "== 宿主可见的物理网卡（有线的应当只有 mgmt0；板载 Wi-Fi 留在宿主上）"
 others=0
 for n in /sys/class/net/*; do
   [ -e "$n/device" ] || continue
   name=$(basename "$n")
+  if [ -d "$n/wireless" ] || [ -e "$n/phy80211" ]; then
+    echo "  $name（无线，留在宿主上）"
+    continue
+  fi
   echo "  $name"
   [ "$name" = "mgmt0" ] || others=1
 done
-[ "$others" = 0 ] || { echo "  !! 除 mgmt0 外还有物理网卡没被直通"; fail=1; }
+[ "$others" = 0 ] || { echo "  !! 除 mgmt0 外还有有线网卡没被直通"; fail=1; }
 
 echo
 echo "== 宿主可见的 NVMe（应当只有系统盘）"
