@@ -13,7 +13,10 @@
 #   - allow-lan 打开，但 lan-allowed-ips 只放行本机和 Pod 网段；防火墙也没有在管理口上开这个端口；
 #   - 控制接口只监听 127.0.0.1:9090，去掉网页面板；
 #   - 关掉 TUN 和 DNS 监听：宿主的路由和 DNS 不交给 mihomo；
-#   - 订阅里没写 geox-url 时，GeoIP、GeoSite 数据改从 jsDelivr 下载（GitHub 在国内经常下不动）。
+#   - 订阅里没写 geox-url 时，GeoIP、GeoSite 数据改从 jsDelivr 下载（GitHub 在国内经常下不动）；
+#   - 分流固定为全部走 PITS 组：这个组包含订阅里的所有节点，自动选延迟最低的。订阅自带的模式
+#     （global、direct）、分组里当前选中的节点和分流规则都不起作用。走这个代理的只有拉镜像、
+#     拉 chart 和 Git 的几个进程，目标全在国外，不需要分流；也不在本机解析域名，避开 DNS 污染。
 # 改了订阅文件后执行 `sudo systemctl restart mihomo`，会重新生成。
 {
   lib,
@@ -45,6 +48,17 @@ let
     | ."lan-disallowed-ips" = []
     | ."external-controller" = "127.0.0.1:9090"
     | .tun = ((.tun // {}) | .enable = false)
+    | .mode = "rule"
+    | del(."rule-providers", ."sub-rules")
+    | ."proxy-groups" = ([(."proxy-groups" // [])[] | select(.name != "PITS")] + [{
+        "name": "PITS",
+        "type": "url-test",
+        "include-all": true,
+        "url": "https://www.gstatic.com/generate_204",
+        "interval": 300,
+        "tolerance": 50
+      }])
+    | .rules = ["MATCH,PITS"]
     | ."geox-url" = (."geox-url" // {
         "geoip": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat",
         "geosite": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat",
@@ -98,6 +112,8 @@ in
     systemd.services.mihomo = {
       requires = [ "pits-mihomo-config.service" ];
       after = [ "pits-mihomo-config.service" ];
+      # 改写规则变了，nixos-rebuild switch 时重启 mihomo，新配置随之生效
+      restartTriggers = [ overrides ];
     };
 
     systemd.services.nix-daemon.environment = {
