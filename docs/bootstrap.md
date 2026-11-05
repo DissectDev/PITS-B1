@@ -178,7 +178,13 @@ sudo bash scripts/sriov-selftest.sh sfp0     # 拔掉 sfp0 的光纤再跑一次
 
    `namespaces`、`controllers`、`local-path`、`config`、`policies`、`keycloak-operator`、`manageiq-operator` 应当都是 Ready；`core-nodes`、`management-platform`、`management`、`compliance`、`zones` 处于暂停状态。`controllers` 要拉的镜像最多，第一次可能要十几分钟。
 
-7. 代理跑通后，打开 RKE2 的离线镜像包：把 `site/core.nix` 里的 `rke2.airgapImages` 改成 `true` 再构建一次。镜像包由 nix-daemon 经代理从 GitHub 下载，有几百 MB。打开之后，即使重装，核心集群启动也不依赖 docker.io。
+7. 代理跑通后，再构建一次，装上 RKE2 的离线镜像包（`site/core.nix` 的 `rke2.airgapImages`，已经打开）：
+
+   ```sh
+   git pull && sudo nixos-rebuild switch --flake .#core
+   ```
+
+   镜像包由 nix-daemon 经代理从 GitHub 下载，有几百 MB。装上之后，即使重装，核心集群启动也不依赖 docker.io。重装时代理要先能用，否则下载不了镜像包；这种情况下可以先把它关掉，装好再打开。
 
 **验收：**
 - `sudo rke2 etcd-snapshot save --name p2` 能生成快照，`sudo rke2 etcd-snapshot list` 能看到它。

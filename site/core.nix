@@ -134,9 +134,9 @@
     # nixpkgs 里的 RKE2 包名。KubeVirt 1.9 支持 K8s 1.34–1.36，这里用 1.35。
     # 升级时一次只升一个小版本，并先打 etcd 快照。
     package = "rke2_1_35";
-    # 预装 RKE2 的离线镜像包（核心组件、Canal、Multus），集群启动不再依赖 docker.io。
-    # 镜像包要从 GitHub 下载几百 MB，等代理跑通（nix-daemon 也走代理）之后再打开。
-    airgapImages = false;
+    # 预装 RKE2 的离线镜像包（核心组件、Canal、Multus），集群启动不再依赖 docker.io，重装也一样。
+    # 镜像包由 nix-daemon 经代理从 GitHub 下载，有几百 MB。
+    airgapImages = true;
     # 额外的证书 SAN，例如 Tailscale 的 MagicDNS 名字
     tlsSans = [ ];
     # etcd 快照推到机外 S3。目前还没有机外 S3，先关着，快照只留在本机；P5 前补上。
