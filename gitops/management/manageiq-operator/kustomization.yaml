@@ -1,0 +1,21 @@
+# ManageIQ operator，来自 ManageIQ/manageiq-pods 的 spassky-1 标签（manageiq-operator/config/ 下），原样存放。
+#
+# 按官方文档“Deploy the operator in your namespace”装的五个文件：CRD、Role、RoleBinding、
+# ServiceAccount、Deployment。上游的 config/default 是 kubebuilder 脚手架，在 spassky-1 里构建不出来
+# （manager_metrics_patch.yaml 往不存在的 args 里加参数），所以不用它。
+#
+# operator 只监视自己所在的命名空间，所以整体放进 manageiq，ManageIQ CR 也放在那里。
+# 升级时从新标签复制这五个文件，并改下面的镜像 tag。
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: manageiq
+resources:
+  - manageiq.org_manageiqs.yaml
+  - role.yaml
+  - role_binding.yaml
+  - service_account.yaml
+  - manager.yaml
+images:
+  - name: docker.io/manageiq/manageiq-operator
+    # 和上游标签保持一致。P4 时核对该镜像 tag 是否存在。
+    newTag: spassky-1

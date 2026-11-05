@@ -104,16 +104,11 @@ spec:
   timeout: 5m
   sourceRef:
     kind: GitRepository
-    name: manageiq-pods
-  path: ./manageiq-operator/config/default
-  # operator 只监视自己所在的命名空间，所以整体放进 manageiq，ManageIQ CR 也放在那里。
-  targetNamespace: manageiq
+    name: flux-system
+  # 上游清单存放在本仓库，原因见该目录的 kustomization.yaml
+  path: ./gitops/management/manageiq-operator
   prune: true
   wait: true
-  images:
-    - name: docker.io/manageiq/manageiq-operator
-      # 和 GitRepository 的 tag 保持一致。P4 时核对该镜像 tag 是否存在。
-      newTag: spassky-1
 ---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization

@@ -81,17 +81,3 @@ spec:
   ignore: |
     /*
     !/kubernetes/
----
-apiVersion: source.toolkit.fluxcd.io/v1
-kind: GitRepository
-metadata:
-  name: manageiq-pods
-  namespace: flux-system
-spec:
-  interval: 12h
-  url: https://github.com/ManageIQ/manageiq-pods
-  ref:
-    tag: spassky-1
-  ignore: |
-    /*
-    !/manageiq-operator/config/
