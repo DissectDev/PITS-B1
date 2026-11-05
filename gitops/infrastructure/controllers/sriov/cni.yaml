@@ -1,0 +1,55 @@
+# 来自 k8snetworkplumbingwg/sriov-cni v2.10.0 的 images/sriov-cni-daemonset.yaml，只把镜像固定到 v2.10.0。
+# 它把 sriov 这个 CNI 插件复制到宿主的 /opt/cni/bin（RKE2 在 Linux 上用的就是这个目录），然后常驻不动。
+# VF 绑在 vfio-pci 上时，插件只从 PF 上设置 VF 的属性，不把网卡移进 Pod，也不分配地址。
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kube-sriov-cni-ds
+  namespace: kube-system
+  labels:
+    tier: node
+    app: sriov-cni
+spec:
+  selector:
+    matchLabels:
+      name: sriov-cni
+  template:
+    metadata:
+      labels:
+        name: sriov-cni
+        tier: node
+        app: sriov-cni
+    spec:
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: kube-sriov-cni
+          image: ghcr.io/k8snetworkplumbingwg/sriov-cni:v2.10.0
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "50Mi"
+            limits:
+              cpu: "100m"
+              memory: "50Mi"
+          volumeMounts:
+            - name: cnibin
+              mountPath: /host/opt/cni/bin
+      volumes:
+        - name: cnibin
+          hostPath:
+            path: /opt/cni/bin

@@ -3,6 +3,7 @@
 #
 # 这台 VM 跑在核心机上（所以故障域是 core），里面是这个区的 rke2 server；
 # 分支主机网络启动后作为 agent 加入它。系统盘从镜像重建，区的 etcd 快照推到存储节点的 S3。
+# 用了 SR-IOV 的 VF，VM 的内存会整块锁定（和直通设备一样），规划内存时按 guest 的大小全额算。
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine
 metadata:
@@ -49,13 +50,14 @@ spec:
                 bus: virtio
           interfaces:
             - name: core
-              bridge: {}
+              # X710 的 VF，在核心网段（VLAN 10）里，和这个区的分支二层直通
+              sriov: {}
               # 网络节点按这个 MAC 给控制面分固定地址
               macAddress: "ZONE_MAC"
       networks:
         - name: core
           multus:
-            networkName: pits-net/br-core
+            networkName: pits-net/core-shared
       volumes:
         - name: root
           dataVolume:

@@ -13,7 +13,7 @@
   # 管理口：2.5G 口 A（I226-V，8086:125c），接光猫。按 PCI 地址匹配，并改名为 mgmt0。
   mgmt = {
     pciAddress = "0000:58:00.0";
-    # 光猫局域网。SSH、ingress 和 RKE2 API 只对这个网段、br-core/实验区和 tailnet 开放；
+    # 光猫局域网。SSH、ingress 和 RKE2 API 只对这个网段、核心网段/实验区和 tailnet 开放；
     # 光猫会下发公网 IPv6，宿主的管理端口不对 IPv6 开放。
     lanCidr = "192.168.71.0/24";
     # 地址由上游光猫保证（P0 时 DHCP 拿到 192.168.71.35，建议在光猫上做 DHCP 保留）。
@@ -41,24 +41,23 @@
   # "disko" 时用：/dev/disk/by-id 下的名字。disko 只会格式化这一块盘。
   systemDisk = "/dev/disk/by-id/nvme-CT1000P310SSD8_24514CD9A8E1";
 
-  # 核心机内部网络（br-core）和各实验区的地址段，都由网络节点负责路由。
+  # 核心网段和实验区的地址段，都由网络节点负责路由。
   # 宿主不在这些网里；宿主上的服务要访问它们（Velero → 存储节点 S3、ManageIQ → 实验区 API），
   # 走的是到网络节点上行口的静态路由。地址规划见 docs/addressing.md。
   coreNet = {
-    # 10.88.0.0/24 是 br-core，10.89.0.0/16 留给各实验区
+    # 10.88.0.0/16 是核心网段（VLAN 10，存储节点、控制面 VM 和分支都在里面），
+    # 10.89.0.0/16 留给以后需要独立二层的实验区
     routedPrefixes = [ "10.88.0.0/15" ];
     # 网络节点上行口（I226-LM）在光猫局域网里的地址，需要在光猫上做 DHCP 保留
     via = "192.168.71.2";
   };
 
-  # 直通给 VM 的 PCI 设备，按 PCI 地址写（`lspci -D` 的第一列）。
-  # 不要写系统盘和管理口；写错会让宿主失去它们。
+  # 整个直通给 VM 的 PCI 设备，按 PCI 地址写（`lspci -D` 的第一列）。
+  # 不要写系统盘、管理口和下面 sriov 里的 X710；写错会让宿主失去它们。
   passthrough = {
-    # 网络节点：I226-LM 和 X710 的两个口
+    # 网络节点：I226-LM 做上行（接光猫）
     networkNode = [
       "0000:5b:00.0" # I226-LM（8086:125b），IOMMU 组 23
-      "0000:03:00.0" # X710 端口 1（8086:1572），IOMMU 组 18
-      "0000:03:00.1" # X710 端口 2（8086:1572），IOMMU 组 19
     ];
     # 存储节点：三块数据盘，各自独占一个 IOMMU 组
     storageNode = [
@@ -66,6 +65,30 @@
       "0000:02:00.0" # Samsung 980 1TB（144d:a809），IOMMU 组 17
       "0000:59:00.0" # WD_BLACK SN770 2TB（15b7:5017），IOMMU 组 21
     ];
+  };
+
+  # X710 的两个 SFP+ 口不整口直通，而是留在宿主上（i40e 驱动），用 SR-IOV 切成 VF 分给各台 VM。
+  # 宿主只管 PF：建 VF、把 VF 交给 vfio-pci；PF 不配地址，宿主不在这些网里。
+  # 每块 VF 接哪个 VLAN、能不能改 MAC，由核心集群里的 NetworkAttachmentDefinition 决定
+  # （gitops/infrastructure/config/networks.yaml）；哪几块 VF 给谁，见
+  # gitops/infrastructure/controllers/sriov/config.json。改 numVfs 时要同步那里的 VF 编号。
+  sriov = {
+    pfs = [
+      {
+        # X710 端口 1（8086:1572），IOMMU 组 18。接分支所在的交换机，承载核心网段（VLAN 10）
+        name = "sfp0";
+        pciAddress = "0000:03:00.0";
+        numVfs = 8;
+      }
+      {
+        # X710 端口 2（8086:1572），IOMMU 组 19。网络节点的第二条干道，暂时只用一块 VF
+        name = "sfp1";
+        pciAddress = "0000:03:00.1";
+        numVfs = 4;
+      }
+    ];
+    # PF 的 MTU 是 VF 能用的上限，VF 实际用多大由各台 VM 自己设。
+    mtu = 9000;
   };
 
   # 留给宿主（kubelet、containerd、系统服务）的 CPU，其余进入 kubelet 的分配池。

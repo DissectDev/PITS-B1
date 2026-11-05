@@ -1,6 +1,6 @@
 # 分阶段实施步骤
 
-每个阶段验收通过后再进入下一个。P0 和 P4 是关卡：P0 决定直通方案能否成立，P4 决定申领用哪种做法。
+每个阶段验收通过后再进入下一个。P0 和 P4 是关卡：P0 决定直通方案能否成立，P4 决定申领用哪种做法。P1 的 SR-IOV 自检也是关卡：它决定 X710 能不能按宽松模式切给各台 VM。
 
 ## P0 准备（关卡）
 
@@ -12,8 +12,8 @@
    nix-shell -p pciutils ethtool util-linux --run 'sudo bash scripts/p0-inventory.sh'
    ```
 
-4. 按输出填写 `site/core.nix`：系统盘、管理口和直通设备的 PCI 地址、`cpu.reservedSystemCPUs`。结果记进 [hardware.md](hardware.md)。
-5. 用 `lspci -nn` 查数据盘的 vendor:device ID，填进 `gitops/infrastructure/config/kubevirt.yaml`。同时核对 I226-LM（`8086:125b`）和 X710（`8086:1572`）的 ID。
+4. 按输出填写 `site/core.nix`：系统盘、管理口、直通设备和 X710 两个口（`sriov.pfs`）的 PCI 地址、`cpu.reservedSystemCPUs`。结果记进 [hardware.md](hardware.md)。
+5. 用 `lspci -nn` 查数据盘的 vendor:device ID，填进 `gitops/infrastructure/config/kubevirt.yaml`。同时核对 I226-LM（`8086:125b`）的 ID。X710（`8086:1572`）不在那里，它的 VF（`8086:154c`）由 SR-IOV device plugin 分配。
 6. 本地评估一次：`nix eval .#nixosConfigurations.core.config.system.build.toplevel.drvPath`。
 
 **验收（关卡）：**
@@ -53,7 +53,7 @@
      --option substituters "https://mirrors.ustc.edu.cn/nix-channels/store https://cache.nixos.org"
    ```
 
-   - **用 `boot` 而不是 `switch`。** 网络会从 NetworkManager 换成 networkd，网卡改名为 `mgmt0`，同时要做直通绑定、换内核。当场切换会断掉 SSH。
+   - **用 `boot` 而不是 `switch`。** 网络会从 NetworkManager 换成 networkd，网卡改名为 `mgmt0`，同时要做直通绑定、建 SR-IOV 的 VF、换内核。当场切换会断掉 SSH。以后凡是改了直通设备或 `sriov.pfs`，也都用 `boot` 再重启。
    - **要带镜像源。** rebuild 时用的是当前系统的 nix.conf，新配置里的镜像要到切换之后才生效，所以要在命令里带上。
    - **源码来自国内镜像。** `flake.lock` 已经提交在仓库里，nixpkgs 从清华 TUNA 的 git 镜像拉取。disko 只在重装时才用到，就地 rebuild 不访问 GitHub。
 
@@ -102,11 +102,21 @@
 
 重启后执行 `sudo bash scripts/check-passthrough.sh`，然后确认：
 
-- 直通设备都绑在 vfio-pci 上，宿主只看得到 mgmt0 和系统盘。
+- 整口直通的设备（I226-LM 和三块数据盘）都绑在 vfio-pci 上，宿主只看得到 mgmt0、sfp0、sfp1 和系统盘，sfp0、sfp1 上没有地址。
+- sfp0 有 8 块 VF、sfp1 有 4 块，每块都绑在 vfio-pci 上，并且**各自独占一个 IOMMU 组**。不满足的话 VF 分不给 VM，宽松模式就不成立，先停下来。
 - 断电重启后能通过 Tailscale 登录。
 - “空盘重装得到完全相同的系统”要用方式 B 才能验证。走方式 A 的话，把这一项挪到 P5 的恢复演练里做。
 
-`pits-vfio-bind` 服务在绑定前会检查设备有没有被宿主使用，例如挂载着的盘或者管理口。如果地址写错，它会拒绝绑定并报错，不会把系统盘交出去。
+**SR-IOV 自检（关卡）：**
+
+```sh
+sudo bash scripts/sriov-selftest.sh sfp0     # 光纤插着跑一次
+sudo bash scripts/sriov-selftest.sh sfp0     # 拔掉 sfp0 的光纤再跑一次
+```
+
+脚本临时借用 sfp0 上最后两块 VF，在宿主上验证：同一 VLAN 的 VF 之间能直接互通，不同 VLAN 之间不通，拔掉光纤后仍能互通。三项都通过，核心网段才能按 [addressing.md](addressing.md) 的宽松模式搭。跑完 VF 会还给 vfio-pci。
+
+`pits-vfio-bind` 服务在绑定前会检查设备有没有被宿主使用，例如挂载着的盘或者管理口。如果地址写错，它会拒绝绑定并报错，不会把系统盘交出去。`pits-sriov` 服务在改 VF 数量前会检查有没有 VM 正在用这些 VF，有就拒绝。
 
 ## P2 核心集群
 
@@ -139,10 +149,13 @@
    ```
 
    镜像服务的卷是只读挂载的，上传前把 `gitops/infrastructure/images/boot-images.yaml` 里的 `readOnly: true` 临时去掉，或者直接把文件复制到宿主上该卷对应的目录（`/var/lib/pits-local/` 下以 `pvc-` 开头、名字里带 `boot-images` 的目录）。
-   两台节点在 br-core 上的地址和 MAC 见 [addressing.md](addressing.md)，节点内部的网络按这张表配置。
-2. 把 `gitops/clusters/core/stack.yaml` 里 `core-nodes` 的 `suspend` 改成 `false`，然后提交。
-3. 检查：
+   两台节点在核心网段上的地址、MAC 和各自拿到的 VF 见 [addressing.md](addressing.md)，节点内部的网络按这张表配置。网络节点要在 sfp0 干道上建 VLAN 10 子接口做网关；存储节点那块 VF 的 VLAN 由宿主设好，节点里直接用不带标签的网卡。
+2. 交换机上把接 sfp0 的端口设成带 VLAN 10 的 trunk，分支的端口设成 VLAN 10 的 access 口。
+3. 把 `gitops/clusters/core/stack.yaml` 里 `core-nodes` 的 `suspend` 改成 `false`，然后提交。
+4. 检查：
+   - `kubectl get node -o jsonpath='{.items[0].status.allocatable}'`：能看到 `pits.io/sfp0_trunk`、`pits.io/sfp0_storage`、`pits.io/sfp0_shared`、`pits.io/sfp1_trunk` 四个 VF 资源池，数量分别是 1、1、6、1。
    - `kubectl -n core-nodes get vm,vmi`：两台 VM 都在运行。
+   - `ip link show sfp0`（在宿主上）：vf0 是 trust on、spoof checking off，vf1 是 vlan 10、MAC 02:50:00:00:00:10。
    - 每台 VM 分到的 CPU：
 
      ```sh
@@ -150,11 +163,13 @@
      ```
 
      对照 P0 记录的 P 核编号。
-   - 吞吐：从一台分支经网络节点到存储节点跑 iperf3。
+   - 存储节点能 ping 通网关 10.88.0.1；宿主能访问 `http://10.88.0.10:3900`（经网络节点路由）。
+   - 吞吐：从一台分支直接到存储节点跑 iperf3（同一网段，不经过网络节点）。
 
 **验收：**
 - 宿主重启后，两台 VM 自动起来，直通设备都在。
-- `virtctl -n core-nodes stop network-node` 之后，宿主的管理和核心集群都不受影响。
+- `virtctl -n core-nodes stop network-node` 之后，宿主的管理和核心集群都不受影响；分支和存储节点之间照样互通（同一网段，不经过网络节点），只是出不了这个网段。
+- 在网络节点里改干道 VF 的 VLAN 或 MAC 设置，存储节点那块 VF 不受影响（`ip link show sfp0` 里 vf1 不变）。
 
 ## P4 管理与治理（关卡）
 
@@ -194,11 +209,11 @@
 2. 新建实验区：
 
    ```sh
-   scripts/new-zone.sh lab1 101 02:50:00:00:01:01
+   scripts/new-zone.sh lab1 02:50:00:00:01:01
    git add -A && git commit -m "Add zone lab1"
    ```
 
-3. 按脚本的提示，创建 cloud-init Secret，并在网络节点上为控制面分配地址、建好 VLAN。
+3. 按脚本的提示，创建 cloud-init Secret，并在网络节点上为控制面分配地址、为这个区的分支划好 DHCP 地址段。
 4. 第一次建区时，把 `stack.yaml` 里 `zones` 的 `suspend` 改成 `false`。
 5. 控制面起来后，在区集群里装 Piraeus 和 Kyverno，再应用 `gitops/zones/template/in-zone/` 下的清单。
 6. 注册 provider，写入 Steampipe 的区连接：`scripts/register-zone-provider.sh lab1 <地址> <token 文件> <只读 kubeconfig>`。

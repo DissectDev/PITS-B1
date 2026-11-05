@@ -1,0 +1,24 @@
+{
+  "resourceList": [
+    {
+      "resourcePrefix": "pits.io",
+      "resourceName": "sfp0_trunk",
+      "selectors": [{ "vendors": ["8086"], "devices": ["154c"], "drivers": ["vfio-pci"], "rootDevices": ["0000:03:00.0#0"] }]
+    },
+    {
+      "resourcePrefix": "pits.io",
+      "resourceName": "sfp0_storage",
+      "selectors": [{ "vendors": ["8086"], "devices": ["154c"], "drivers": ["vfio-pci"], "rootDevices": ["0000:03:00.0#1"] }]
+    },
+    {
+      "resourcePrefix": "pits.io",
+      "resourceName": "sfp0_shared",
+      "selectors": [{ "vendors": ["8086"], "devices": ["154c"], "drivers": ["vfio-pci"], "rootDevices": ["0000:03:00.0#2-7"] }]
+    },
+    {
+      "resourcePrefix": "pits.io",
+      "resourceName": "sfp1_trunk",
+      "selectors": [{ "vendors": ["8086"], "devices": ["154c"], "drivers": ["vfio-pci"], "rootDevices": ["0000:03:00.1#0"] }]
+    }
+  ]
+}

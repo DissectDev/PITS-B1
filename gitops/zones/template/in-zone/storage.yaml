@@ -8,7 +8,7 @@ metadata:
   name: linstorcluster
 spec:
   externalController:
-    # 存储节点在 br-core 上的地址（docs/addressing.md），LINSTOR controller 默认端口 3370
+    # 存储节点在核心网段上的地址（docs/addressing.md），和分支在同一个二层网段。LINSTOR controller 默认端口 3370
     url: http://10.88.0.10:3370
 ---
 # 外部 controller 要能连到 satellite，satellite 必须用宿主网络。

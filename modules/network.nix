@@ -1,5 +1,6 @@
-# 宿主网络：只有管理口在用；br-core 是核心机内部 VM 互联用的网桥，不接物理口，宿主不配地址。
-# 其余网卡（I226-LM、X710）直通给网络节点，宿主看不到，见 modules/vfio.nix。
+# 宿主网络：宿主只在管理口上有地址。
+# I226-LM 整口直通给网络节点（modules/vfio.nix）；X710 的两个口留在宿主上做 SR-IOV 的 PF，
+# 不配地址（modules/sriov.nix）。VM 之间、VM 和分支之间的流量都走 X710 的 VF，不经过宿主。
 { lib, site, ... }:
 {
   networking.useNetworkd = true;
@@ -35,26 +36,11 @@
       }) site.coreNet.routedPrefixes;
       linkConfig.RequiredForOnline = "routable";
     };
-
-    netdevs."20-br-core".netdevConfig = {
-      Kind = "bridge";
-      Name = "br-core";
-    };
-
-    networks."20-br-core" = {
-      matchConfig.Name = "br-core";
-      networkConfig = {
-        LinkLocalAddressing = "no";
-        IPv6AcceptRA = false;
-        ConfigureWithoutCarrier = true;
-      };
-      linkConfig.RequiredForOnline = "no";
-    };
   };
 
   networking.firewall = {
     enable = true;
-    # 管理端口不对所有来源开放：只接受光猫局域网（IPv4）和核心机内部网络、实验区的连接，
+    # 管理端口不对所有来源开放：只接受光猫局域网（IPv4）和核心网段、实验区的连接，
     # tailnet 整体可信。光猫会给宿主分公网 IPv6，所以这里不放行任何 IPv6 来源。
     # 30080、30500 是 NodePort，kube-proxy 在进入这条链之前就转发了，这里列出只是为了说明用途。
     allowedTCPPorts = [ ];
