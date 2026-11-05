@@ -112,6 +112,8 @@ in
     systemd.services.mihomo = {
       requires = [ "pits-mihomo-config.service" ];
       after = [ "pits-mihomo-config.service" ];
+      # 改写规则变了，nixos-rebuild switch 时重启 mihomo，新配置随之生效
+      restartTriggers = [ overrides ];
     };
 
     systemd.services.nix-daemon.environment = {
