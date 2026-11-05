@@ -32,7 +32,13 @@ aws_access_key_id = ...
 aws_secret_access_key = ...
 ```
 
-`mihomo.yaml` 不用自己改端口和监听地址。每次启动前 `pits-mihomo-config` 会改写几项：只留 7890 一个端口，只允许本机和核心集群的 Pod 使用，控制接口只监听 127.0.0.1:9090，关掉 TUN 和 DNS 监听（见 `modules/proxy.nix`）。只有订阅链接时的最小配置：
+`mihomo.yaml` 可以直接用服务商给的完整配置（Clash 客户端里用的那份）。不用自己改端口、监听地址、模式和规则：每次启动前 `pits-mihomo-config` 会改写这些项，见 `modules/proxy.nix`：
+- 只留 7890 一个端口，只允许本机和核心集群的 Pod 使用；
+- 控制接口只监听 127.0.0.1:9090；
+- 关掉 TUN 和 DNS 监听；
+- 所有流量都走一个自动选延迟最低节点的 `PITS` 组。
+
+只有订阅链接时，写这几行就够了：
 
 ```yaml
 proxy-providers:
@@ -41,18 +47,6 @@ proxy-providers:
     url: "https://<你的订阅链接>"
     interval: 86400
     path: ./providers/sub.yaml
-    health-check:
-      enable: true
-      url: https://www.gstatic.com/generate_204
-      interval: 300
-proxy-groups:
-  - name: PROXY
-    type: url-test
-    use: [sub]
-    url: https://www.gstatic.com/generate_204
-    interval: 300
-rules:
-  - MATCH,PROXY
 ```
 
-走这个代理的只有拉镜像、拉 chart 和 Git 的几个进程，所以规则里全部走代理即可。改了这个文件后执行 `sudo systemctl restart mihomo`。
+改了这个文件后执行 `sudo systemctl restart mihomo`。
