@@ -40,7 +40,7 @@ PITS 核心机（MS-01）的基础设施代码，按[《PITS 核心机实施规�
 | 阶段 | 做什么 | 相关路径 |
 | --- | --- | --- |
 | P0 准备（关卡） | 盘点硬件、检查 IOMMU 分组、填站点参数 | `scripts/p0-inventory.sh`、`site/core.nix` |
-| P1 宿主 | nixos-anywhere 安装、直通验收 | `hosts/core/`、`modules/`、`scripts/check-passthrough.sh` |
+| P1 宿主 | 就地 `nixos-rebuild` 或 nixos-anywhere 重装、直通验收 | `hosts/core/`、`modules/`、`scripts/check-passthrough.sh` |
 | P2 核心集群 | RKE2 起来后 `flux bootstrap`，etcd 快照推到机外 | `modules/rke2.nix`、`gitops/clusters/core/` |
 | P3 虚拟化与核心节点 | 填镜像地址和数据盘 ID，打开 `core-nodes` | `gitops/infrastructure/config/`、`gitops/core-nodes/` |
 | P4 管理与治理（关卡） | 验证 ManageIQ 能否管 RKE2 上的 KubeVirt；合规基准 | `gitops/management/` |

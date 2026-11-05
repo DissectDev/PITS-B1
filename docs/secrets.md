@@ -4,8 +4,8 @@
 
 | 机密 | 放在哪 | 什么时候建 | 用途 |
 | --- | --- | --- | --- |
-| 管理员密码哈希 | 宿主 `/var/lib/pits/secrets/admin.hash` | P1 装机时随 `--extra-files` 放入 | 控制台登录、sudo。生成：`mkpasswd -m yescrypt` |
-| Tailscale auth key | 宿主 `/var/lib/pits/secrets/tailscale-authkey` | P1 | 一次性、带 `tag:pits-core`、短有效期 |
+| 管理员密码哈希 | 宿主 `/var/lib/pits/secrets/admin.hash` | P1：就地 rebuild 前手动放好；重装时随 `--extra-files` 放入 | 控制台登录、sudo。生成：`mkpasswd -m yescrypt` |
+| Tailscale auth key | 宿主 `/var/lib/pits/secrets/tailscale-authkey` | 只在用 nixos-anywhere 重装时需要 | 一次性、带 `tag:pits-core`、短有效期。就地 rebuild 时沿用已有的登录状态 |
 | NUT 密码 | 宿主 `/var/lib/pits/secrets/nut-upsmon` | 有 UPS 时 | upsmon 连 upsd |
 | etcd 机外 S3 密钥 | 宿主 `/etc/rancher/rke2/config.yaml.d/90-secrets.yaml` | P2 | 见下方示例 |
 | Steampipe 数据库密码 | Secret `pits-compliance/steampipe-db`（键 `password`） | P4 | Steampipe 服务和 Powerpipe |

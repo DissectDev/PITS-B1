@@ -21,8 +21,21 @@
     dns = [ ];
   };
 
-  # 系统盘（/dev/disk/by-id 下的名字）。disko 只会格式化这一块盘。
-  # Crucial P310 1TB（c0a9:5426），0000:5a:00.0；P0 时它就是当前系统所在的盘。
+  # 系统盘：Crucial P310 1TB（c0a9:5426），0000:5a:00.0。
+  #
+  # systemDiskLayout 决定系统盘怎么来：
+  #   "existing"  沿用盘上现有的分区（按 UUID 挂载），在机器上用 nixos-rebuild 切换，不清盘。
+  #   "disko"     由 hosts/core/disko.nix 重新分区，用 nixos-anywhere 装机，会清空系统盘。
+  #               系统盘坏了换新盘、或做“空盘重装”演练时用这个。
+  systemDiskLayout = "existing";
+
+  # "existing" 时用：取自图形安装器生成的 hardware-configuration.nix。
+  existingFileSystems = {
+    root = "/dev/disk/by-uuid/d4327997-3d50-4685-a95c-affe9573559d"; # ext4
+    boot = "/dev/disk/by-uuid/1738-6257"; # vfat (ESP)
+  };
+
+  # "disko" 时用：/dev/disk/by-id 下的名字。disko 只会格式化这一块盘。
   systemDisk = "/dev/disk/by-id/nvme-CT1000P310SSD8_24514CD9A8E1";
 
   # 直通给 VM 的 PCI 设备，按 PCI 地址写（`lspci -D` 的第一列）。
@@ -54,8 +67,10 @@
   };
 
   tailscale = {
-    # 一次性、带标签、短有效期的 auth key。文件不进 Git。
-    authKeyFile = "/var/lib/pits/secrets/tailscale-authkey";
+    # 机器已经登录过 Tailscale 时填 null：登录状态在 /var/lib/tailscale 里，rebuild 会保留。
+    # 重装（systemDiskLayout = "disko"）时改成 "/var/lib/pits/secrets/tailscale-authkey"，
+    # 放一个一次性、带标签、短有效期的 auth key。文件不进 Git。
+    authKeyFile = null;
     tags = [ "tag:pits-core" ];
   };
 

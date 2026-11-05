@@ -24,7 +24,51 @@
 
 ## P1 宿主
 
-1. 准备机密文件（见 [secrets.md](secrets.md)），放进一个临时目录：
+系统盘有两种来法，由 `site/core.nix` 里的 `systemDiskLayout` 决定：
+
+| 方式 | `systemDiskLayout` | 什么时候用 | 系统盘 |
+| --- | --- | --- | --- |
+| A：就地切换 | `"existing"`（当前设置） | 盘上已经装好 NixOS，现在就是这种情况 | 不清盘，按 UUID 沿用现有分区 |
+| B：重装 | `"disko"` | 系统盘坏了换新盘，或做“空盘重装”演练 | 整盘清空后按 `hosts/core/disko.nix` 重新分区 |
+
+### 方式 A：在机器上 nixos-rebuild
+
+1. 在 `site/core.nix` 里填好 `admin.sshKeys`，并确认 `admin.user` 和你现在登录用的用户名一致。
+   配置里设了 `users.mutableUsers = false`，没在配置里声明的用户和密码都会被清掉，root 密码也一样。
+2. 在核心机上放好密码哈希：
+
+   ```sh
+   sudo install -d -m 700 /var/lib/pits/secrets
+   nix-shell -p mkpasswd --run 'mkpasswd -m yescrypt' | sudo tee /var/lib/pits/secrets/admin.hash >/dev/null
+   sudo chmod 600 /var/lib/pits/secrets/admin.hash
+   ```
+
+3. 把仓库拉到核心机上，构建并设为下次启动：
+
+   ```sh
+   nix-shell -p git --run 'git clone https://github.com/DissectDev/PITS-B1.git' && cd PITS-B1
+   sudo nixos-rebuild boot --flake .#core \
+     --option extra-experimental-features 'nix-command flakes' \
+     --option substituters "https://mirrors.ustc.edu.cn/nix-channels/store https://cache.nixos.org"
+   ```
+
+   - **用 `boot` 而不是 `switch`。** 网络会从 NetworkManager 换成 networkd，网卡改名为 `mgmt0`，同时要做直通绑定、换内核。当场切换会断掉 SSH。
+   - **要带镜像源。** rebuild 时用的是当前系统的 nix.conf，新配置里的镜像要到切换之后才生效，所以要在命令里带上。
+   - **首次运行会生成 `flake.lock`。** 它会从 GitHub 拉 nixpkgs 和 disko 的源码。成功后把 `flake.lock` 提交回仓库。
+
+4. 手边准备好显示器和键盘，然后重启。起不来就在 systemd-boot 菜单里选上一代。
+5. Tailscale 的登录状态会保留，所以 `site.tailscale.authKeyFile` 设为 `null`。主机名和标签不会自动更新，要手动执行一次：
+
+   ```sh
+   sudo tailscale up --hostname=pits-core --accept-dns=false --advertise-tags=tag:pits-core
+   ```
+
+   使用这个标签前，tailnet 的 ACL 里要先给它配 `tagOwners`。
+
+### 方式 B：nixos-anywhere 重装
+
+1. 把 `systemDiskLayout` 改成 `"disko"`，`tailscale.authKeyFile` 改成 `"/var/lib/pits/secrets/tailscale-authkey"`。
+2. 准备机密文件，放进一个临时目录（见 [secrets.md](secrets.md)）：
 
    ```sh
    mkdir -p staging/var/lib/pits/secrets && chmod 700 staging/var/lib/pits/secrets
@@ -33,21 +77,22 @@
    chmod 600 staging/var/lib/pits/secrets/*
    ```
 
-2. 在安装盘上设好 root 的 SSH 登录，然后从另一台机器执行：
+3. 用安装盘启动核心机，设好 root 的 SSH 登录，然后从另一台机器执行：
 
    ```sh
    nix run github:nix-community/nixos-anywhere -- \
      --flake .#core --extra-files ./staging --target-host root@<安装盘的地址>
    ```
 
-   disko 只会格式化 `site.systemDisk`。三块数据盘不在 disko 配置里，不会被碰。
-   系统盘（Crucial P310）上现有的 NixOS 会被整盘清掉，需要保留的东西先拷走。
-3. 重启后执行：`sudo bash scripts/check-passthrough.sh`。
+   disko 只会格式化 `site.systemDisk`。三块数据盘不在 disko 配置里，不会被碰。系统盘上原有的内容会全部清掉。
 
-**验收：**
+### 验收
+
+重启后执行 `sudo bash scripts/check-passthrough.sh`，然后确认：
+
 - 直通设备都绑在 vfio-pci 上，宿主只看得到 mgmt0 和系统盘。
 - 断电重启后能通过 Tailscale 登录。
-- 在空盘上用 flake 重装，得到的系统完全相同。
+- “空盘重装得到完全相同的系统”要用方式 B 才能验证。走方式 A 的话，把这一项挪到 P5 的恢复演练里做。
 
 `pits-vfio-bind` 服务在绑定前会检查设备有没有被宿主使用，例如挂载着的盘或者管理口。如果地址写错，它会拒绝绑定并报错，不会把系统盘交出去。
 

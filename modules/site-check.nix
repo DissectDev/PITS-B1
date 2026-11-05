@@ -9,6 +9,20 @@ in
 {
   assertions = [
     {
+      assertion = lib.elem site.systemDiskLayout [
+        "existing"
+        "disko"
+      ];
+      message = "site: systemDiskLayout 只能是 \"existing\" 或 \"disko\"。";
+    }
+    {
+      assertion =
+        site.systemDiskLayout != "existing"
+        || (lib.hasPrefix "/dev/disk/by-uuid/" site.existingFileSystems.root
+          && lib.hasPrefix "/dev/disk/by-uuid/" site.existingFileSystems.boot);
+      message = "site: systemDiskLayout = \"existing\" 时，existingFileSystems.root 和 boot 要写成 /dev/disk/by-uuid/... 的形式。";
+    }
+    {
       assertion = !isPlaceholder site.systemDisk;
       message = "site: systemDisk 还是占位值。先在核心机上跑 scripts/p0-inventory.sh，再填写 site/core.nix。";
     }

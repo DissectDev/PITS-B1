@@ -8,6 +8,7 @@
     "xhci_pci"
     "thunderbolt"
     "nvme"
+    "usbhid"
     "usb_storage"
     "sd_mod"
   ];
