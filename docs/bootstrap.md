@@ -47,7 +47,7 @@
 3. 把仓库拉到核心机上，构建并设为下次启动：
 
    ```sh
-   nix-shell -p git --run 'git clone https://github.com/DissectDev/PITS-B1.git' && cd PITS-B1
+   nix-shell -p git --run 'git clone --depth 1 https://github.com/DissectDev/PITS-B1.git' && cd PITS-B1
    sudo nixos-rebuild boot --flake .#core \
      --option extra-experimental-features 'nix-command flakes' \
      --option substituters "https://mirrors.ustc.edu.cn/nix-channels/store https://cache.nixos.org"
@@ -55,7 +55,18 @@
 
    - **用 `boot` 而不是 `switch`。** 网络会从 NetworkManager 换成 networkd，网卡改名为 `mgmt0`，同时要做直通绑定、换内核。当场切换会断掉 SSH。
    - **要带镜像源。** rebuild 时用的是当前系统的 nix.conf，新配置里的镜像要到切换之后才生效，所以要在命令里带上。
-   - **首次运行会生成 `flake.lock`。** 它会从 GitHub 拉 nixpkgs 和 disko 的源码。成功后把 `flake.lock` 提交回仓库。
+   - **源码来自国内镜像。** `flake.lock` 已经提交在仓库里，nixpkgs 从清华 TUNA 的 git 镜像拉取。disko 只在重装时才用到，就地 rebuild 不访问 GitHub。
+
+   连 GitHub 慢、`git clone` 卡住时，有两个办法：
+
+   - **借电脑上的 Clash 走代理。** 在 Clash 里打开“允许局域网连接”，然后：
+
+     ```sh
+     nix-shell -p git --run 'git -c http.proxy=http://<电脑的局域网地址>:7897 clone --depth 1 https://github.com/DissectDev/PITS-B1.git'
+     ```
+
+     端口以 Clash 里显示的为准（常见的是 7897 或 7890）。
+   - **在电脑上下载再拷过去。** 在 GitHub 页面下载 ZIP，或者在电脑上 clone，然后用 `scp -r` 拷到核心机。flake 用的是 `flake.lock` 里锁定的版本，拷过去的仓库不需要带 `.git` 也能构建。
 
 4. 手边准备好显示器和键盘，然后重启。起不来就在 systemd-boot 菜单里选上一代。
 5. Tailscale 的登录状态会保留，所以 `site.tailscale.authKeyFile` 设为 `null`。主机名和标签不会自动更新，要手动执行一次：
