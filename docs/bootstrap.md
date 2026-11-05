@@ -1,6 +1,6 @@
 # 分阶段实施步骤
 
-每个阶段验收通过后再进入下一个，例外是 P3 和 P4：两者互不依赖，P4 可以先做，不用等两台核心节点的镜像。P0 和 P4 是关卡：P0 决定直通方案能否成立，P4 决定申领用哪种做法。P1 的 SR-IOV 自检也是关卡：它决定 X710 能不能按宽松模式切给各台 VM。合规检查（Steampipe、Powerpipe）后置，放在本文末尾。
+每个阶段验收通过后再进入下一个。P0 和 P3 是关卡：P0 决定直通方案能否成立，P3 决定申领用哪种做法。P1 的 SR-IOV 自检也是关卡：它决定 X710 能不能按宽松模式切给各台 VM。管理与治理（P3）排在核心节点（P4）之前，因为它不需要两台核心节点；合规检查（Steampipe、Powerpipe）后置，放在 P4 和 P5 之间。
 
 ## P0 准备（关卡）
 
@@ -105,7 +105,7 @@
 - 整口直通的设备（I226-LM 和三块数据盘）都绑在 vfio-pci 上，宿主只看得到 mgmt0、sfp0、sfp1 和系统盘，sfp0、sfp1 上没有地址。
 - sfp0 有 8 块 VF、sfp1 有 4 块，每块都绑在 vfio-pci 上，并且**各自独占一个 IOMMU 组**。不满足的话 VF 分不给 VM，宽松模式就不成立，先停下来。
 - 断电重启后能通过 Tailscale 登录。
-- “空盘重装得到完全相同的系统”要用方式 B 才能验证。走方式 A 的话，把这一项挪到 P5 的恢复演练里做。
+- “空盘重装得到完全相同的系统”要用方式 B 才能验证。走方式 A 的话，把这一项挪到 P4 的恢复演练里做。
 
 **SR-IOV 自检（关卡）：**
 
@@ -198,54 +198,18 @@ sudo bash scripts/sriov-selftest.sh sfp0     # 拔掉 sfp0 的光纤再跑一次
 
 - 停掉代理（`sudo systemctl stop mihomo`）后重启 rke2-server，集群照样起来：镜像已经在本地，不再需要外网。验完再 `sudo systemctl start mihomo`。
 
-机外 S3 目前还没有，快照只留在本机。机外这一份在 P5 之前补上，补法见 `gitops/management/backup/backup.yaml` 末尾。补上之后，再用机外的快照做一次恢复。
+机外 S3 目前还没有，快照只留在本机。机外这一份在 P4 之前补上，补法见 `gitops/management/backup/backup.yaml` 末尾。补上之后，再用机外的快照做一次恢复。
 
-## P3 虚拟化与两台核心节点
+## P3 管理与治理（关卡）
 
-P3 和 P4 互不依赖。两台节点的镜像还没准备好时，可以先做 P4。
-
-1. 准备网络节点和存储节点的系统镜像（qcow2，分别由 PITS Network 和 PITS Storage 的设计决定），上传到镜像服务：
-
-   ```sh
-   pod=$(kubectl -n pits-boot get pod -l app=boot-images -o name)
-   kubectl -n pits-boot cp network-node.qcow2 ${pod#pod/}:/usr/share/nginx/html/network-node.qcow2
-   kubectl -n pits-boot cp storage-node.qcow2 ${pod#pod/}:/usr/share/nginx/html/storage-node.qcow2
-   ```
-
-   镜像服务的卷是只读挂载的，上传前把 `gitops/infrastructure/images/boot-images.yaml` 里的 `readOnly: true` 临时去掉，或者直接把文件复制到宿主上该卷对应的目录（`/var/lib/pits-local/` 下以 `pvc-` 开头、名字里带 `boot-images` 的目录）。
-   两台节点在核心网段上的地址、MAC 和各自拿到的 VF 见 [addressing.md](addressing.md)，节点内部的网络按这张表配置。网络节点要在 sfp0 干道上建 VLAN 10 子接口做网关；存储节点那块 VF 的 VLAN 由宿主设好，节点里直接用不带标签的网卡。
-2. 交换机上把接 sfp0 的端口设成带 VLAN 10 的 trunk，分支的端口设成 VLAN 10 的 access 口。
-3. 把 `gitops/clusters/core/stack.yaml` 里 `core-nodes` 的 `suspend` 改成 `false`，然后提交。
-4. 检查：
-   - `kubectl get node -o jsonpath='{.items[0].status.allocatable}'`：能看到 `pits.io/sfp0_trunk`、`pits.io/sfp0_storage`、`pits.io/sfp0_shared`、`pits.io/sfp1_trunk` 四个 VF 资源池，数量分别是 1、1、6、1。
-   - `kubectl -n core-nodes get vm,vmi`：两台 VM 都在运行。
-   - `ip link show sfp0`（在宿主上）：vf0 是 trust on、spoof checking off，vf1 是 vlan 10、MAC 02:50:00:00:00:10。
-   - 每台 VM 分到的 CPU：
-
-     ```sh
-     kubectl -n core-nodes exec <virt-launcher Pod> -- cat /sys/fs/cgroup/cpuset.cpus.effective
-     ```
-
-     对照 P0 记录的 P 核编号。
-   - 存储节点能 ping 通网关 10.88.0.1；宿主能访问 `http://10.88.0.10:3900`（经网络节点路由）。
-   - 吞吐：从一台分支直接到存储节点跑 iperf3（同一网段，不经过网络节点）。
-
-**验收：**
-- 宿主重启后，两台 VM 自动起来，直通设备都在。
-- `virtctl -n core-nodes stop network-node` 之后，宿主的管理和核心集群都不受影响；分支和存储节点之间照样互通（同一网段，不经过网络节点），只是出不了这个网段。
-- 在网络节点里改干道 VF 的 VLAN 或 MAC 设置，存储节点那块 VF 不受影响（`ip link show sfp0` 里 vf1 不变）。
-- P4 已经完成的话，ManageIQ 的台账里能看到这两台节点。
-
-## P4 管理与治理（关卡）
-
-P4 不依赖 P3。ManageIQ 负责申领（profile、provision），关卡验证的是它能不能在 RKE2 上管 KubeVirt，用一台测试 VM 就能验证，不用等两台核心节点。合规检查后置，见本文末尾。
+ManageIQ 负责申领（profile、provision）。关卡验证的是它能不能在 RKE2 上管 KubeVirt，用一台测试 VM 就能验证，不需要两台核心节点。合规检查后置，见 P4 之后的“合规检查”一节。
 
 先把 `gitops/clusters/core/stack.yaml` 里 `management-platform`、`management` 的 `suspend` 改成 `false`，提交后由 Flux 部署监控、zot、Keycloak 和 ManageIQ。
 
 1. 在局域网 DNS 里把 `*.<域名>` 指向宿主管理口。域名在 `gitops/clusters/core/site-vars.yaml` 里设置（现在是 `pits.home.arpa`）。光猫不支持泛域名解析的话，先在电脑的 hosts 文件里加两行，把 `manageiq.pits.home.arpa` 和 `keycloak.pits.home.arpa` 指向 192.168.71.35。
 2. 等 `management-platform`、`management` 都就绪后，登录 ManageIQ（`https://manageiq.<域名>`），立即修改默认管理员密码。
 3. **关卡验证：** 把核心集群加为 provider，选 Kubernetes 并带上 KubeVirt 端点。PoC 阶段可以用一个 cluster-admin 的 ServiceAccount token。然后按顺序走一遍：从模板创建 VM、审批、配额、退役。
-4. 核对 README 里列出的、需要在 P4 确认的几处（ManageIQ operator 镜像、zot 的同步写法等）。
+4. 核对 README 里列出的、需要在 P3 确认的几处（ManageIQ 接管 KubeVirt 的方式、zot 的同步写法）。
 
 **验收（关卡）：**
 - ManageIQ 能在 RKE2 上创建并回收 KubeVirt VM。
@@ -254,20 +218,70 @@ P4 不依赖 P3。ManageIQ 负责申领（profile、provision），关卡验证�
 
 通过后，把 ManageIQ 切到 Keycloak 登录（见 `gitops/management/services/manageiq/manageiq.yaml` 里的注释）。
 
-## P5 核心节点内部与备份
+## P4 核心节点
 
-1. 按 PITS Network 和 PITS Storage 的设计，配置两台节点的内部。
-2. 在 `site-vars.yaml` 里填好两处 S3 的地址，并创建 Velero 的两个 Secret（见 [secrets.md](secrets.md)）。
-3. 把 `stack.yaml` 里 `backup` 的 `suspend` 改成 `false`，提交后由 Flux 部署 Velero。
-4. `velero backup-location get`：两个位置都应当是 Available。
+把网络节点和存储节点跑起来，按 PITS Network 和 PITS Storage 的设计配置内部，再接上备份。
 
-**验收（做两次恢复演练）：**
-- 删掉 Keycloak 的数据库卷，用 `velero restore create --from-backup <备份名>` 恢复。
-- 删掉 `storage-node-root`（存储节点的系统盘），让 CDI 从镜像重建，确认存储池完整导入。
 
-## P6 分支支撑
+1. 准备网络节点和存储节点的系统镜像（qcow2，分别由 PITS Network 和 PITS Storage 的设计决定），上传到镜像服务：
 
-1. 构建控制面 VM 镜像和分支网络启动镜像，放进启动镜像服务（`pits-boot` 命名空间的卷）。这两个镜像的 flake 输出还没写，是 P6 的第一项工作。
+   ```sh
+   pod=$(sudo kubectl -n pits-boot get pod -l app=boot-images -o name)
+   sudo kubectl -n pits-boot cp network-node.qcow2 ${pod#pod/}:/usr/share/nginx/html/network-node.qcow2
+   sudo kubectl -n pits-boot cp storage-node.qcow2 ${pod#pod/}:/usr/share/nginx/html/storage-node.qcow2
+   ```
+
+   镜像服务的卷是只读挂载的，上传前把 `gitops/infrastructure/images/boot-images.yaml` 里的 `readOnly: true` 临时去掉，或者直接把文件复制到宿主上该卷对应的目录（`/var/lib/pits-local/` 下以 `pvc-` 开头、名字里带 `boot-images` 的目录）。
+   两台节点在核心网段上的地址、MAC 和各自拿到的 VF 见 [addressing.md](addressing.md)，节点内部的网络按这张表配置。网络节点要在 sfp0 干道上建 VLAN 10 子接口做网关；存储节点那块 VF 的 VLAN 由宿主设好，节点里直接用不带标签的网卡。
+2. 交换机上把接 sfp0 的端口设成带 VLAN 10 的 trunk，分支的端口设成 VLAN 10 的 access 口。
+3. 把 `gitops/clusters/core/stack.yaml` 里 `core-nodes` 的 `suspend` 改成 `false`，然后提交。
+4. 检查：
+   - `sudo kubectl get node -o jsonpath='{.items[0].status.allocatable}'`：能看到 `pits.io/sfp0_trunk`、`pits.io/sfp0_storage`、`pits.io/sfp0_shared`、`pits.io/sfp1_trunk` 四个 VF 资源池，数量分别是 1、1、6、1。
+   - `sudo kubectl -n core-nodes get vm,vmi`：两台 VM 都在运行。
+   - `ip link show sfp0`（在宿主上）：vf0 是 trust on、spoof checking off，vf1 是 vlan 10、MAC 02:50:00:00:00:10。
+   - 每台 VM 分到的 CPU：
+
+     ```sh
+     sudo kubectl -n core-nodes exec <virt-launcher Pod> -- cat /sys/fs/cgroup/cpuset.cpus.effective
+     ```
+
+     对照 P0 记录的 P 核编号。
+   - 存储节点能 ping 通网关 10.88.0.1；宿主能访问 `http://10.88.0.10:3900`（经网络节点路由）。
+   - 吞吐：从一台分支直接到存储节点跑 iperf3（同一网段，不经过网络节点）。
+5. 按 PITS Network 和 PITS Storage 的设计，配置两台节点的内部。
+6. 在 `site-vars.yaml` 里填好两处 S3 的地址，并创建 Velero 的两个 Secret（见 [secrets.md](secrets.md)）。
+7. 把 `stack.yaml` 里 `backup` 的 `suspend` 改成 `false`，提交后由 Flux 部署 Velero。
+8. `velero backup-location get`：两个位置都应当是 Available。
+
+**验收：**
+- 宿主重启后，两台 VM 自动起来，直通设备都在。
+- `virtctl -n core-nodes stop network-node` 之后，宿主的管理和核心集群都不受影响；分支和存储节点之间照样互通（同一网段，不经过网络节点），只是出不了这个网段。
+- 在网络节点里改干道 VF 的 VLAN 或 MAC 设置，存储节点那块 VF 不受影响（`ip link show sfp0` 里 vf1 不变）。
+- ManageIQ 的台账里能看到这两台节点（P3 已经把核心集群加成了 provider）。
+- 恢复演练一：删掉 Keycloak 的数据库卷，用 `velero restore create --from-backup <备份名>` 恢复。
+- 恢复演练二：删掉 `storage-node-root`（存储节点的系统盘），让 CDI 从镜像重建，确认存储池完整导入。
+
+## 合规检查（后置）
+
+Steampipe 和 Powerpipe 在 P4 之后再打开。最好先定好 PITS 的系统级指标（实施规划里的待定项），这样检查不只是看配置有没有照声明来，还能看出哪个子系统在牺牲整体。P5 的一项验收（`zone_connections_match_registry`）要用到它，所以要在 P5 之前打开。
+
+1. 创建 Steampipe 的数据库密码：
+
+   ```sh
+   sudo kubectl -n pits-compliance create secret generic steampipe-db \
+     --from-literal=password=$(openssl rand -hex 16)
+   ```
+
+2. 把 `stack.yaml` 里 `compliance` 的 `suspend` 改成 `false`，提交。
+3. 核对 README 里列出的 Steampipe、Powerpipe 镜像地址和自省表的名字。
+4. P3 关卡通过的话，按 [compliance.md](compliance.md) 打开合规结果写回 ManageIQ。
+
+**验收：**
+- Powerpipe 基准能跑通，每项检查都有结果。
+
+## P5 分支支撑
+
+1. 构建控制面 VM 镜像和分支网络启动镜像，放进启动镜像服务（`pits-boot` 命名空间的卷）。这两个镜像的 flake 输出还没写，是 P5 的第一项工作。
 2. 新建实验区：
 
    ```sh
@@ -286,21 +300,3 @@ P4 不依赖 P3。ManageIQ 负责申领（profile、provision），关卡验证�
 - 在 ManageIQ 里给这个区申请一个 VM 成功。
 - 合规基准里 `zone_connections_match_registry` 为 ok。
 - 核心集群除了多出一台控制面 VM，没有别的变化。
-
-## 合规检查（后置）
-
-Steampipe 和 Powerpipe 在 P3 之后再打开。最好先定好 PITS 的系统级指标（实施规划里的待定项），这样检查不只是看配置有没有照声明来，还能看出哪个子系统在牺牲整体。P6 的一项验收（`zone_connections_match_registry`）要用到它，所以要在 P6 之前打开。
-
-1. 创建 Steampipe 的数据库密码：
-
-   ```sh
-   sudo kubectl -n pits-compliance create secret generic steampipe-db \
-     --from-literal=password=$(openssl rand -hex 16)
-   ```
-
-2. 把 `stack.yaml` 里 `compliance` 的 `suspend` 改成 `false`，提交。
-3. 核对 README 里列出的 Steampipe、Powerpipe 镜像地址和自省表的名字。
-4. P4 关卡通过的话，按 [compliance.md](compliance.md) 打开合规结果写回 ManageIQ。
-
-**验收：**
-- Powerpipe 基准能跑通，每项检查都有结果。

@@ -11,7 +11,7 @@
 #   sudo bash scripts/sriov-selftest.sh [PF 名，默认 sfp0]
 #
 # 测试流量用 VLAN 4000/4001 和 10.255.255.0/30，不碰真正在用的 VLAN 和地址。
-# 借用前会确认这两块 VF 没有被 VM 使用；最好在 P3 部署 VM 之前跑。
+# 借用前会确认这两块 VF 没有被 VM 使用；最好在 P4 部署 VM 之前跑。
 set -euo pipefail
 
 pf=${1:-sfp0}

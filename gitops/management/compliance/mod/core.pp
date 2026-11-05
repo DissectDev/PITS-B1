@@ -90,7 +90,7 @@ control "no_core_in_zones" {
 
 control "zone_connections_match_registry" {
   title = "Steampipe 的区连接数等于区清单里的区数"
-  # steampipe_internal.steampipe_connection 是 Steampipe 的自省表；P4 时核对该表在所用版本里的名字。
+  # steampipe_internal.steampipe_connection 是 Steampipe 的自省表；P3 时核对该表在所用版本里的名字。
   sql   = <<-EOQ
     with registry as (
       select coalesce(jsonb_array_length(((data ->> 'zones.json')::jsonb) -> 'zones'), 0) as n
