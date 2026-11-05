@@ -54,15 +54,26 @@
 
   networking.firewall = {
     enable = true;
-    # 管理口只开 SSH、ingress、RKE2 API，以及给分支用的两个 NodePort；
-    # Tailscale 自己的 UDP 端口由 tailscale 模块打开。
-    allowedTCPPorts = [
-      22
-      443
-      6443
-      30080 # 启动镜像（gitops/infrastructure/images）
-      30500 # zot 镜像缓存（gitops/management/platform/registry.yaml）
-    ];
+    # 管理端口不对所有来源开放：只接受光猫局域网（IPv4）和核心机内部网络、实验区的连接，
+    # tailnet 整体可信。光猫会给宿主分公网 IPv6，所以这里不放行任何 IPv6 来源。
+    # 30080、30500 是 NodePort，kube-proxy 在进入这条链之前就转发了，这里列出只是为了说明用途。
+    allowedTCPPorts = [ ];
+    extraCommands =
+      let
+        ports = lib.concatStringsSep "," (
+          map toString [
+            22 # SSH
+            443 # ingress
+            6443 # RKE2 API
+            30080 # 镜像服务（gitops/infrastructure/images）
+            30500 # zot 镜像缓存（gitops/management/platform/registry.yaml）
+          ]
+        );
+        sources = [ site.mgmt.lanCidr ] ++ site.coreNet.routedPrefixes;
+      in
+      lib.concatMapStrings (src: ''
+        iptables -A nixos-fw -p tcp -s ${src} -m multiport --dports ${ports} -j nixos-fw-accept
+      '') sources;
     # Pod 网络（Canal：cali* 和 flannel.1）和 tailnet 视为可信。
     trustedInterfaces = [
       "cali+"

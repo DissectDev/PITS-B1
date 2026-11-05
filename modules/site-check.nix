@@ -39,6 +39,10 @@ in
       message = "site: coreNet.via 应当是网络节点上行口的 IPv4 地址。";
     }
     {
+      assertion = builtins.match "[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/[0-9]+" site.mgmt.lanCidr != null;
+      message = "site: mgmt.lanCidr 应当是光猫局域网的 IPv4 网段，例如 192.168.71.0/24。";
+    }
+    {
       assertion = site.mgmt.dhcp || (site.mgmt.address != null && site.mgmt.gateway != null);
       message = "site: mgmt.dhcp = false 时必须填写 mgmt.address 和 mgmt.gateway。";
     }
