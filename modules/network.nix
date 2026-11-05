@@ -28,6 +28,11 @@
       address = lib.optional (!site.mgmt.dhcp) site.mgmt.address;
       gateway = lib.optional (!site.mgmt.dhcp) site.mgmt.gateway;
       dns = site.mgmt.dns;
+      # 核心机内部网络和实验区经网络节点的上行口访问（见 site.coreNet）。
+      routes = map (prefix: {
+        Destination = prefix;
+        Gateway = site.coreNet.via;
+      }) site.coreNet.routedPrefixes;
       linkConfig.RequiredForOnline = "routable";
     };
 
@@ -55,7 +60,7 @@
       22
       443
       6443
-      30080 # 启动镜像（gitops/management/services/boot-images）
+      30080 # 启动镜像（gitops/infrastructure/images）
       30500 # zot 镜像缓存（gitops/management/platform/registry.yaml）
     ];
     # Pod 网络（Canal：cali* 和 flannel.1）和 tailnet 视为可信。

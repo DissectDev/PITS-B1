@@ -3,5 +3,4 @@ kind: Kustomization
 resources:
   - keycloak/keycloak.yaml
   - manageiq/manageiq.yaml
-  - boot-images/boot-images.yaml
   - alerts/alerts.yaml

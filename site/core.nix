@@ -1,8 +1,8 @@
 # 核心机的站点参数。
 #
 # 所有因机器、网络、账号而异的值都只在这里填，模块里不写死。
-# 先在核心机上跑 scripts/p0-inventory.sh，按它的输出填写带 TODO 的项。
-# 还有 TODO 时，`nixos-rebuild` 和 `nix eval .#nixosConfigurations.core...` 都会报错，这是有意的。
+# 硬件相关的值来自 P0 盘点（docs/hardware.md）。换硬件时先重跑 scripts/p0-inventory.sh。
+# 如果哪一项又被改回占位值（含 TODO），评估会被 modules/site-check.nix 拦下。
 {
   hostName = "pits-core";
   timeZone = "Asia/Shanghai";
@@ -38,6 +38,16 @@
   # "disko" 时用：/dev/disk/by-id 下的名字。disko 只会格式化这一块盘。
   systemDisk = "/dev/disk/by-id/nvme-CT1000P310SSD8_24514CD9A8E1";
 
+  # 核心机内部网络（br-core）和各实验区的地址段，都由网络节点负责路由。
+  # 宿主不在这些网里；宿主上的服务要访问它们（Velero → 存储节点 S3、ManageIQ → 实验区 API），
+  # 走的是到网络节点上行口的静态路由。地址规划见 docs/addressing.md。
+  coreNet = {
+    # 10.88.0.0/24 是 br-core，10.89.0.0/16 留给各实验区
+    routedPrefixes = [ "10.88.0.0/15" ];
+    # 网络节点上行口（I226-LM）在光猫局域网里的地址，需要在光猫上做 DHCP 保留
+    via = "192.168.71.2";
+  };
+
   # 直通给 VM 的 PCI 设备，按 PCI 地址写（`lspci -D` 的第一列）。
   # 不要写系统盘和管理口；写错会让宿主失去它们。
   passthrough = {
@@ -60,8 +70,9 @@
   cpu.reservedSystemCPUs = "14-15";
 
   admin = {
-    user = "bill";
-    sshKeys = [ "ssh-ed25519 TODO" ];
+    # 和切换前登录用的用户名一致，切换后家目录照常可用。
+    user = "libraskywalker";
+    sshKeys = [ "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJeCRoIL173jc20XMSRh+nRdRg6QpIK6BBTZE4Dd5lmw" ];
     # 控制台登录和 sudo 用的密码哈希（mkpasswd -m yescrypt 生成），装机时随 --extra-files 放进去。
     hashedPasswordFile = "/var/lib/pits/secrets/admin.hash";
   };
@@ -89,7 +100,8 @@
     package = "rke2_1_35";
     # 额外的证书 SAN，例如 Tailscale 的 MagicDNS 名字
     tlsSans = [ ];
-    # etcd 快照推到机外 S3。访问密钥不写在这里，见 docs/secrets.md。
+    # etcd 快照推到机外 S3。目前还没有机外 S3，先关着，快照只留在本机；P5 前补上。
+    # 访问密钥不写在这里，见 docs/secrets.md。
     etcdS3 = {
       enable = false;
       endpoint = "";

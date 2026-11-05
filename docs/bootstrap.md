@@ -33,8 +33,9 @@
 
 ### 方式 A：在机器上 nixos-rebuild
 
-1. 在 `site/core.nix` 里填好 `admin.sshKeys`，并确认 `admin.user` 和你现在登录用的用户名一致。
+1. 确认 `site/core.nix` 里的 `admin.user`（`libraskywalker`）和 `admin.sshKeys` 就是你现在登录用的账号和公钥。
    配置里设了 `users.mutableUsers = false`，没在配置里声明的用户和密码都会被清掉，root 密码也一样。
+   在光猫上给网络节点上行口（I226-LM）预留 192.168.71.2（见 [addressing.md](addressing.md)）。P1 时这个地址上还没有设备，宿主只是先装好指向它的路由。
 2. 在核心机上放好密码哈希：
 
    ```sh
@@ -111,12 +112,23 @@
 4. `flux get kustomizations` 应当看到：`namespaces`、`controllers`、`local-path`、`config`、`policies` 等就绪，`core-nodes` 和 `zones` 处于暂停状态。
 
 **验收：**
-- `sudo rke2 etcd-snapshot save` 生成的快照出现在机外 S3 里。
-- 在重装后的宿主上，用机外的快照（`rke2 server --cluster-reset --cluster-reset-restore-path=...`）恢复出原来的集群。
+- `sudo rke2 etcd-snapshot save` 能生成快照，`sudo rke2 etcd-snapshot list` 能看到它。
+- 用这份快照（`rke2 server --cluster-reset --cluster-reset-restore-path=...`）恢复出原来的集群。
+
+机外 S3 目前还没有，快照只留在本机。机外这一份在 P5 之前补上，补法见 `gitops/management/platform/backup.yaml` 末尾。补上之后，再用机外的快照做一次恢复。
 
 ## P3 虚拟化与两台核心节点
 
-1. 准备网络节点和存储节点的系统镜像（分别由 PITS Network 和 PITS Storage 的设计决定），放到任一 HTTP 地址，填进 `gitops/core-nodes/*.yaml`。
+1. 准备网络节点和存储节点的系统镜像（qcow2，分别由 PITS Network 和 PITS Storage 的设计决定），上传到镜像服务：
+
+   ```sh
+   pod=$(kubectl -n pits-boot get pod -l app=boot-images -o name)
+   kubectl -n pits-boot cp network-node.qcow2 ${pod#pod/}:/usr/share/nginx/html/network-node.qcow2
+   kubectl -n pits-boot cp storage-node.qcow2 ${pod#pod/}:/usr/share/nginx/html/storage-node.qcow2
+   ```
+
+   镜像服务的卷是只读挂载的，上传前把 `gitops/infrastructure/images/boot-images.yaml` 里的 `readOnly: true` 临时去掉，或者直接把文件复制到宿主上该卷对应的目录（`/var/lib/pits-local/` 下以 `pvc-` 开头、名字里带 `boot-images` 的目录）。
+   两台节点在 br-core 上的地址和 MAC 见 [addressing.md](addressing.md)，节点内部的网络按这张表配置。
 2. 把 `gitops/clusters/core/stack.yaml` 里 `core-nodes` 的 `suspend` 改成 `false`，然后提交。
 3. 检查：
    - `kubectl -n core-nodes get vm,vmi`：两台 VM 都在运行。

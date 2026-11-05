@@ -1,11 +1,11 @@
-# Velero + Kopia：备份管理服务的数据，推到两处——存储节点的 S3 和机外 S3。
+# Velero + Kopia：备份管理服务的数据。规划是推到两处：存储节点的 S3 和机外 S3。
+# 机外 S3 还没有，目前只配了存储节点这一处（见文件末尾怎么补上机外那一处）。
 #
 # 不备份 core-nodes 和 zones 里的 VM 系统盘：它们必须能从镜像重建。
 # etcd 快照不在这里，由宿主上的 RKE2 直接推到机外 S3（存储节点自己要靠集群才能启动）。
 #
-# 访问密钥不进 Git。P5 时手动创建两个 Secret（键名都是 cloud，内容是 AWS credentials 文件格式）：
+# 访问密钥不进 Git。P5 时手动创建 Secret（键名 cloud，内容是 AWS credentials 文件格式）：
 #   kubectl -n velero create secret generic velero-s3-storage --from-file=cloud=./storage.ini
-#   kubectl -n velero create secret generic velero-s3-offsite --from-file=cloud=./offsite.ini
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -48,16 +48,6 @@ spec:
             region: ${PITS_S3_STORAGE_REGION}
             s3ForcePathStyle: "true"
             s3Url: ${PITS_S3_STORAGE_URL}
-        - name: offsite
-          provider: aws
-          bucket: ${PITS_S3_OFFSITE_BUCKET}
-          credential:
-            name: velero-s3-offsite
-            key: cloud
-          config:
-            region: ${PITS_S3_OFFSITE_REGION}
-            s3ForcePathStyle: "true"
-            s3Url: ${PITS_S3_OFFSITE_URL}
     schedules:
       daily-storage-node:
         schedule: "0 3 * * *"
@@ -68,12 +58,15 @@ spec:
             - keycloak
             - manageiq
             - pits-compliance
-      daily-offsite:
-        schedule: "30 3 * * *"
-        template:
-          ttl: 720h
-          storageLocation: offsite
-          includedNamespaces:
-            - keycloak
-            - manageiq
-            - pits-compliance
+#
+# 补上机外 S3 时：
+#   1. 在 gitops/clusters/core/site-vars.yaml 里加 PITS_S3_OFFSITE_URL、PITS_S3_OFFSITE_BUCKET、PITS_S3_OFFSITE_REGION；
+#   2. kubectl -n velero create secret generic velero-s3-offsite --from-file=cloud=./offsite.ini
+#   3. 在上面的 backupStorageLocation 里加一项：
+#        - name: offsite
+#          provider: aws
+#          bucket: ${PITS_S3_OFFSITE_BUCKET}
+#          credential: { name: velero-s3-offsite, key: cloud }
+#          config: { region: ${PITS_S3_OFFSITE_REGION}, s3ForcePathStyle: "true", s3Url: ${PITS_S3_OFFSITE_URL} }
+#      在 schedules 里加 daily-offsite（storageLocation: offsite，ttl 720h，命名空间同上）；
+#   4. site/core.nix 里打开 rke2.etcdS3，etcd 快照也推到机外。

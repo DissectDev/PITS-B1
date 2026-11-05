@@ -35,6 +35,10 @@ in
       message = "site: 管理口 ${site.mgmt.pciAddress} 出现在 passthrough 里，宿主会失去管理口。";
     }
     {
+      assertion = builtins.match "[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+" site.coreNet.via != null;
+      message = "site: coreNet.via 应当是网络节点上行口的 IPv4 地址。";
+    }
+    {
       assertion = site.mgmt.dhcp || (site.mgmt.address != null && site.mgmt.gateway != null);
       message = "site: mgmt.dhcp = false 时必须填写 mgmt.address 和 mgmt.gateway。";
     }

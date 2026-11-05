@@ -4,3 +4,4 @@ resources:
   - kubevirt.yaml
   - networks.yaml
   - pki.yaml
+  - ../images

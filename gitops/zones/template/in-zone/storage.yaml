@@ -8,8 +8,8 @@ metadata:
   name: linstorcluster
 spec:
   externalController:
-    # TODO（P6）：存储节点在 br-core 上的地址
-    url: http://TODO-storage-node:3370
+    # 存储节点在 br-core 上的地址（docs/addressing.md），LINSTOR controller 默认端口 3370
+    url: http://10.88.0.10:3370
 ---
 # 外部 controller 要能连到 satellite，satellite 必须用宿主网络。
 apiVersion: piraeus.io/v1

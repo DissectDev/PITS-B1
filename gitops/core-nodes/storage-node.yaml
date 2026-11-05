@@ -25,8 +25,9 @@ spec:
               storage: 32Gi
         source:
           http:
-            # TODO：PITS Storage 的系统镜像，例如 bootc-image-builder 生成的 qcow2
-            url: "https://TODO/storage-node.qcow2"
+            # PITS Storage 的系统镜像（例如 bootc-image-builder 生成的 qcow2），
+            # P3 时上传到启动镜像服务（gitops/infrastructure/images）
+            url: "http://boot-images.pits-boot.svc/storage-node.qcow2"
   template:
     metadata:
       labels:
@@ -61,6 +62,8 @@ spec:
           interfaces:
             - name: core
               bridge: {}
+              # 固定 MAC，存储节点在 br-core 上的地址是 10.88.0.10（docs/addressing.md）
+              macAddress: "02:50:00:00:00:10"
       networks:
         - name: core
           multus:
