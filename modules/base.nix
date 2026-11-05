@@ -13,7 +13,6 @@
   boot.loader.efi.canTouchEfiVariables = true;
 
   boot.kernelPackages = pkgs.linuxKernel.packages.${site.kernel};
-  boot.blacklistedKernelModules = site.disabledKernelModules;
 
   time.timeZone = site.timeZone;
   i18n.defaultLocale = "en_US.UTF-8";
