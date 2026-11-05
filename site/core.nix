@@ -111,6 +111,16 @@
     tags = [ "tag:pits-core" ];
   };
 
+  # 出国代理：宿主上跑 mihomo，只给拉镜像、拉 chart 和 Git 的几个进程用
+  # （RKE2、Flux 的 source-controller、nix-daemon），宿主的其他流量、VM 和分支都不走它。
+  # 订阅配置（Clash/mihomo 格式）不进 Git，放法见 docs/secrets.md。
+  proxy = {
+    enable = true;
+    configFile = "/var/lib/pits/secrets/mihomo.yaml";
+    # 改端口时同步 gitops/clusters/core/flux-system/kustomization.yaml
+    port = 7890;
+  };
+
   # 有 UPS 时打开。
   ups = {
     enable = false;
@@ -124,6 +134,9 @@
     # nixpkgs 里的 RKE2 包名。KubeVirt 1.9 支持 K8s 1.34–1.36，这里用 1.35。
     # 升级时一次只升一个小版本，并先打 etcd 快照。
     package = "rke2_1_35";
+    # 预装 RKE2 的离线镜像包（核心组件、Canal、Multus），集群启动不再依赖 docker.io。
+    # 镜像包要从 GitHub 下载几百 MB，等代理跑通（nix-daemon 也走代理）之后再打开。
+    airgapImages = false;
     # 额外的证书 SAN，例如 Tailscale 的 MagicDNS 名字
     tlsSans = [ ];
     # etcd 快照推到机外 S3。目前还没有机外 S3，先关着，快照只留在本机；P5 前补上。

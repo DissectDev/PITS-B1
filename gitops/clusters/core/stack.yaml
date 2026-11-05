@@ -1,5 +1,6 @@
-# 核心集群的部署顺序。每一层只依赖它前面的层；core-nodes 和 zones 默认暂停，
-# 分别在 P3 和 P6 填好镜像地址与 PCI ID 后再打开（把 suspend 改成 false）。
+# 核心集群的部署顺序。每一层只依赖它前面的层。后面几段默认暂停，到对应阶段再打开
+# （把 suspend 改成 false）：core-nodes 在 P3，management-platform、management、compliance 在 P4，
+# zones 在 P6。P2 只部署到 policies 为止。
 #
 #   namespaces → controllers → config ─┬→ policies
 #                local-path ───────────┤
@@ -176,6 +177,7 @@ metadata:
   name: management-platform
   namespace: flux-system
 spec:
+  suspend: true # P4 打开
   dependsOn:
     - name: config
     - name: local-path
@@ -199,6 +201,7 @@ metadata:
   name: management
   namespace: flux-system
 spec:
+  suspend: true # P4 打开
   dependsOn:
     - name: management-platform
     - name: keycloak-operator
@@ -222,6 +225,7 @@ metadata:
   name: compliance
   namespace: flux-system
 spec:
+  suspend: true # P4 打开
   dependsOn:
     - name: management-platform
   interval: 1h

@@ -1,0 +1,39 @@
+# Flux 本身。P2 时在宿主上手动应用一次（docs/bootstrap.md），之后由 Flux 自己按这个目录管理自己。
+# 没有用 flux bootstrap：仓库是公开的，不需要让 Flux 持有能写仓库的 GitHub token。
+#
+# source-controller 负责拉 Helm chart 和 GitHub 上的 Git 仓库，这些来源在国内慢或者拉不到，
+# 所以给它配上宿主上的 mihomo 代理（modules/proxy.nix）。代理地址用节点的 IP：Pod 访问宿主的
+# 这个端口时，源地址是 Pod 网段，mihomo 只放行这个网段和本机。端口要和 site.proxy.port 一致。
+# 其他控制器不访问外网，不走代理。
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - gotk-components.yaml
+  - gotk-sync.yaml
+patches:
+  - target:
+      kind: Deployment
+      name: source-controller
+    patch: |
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: HOST_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: HTTPS_PROXY
+          value: http://$(HOST_IP):7890
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: HTTP_PROXY
+          value: http://$(HOST_IP):7890
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: NO_PROXY
+          value: localhost,127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,.svc,.cluster.local,.cluster.local.

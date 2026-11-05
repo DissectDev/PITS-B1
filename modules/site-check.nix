@@ -81,6 +81,19 @@ in
       message = "site: sriov.pfs 的 numVfs 要在 1–64 之间。网卡实际支持多少块以 sysfs 的 sriov_totalvfs 为准，pits-sriov 启动时会再检查。";
     }
     {
+      assertion =
+        !site.proxy.enable
+        || (lib.hasPrefix "/var/lib/pits/secrets/" site.proxy.configFile
+          && builtins.isInt site.proxy.port
+          && site.proxy.port >= 1024
+          && site.proxy.port <= 65535);
+      message = "site: proxy.configFile 要放在 /var/lib/pits/secrets/ 下（里面有订阅凭据，不能进 Git 和 Nix store），proxy.port 要在 1024–65535 之间。";
+    }
+    {
+      assertion = !site.rke2.airgapImages || site.proxy.enable;
+      message = "site: rke2.airgapImages 要从 GitHub 下载镜像包，先打开 proxy。";
+    }
+    {
       assertion = site.admin.sshKeys != [ ] && lib.all (k: !isPlaceholder k) site.admin.sshKeys;
       message = "site: admin.sshKeys 还没填。没有公钥就进不了宿主。";
     }

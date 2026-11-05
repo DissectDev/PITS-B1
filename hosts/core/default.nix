@@ -10,6 +10,7 @@
     ../../modules/vfio.nix
     ../../modules/sriov.nix
     ../../modules/tailscale.nix
+    ../../modules/proxy.nix
     ../../modules/ups.nix
     ../../modules/rke2.nix
   ];

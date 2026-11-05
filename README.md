@@ -14,9 +14,9 @@ PITS 核心机（MS-01）的基础设施代码，按[《PITS 核心机实施规�
 | 路径 | 内容 |
 | --- | --- |
 | `flake.nix`、`hosts/core/` | 核心机的 NixOS 配置入口、硬件和系统盘分区 |
-| `modules/` | 宿主模块：基础、网络（mgmt0）、VFIO 直通、X710 的 SR-IOV、Tailscale、UPS、RKE2 |
+| `modules/` | 宿主模块：基础、网络（mgmt0）、VFIO 直通、X710 的 SR-IOV、出国代理（mihomo）、Tailscale、UPS、RKE2 |
 | `site/core.nix` | 宿主的站点参数，所有因机器而异的值只在这里填 |
-| `gitops/clusters/core/` | Flux 入口：外部来源、部署顺序、GitOps 侧的站点参数 |
+| `gitops/clusters/core/` | Flux 入口：Flux 自身（`flux-system`）、外部来源、部署顺序、GitOps 侧的站点参数 |
 | `gitops/infrastructure/` | 命名空间、集群控制器（cert-manager、Kyverno、CNPG、KubeVirt、CDI、SR-IOV device plugin 和 CNI）、KubeVirt 配置、VM 用的 SR-IOV 网络、内部 CA、镜像服务 |
 | `gitops/policies/` | 故障域标签策略 |
 | `gitops/core-nodes/` | 网络节点和存储节点 VM |
