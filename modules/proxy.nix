@@ -5,6 +5,7 @@
 #   - Flux 的 source-controller：Helm chart 和 GitHub 上的 Git 仓库
 #     （gitops/clusters/core/flux-system/kustomization.yaml）；
 #   - nix-daemon：GitHub 上的下载。两个国内镜像站不走代理，代理停了也照样能装系统。
+#     root 默认不经过 daemon，所以这里让 sudo 之后的 nix 命令也走 daemon（NIX_REMOTE=daemon）。
 # 宿主的其他流量、VM 和分支都不走它。
 #
 # 订阅配置（Clash/mihomo 格式）放在 site.proxy.configFile，不进 Git。每次启动 mihomo 前，
@@ -126,6 +127,13 @@ in
         "mirrors.tuna.tsinghua.edu.cn"
       ];
     };
+
+    # root 能直接写 Nix store，所以 sudo nixos-rebuild 默认不经过 nix-daemon，自己下载，也就用不上
+    # 上面给 nix-daemon 配的代理。让所有用户（包括 sudo 之后的 root）都经 daemon 构建和下载。
+    environment.variables.NIX_REMOTE = "daemon";
+    security.sudo.extraConfig = ''
+      Defaults env_keep += "NIX_REMOTE"
+    '';
 
     environment.systemPackages = [ pkgs.mihomo ];
   };
