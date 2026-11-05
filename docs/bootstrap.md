@@ -167,6 +167,8 @@ sudo bash scripts/sriov-selftest.sh sfp0     # 拔掉 sfp0 的光纤再跑一次
 
    第一次应用时 CRD 还没就绪，最后两个资源（GitRepository 和 Kustomization）会报错；等 CRD 就绪后再应用一次就好。
 
+   如果第二次应用报 `Apply failed with N conflicts: conflicts with "kustomize-controller"`，说明 Flux 已经从仓库同步到自己的清单、接管了自己，这正是想要的结果，忽略即可。之后改 Flux 自己的配置也是提交到仓库，不再手动 `kubectl apply`。
+
 6. 检查：
 
    ```sh
