@@ -1,0 +1,80 @@
+# 故障域标签：
+#   pits.io/fault-domain  core 或 zone-<区名>
+#   pits.io/tier          mgmt、control、business 或 lab
+# 标签打在命名空间上（gitops/infrastructure/namespaces），由下面的 mutate 规则继承到
+# Pod、PVC 和 VM；validate 规则拒绝没有标签的命名空间。
+#
+# 排除的是平台自带的命名空间：它们由 RKE2、Flux 或上游 operator 创建，不属于任何业务故障域。
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: pits-namespace-fault-domain
+  annotations:
+    policies.kyverno.io/title: 命名空间必须标注故障域和层级
+spec:
+  background: true
+  rules:
+    - name: require-labels
+      match:
+        any:
+          - resources:
+              kinds:
+                - Namespace
+      exclude:
+        any:
+          - resources:
+              names:
+                - default
+                - kube-system
+                - kube-public
+                - kube-node-lease
+                - flux-system
+                - cert-manager
+                - kyverno
+                - cnpg-system
+                - kubevirt
+                - cdi
+                - local-path-storage
+      validate:
+        failureAction: Enforce
+        message: "命名空间 {{request.object.metadata.name}} 必须带 pits.io/fault-domain 和 pits.io/tier 标签。"
+        pattern:
+          metadata:
+            labels:
+              pits.io/fault-domain: "?*"
+              pits.io/tier: "?*"
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: pits-inherit-fault-domain
+  annotations:
+    policies.kyverno.io/title: 从命名空间继承故障域标签
+spec:
+  background: false
+  rules:
+    - name: inherit-from-namespace
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+                - PersistentVolumeClaim
+                - kubevirt.io/v1/VirtualMachine
+      context:
+        - name: nsLabels
+          apiCall:
+            urlPath: "/api/v1/namespaces/{{request.namespace}}"
+            jmesPath: "metadata.labels || `{}`"
+      preconditions:
+        all:
+          - key: "{{ nsLabels.\"pits.io/fault-domain\" || '' }}"
+            operator: NotEquals
+            value: ""
+      mutate:
+        patchStrategicMerge:
+          metadata:
+            labels:
+              +(pits.io/fault-domain): "{{ nsLabels.\"pits.io/fault-domain\" }}"
+              +(pits.io/tier): "{{ nsLabels.\"pits.io/tier\" || 'unknown' }}"

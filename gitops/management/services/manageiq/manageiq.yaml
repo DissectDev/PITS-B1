@@ -1,0 +1,87 @@
+# ManageIQ：服务目录、审批、配额、台账。
+#
+# P4 关卡要验证的是：ManageIQ 能否把原生 K8s（RKE2）上的 KubeVirt 加成 provider，
+# 并从模板创建、回收 VM。不通过就改用 GitOps PR 做申请（见 docs/plan.md）。
+#
+# 先用内置账号登录完成关卡验证；Keycloak 就绪后再切到 openid-connect：
+#   1. 在 Keycloak 里建 realm pits 和 client manageiq；
+#   2. kubectl -n manageiq create secret generic manageiq-oidc \
+#        --from-literal=CLIENT_ID=manageiq --from-literal=CLIENT_SECRET=<secret>
+#   3. 打开下面注释掉的三行。
+# 本地 admin 账号始终保留，作为应急入口。
+---
+apiVersion: manageiq.org/v1alpha1
+kind: ManageIQ
+metadata:
+  name: manageiq
+  namespace: manageiq
+spec:
+  applicationDomain: manageiq.${PITS_DOMAIN}
+  storageClassName: local-path
+  httpdAuthenticationType: internal
+  # httpdAuthenticationType: openid-connect
+  # oidcProviderURL: https://keycloak.${PITS_DOMAIN}/realms/pits/.well-known/openid-configuration
+  # oidcClientSecret: manageiq-oidc
+---
+# ManageIQ 自带的 PostgreSQL 每天导出一次，Velero 再把导出卷推到存储节点和机外。
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: manageiq-db-dumps
+  namespace: manageiq
+spec:
+  storageClassName: local-path
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: manageiq-pg-dump
+  namespace: manageiq
+  annotations:
+    # 脚本里的 $VAR 不让 Flux 的变量替换碰
+    kustomize.toolkit.fluxcd.io/substitute: disabled
+spec:
+  schedule: "30 2 * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: pg-dump
+              # pg_dump 的大版本要不低于 ManageIQ 数据库的大版本。
+              image: docker.io/library/postgres:17-alpine
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  f=/dumps/vmdb-$(date +%Y%m%d-%H%M).dump
+                  PGPASSWORD="$DB_PASSWORD" pg_dump -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -Fc -f "$f"
+                  ls -1t /dumps/vmdb-*.dump | tail -n +8 | xargs -r rm -f
+                  ls -lh /dumps
+              env:
+                - name: DB_HOST
+                  valueFrom:
+                    secretKeyRef: { name: postgresql-secrets, key: hostname }
+                - name: DB_USER
+                  valueFrom:
+                    secretKeyRef: { name: postgresql-secrets, key: username }
+                - name: DB_PASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: postgresql-secrets, key: password }
+                - name: DB_NAME
+                  valueFrom:
+                    secretKeyRef: { name: postgresql-secrets, key: dbname }
+              volumeMounts:
+                - name: dumps
+                  mountPath: /dumps
+          volumes:
+            - name: dumps
+              persistentVolumeClaim:
+                claimName: manageiq-db-dumps

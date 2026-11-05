@@ -1,0 +1,67 @@
+# 实验区控制面 VM 的模板。scripts/new-zone.sh 会把 ZONE_NAME、ZONE_MAC 替换掉，
+# 复制到 gitops/zones/clusters/<区名>/。
+#
+# 这台 VM 跑在核心机上（所以故障域是 core），里面是这个区的 rke2 server；
+# 分支主机网络启动后作为 agent 加入它。系统盘从镜像重建，区的 etcd 快照推到存储节点的 S3。
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: zone-ZONE_NAME-cp
+  namespace: zones
+  labels:
+    pits.io/fault-domain: core
+    pits.io/tier: control
+    pits.io/zone: ZONE_NAME
+spec:
+  runStrategy: Always
+  dataVolumeTemplates:
+    - metadata:
+        name: zone-ZONE_NAME-cp-root
+      spec:
+        storage:
+          storageClassName: local-path
+          resources:
+            requests:
+              storage: 20Gi
+        source:
+          http:
+            # TODO（P6）：控制面镜像，由本仓库的 flake 构建后放到启动镜像服务里
+            url: "http://boot-images.pits-boot.svc/zone-cp.qcow2"
+  template:
+    metadata:
+      labels:
+        pits.io/fault-domain: core
+        pits.io/tier: control
+        pits.io/zone: ZONE_NAME
+    spec:
+      domain:
+        cpu:
+          cores: 2
+        memory:
+          guest: 4Gi
+        devices:
+          disks:
+            - name: root
+              disk:
+                bus: virtio
+            - name: cloudinit
+              disk:
+                bus: virtio
+          interfaces:
+            - name: core
+              bridge: {}
+              # 网络节点按这个 MAC 给控制面分固定地址
+              macAddress: "ZONE_MAC"
+      networks:
+        - name: core
+          multus:
+            networkName: pits-net/br-core
+      volumes:
+        - name: root
+          dataVolume:
+            name: zone-ZONE_NAME-cp-root
+        - name: cloudinit
+          cloudInitNoCloud:
+            # 含 rke2 token 等机密，不进 Git，由 new-zone.sh 提示手动创建
+            secretRef:
+              name: zone-ZONE_NAME-cp-cloudinit

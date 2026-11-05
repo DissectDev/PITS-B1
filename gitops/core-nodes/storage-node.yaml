@@ -1,0 +1,71 @@
+# 存储节点（PITS Storage）：直通三块数据盘，用一块 virtio 网卡接 br-core。
+# 它同时是各分支集群的外部 LINSTOR controller（分支的 Piraeus 用 externalController 指向它）。
+# 内部设计（ZFS 池布局、LINSTOR、SMB/NFS/S3）由 PITS Storage 决定。
+#
+# 状态都在直通的数据盘上；系统盘丢了从镜像重建，再重新导入存储池。
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: storage-node
+  namespace: core-nodes
+  labels:
+    pits.io/fault-domain: core
+    pits.io/tier: business
+    pits.io/node-role: storage
+spec:
+  runStrategy: Always
+  dataVolumeTemplates:
+    - metadata:
+        name: storage-node-root
+      spec:
+        storage:
+          storageClassName: local-path
+          resources:
+            requests:
+              storage: 32Gi
+        source:
+          http:
+            # TODO：PITS Storage 的系统镜像，例如 bootc-image-builder 生成的 qcow2
+            url: "https://TODO/storage-node.qcow2"
+  template:
+    metadata:
+      labels:
+        pits.io/fault-domain: core
+        pits.io/tier: business
+        pits.io/node-role: storage
+    spec:
+      domain:
+        cpu:
+          sockets: 1
+          cores: 2
+          threads: 2
+          dedicatedCpuPlacement: true
+        memory:
+          # 直通 VM 的内存整块锁定，不能超卖。ZFS ARC 在 VM 内部限制。
+          guest: 16Gi
+        resources:
+          requests:
+            memory: 16Gi
+        devices:
+          disks:
+            - name: root
+              disk:
+                bus: virtio
+          hostDevices:
+            - name: data1
+              deviceName: pits.io/nvme-data
+            - name: data2
+              deviceName: pits.io/nvme-data
+            - name: data3
+              deviceName: pits.io/nvme-data
+          interfaces:
+            - name: core
+              bridge: {}
+      networks:
+        - name: core
+          multus:
+            networkName: pits-net/br-core
+      volumes:
+        - name: root
+          dataVolume:
+            name: storage-node-root

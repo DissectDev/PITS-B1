@@ -1,0 +1,66 @@
+# 监控与告警。分支集群用 Prometheus agent 模式通过 remote write 把数据推回这里。
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kube-prometheus-stack
+  namespace: pits-monitoring
+spec:
+  interval: 1h
+  timeout: 15m
+  chart:
+    spec:
+      chart: kube-prometheus-stack
+      version: 92.18.0
+      sourceRef:
+        kind: HelmRepository
+        name: prometheus-community
+        namespace: flux-system
+  install:
+    crds: CreateReplace
+  upgrade:
+    crds: CreateReplace
+  values:
+    # RKE2 的这几个组件只监听本机回环，抓不到，关掉以免误报。
+    kubeEtcd:
+      enabled: false
+    kubeControllerManager:
+      enabled: false
+    kubeScheduler:
+      enabled: false
+    kubeProxy:
+      enabled: false
+    prometheus:
+      prometheusSpec:
+        retention: 15d
+        enableRemoteWriteReceiver: true
+        ruleSelectorNilUsesHelmValues: false
+        serviceMonitorSelectorNilUsesHelmValues: false
+        podMonitorSelectorNilUsesHelmValues: false
+        resources:
+          requests:
+            memory: 1Gi
+          limits:
+            memory: 2Gi
+        storageSpec:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: local-path
+              accessModes: ["ReadWriteOnce"]
+              resources:
+                requests:
+                  storage: 20Gi
+    alertmanager:
+      alertmanagerSpec:
+        resources:
+          limits:
+            memory: 256Mi
+    grafana:
+      persistence:
+        enabled: true
+        storageClassName: local-path
+        size: 2Gi
+      ingress:
+        enabled: true
+        hosts:
+          - grafana.${PITS_DOMAIN}
+      # P4：Keycloak 就绪后在这里打开 generic_oauth（OIDC），保留本地 admin 作为应急入口。

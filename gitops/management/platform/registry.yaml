@@ -1,0 +1,54 @@
+# zot：镜像拉取缓存，主要给分支用。分支的 RKE2 registries.yaml 把 docker.io 等指向
+# http://<宿主管理口>:30500，并用 rewrite 加上来源前缀（见 gitops/zones/template）。
+#
+# 核心集群自己不走这个缓存：核心集群不能依赖跑在它上面的服务来拉镜像。
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: zot
+  namespace: pits-registry
+spec:
+  interval: 1h
+  chart:
+    spec:
+      chart: zot
+      version: ">=0.1.129 <0.2.0"
+      sourceRef:
+        kind: HelmRepository
+        name: zot
+        namespace: flux-system
+  values:
+    persistence: true
+    pvc:
+      create: true
+      storage: 50Gi
+      storageClassName: local-path
+    service:
+      type: NodePort
+      port: 5000
+      nodePort: 30500
+    mountConfig: true
+    configFiles:
+      # 按需同步：分支第一次拉某个镜像时 zot 去上游取，之后走本地。
+      # P4 时按 zot 文档核对 sync 的 destination 写法。
+      config.json: |-
+        {
+          "storage": { "rootDirectory": "/var/lib/registry", "gc": true },
+          "http": { "address": "0.0.0.0", "port": "5000" },
+          "log": { "level": "info" },
+          "extensions": {
+            "sync": {
+              "enable": true,
+              "registries": [
+                { "urls": ["https://registry-1.docker.io"], "onDemand": true, "tlsVerify": true,
+                  "content": [{ "prefix": "**", "destination": "/docker.io" }] },
+                { "urls": ["https://quay.io"], "onDemand": true, "tlsVerify": true,
+                  "content": [{ "prefix": "**", "destination": "/quay.io" }] },
+                { "urls": ["https://ghcr.io"], "onDemand": true, "tlsVerify": true,
+                  "content": [{ "prefix": "**", "destination": "/ghcr.io" }] },
+                { "urls": ["https://registry.k8s.io"], "onDemand": true, "tlsVerify": true,
+                  "content": [{ "prefix": "**", "destination": "/registry.k8s.io" }] }
+              ]
+            }
+          }
+        }

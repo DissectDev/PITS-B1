@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: pits-compliance
+resources:
+  # 区清单（唯一来源）生成的 ConfigMap；名字带哈希，清单一变 Steampipe 就会重建并更新连接。
+  - ../../zones/registry
+  - steampipe.yaml
+  - powerpipe.yaml
+configMapGenerator:
+  - name: pits-compliance-scripts
+    files:
+      - scripts/render-connections.sh
+      - scripts/run-benchmark.sh
+      - scripts/writeback.sh
+  - name: pits-powerpipe-mod
+    files:
+      - mod/mod.pp
+      - mod/core.pp

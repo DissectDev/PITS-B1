@@ -1,0 +1,64 @@
+# 集群基础控制器。版本固定；升级时改这里，在维护窗口里做，先打 etcd 快照。
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: cert-manager
+  namespace: cert-manager
+spec:
+  interval: 1h
+  chart:
+    spec:
+      chart: cert-manager
+      version: v1.21.3
+      sourceRef:
+        kind: HelmRepository
+        name: jetstack
+        namespace: flux-system
+  install:
+    crds: CreateReplace
+  upgrade:
+    crds: CreateReplace
+  values:
+    crds:
+      enabled: true
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kyverno
+  namespace: kyverno
+spec:
+  interval: 1h
+  chart:
+    spec:
+      chart: kyverno
+      version: 3.9.2 # Kyverno v1.19.2
+      sourceRef:
+        kind: HelmRepository
+        name: kyverno
+        namespace: flux-system
+  install:
+    crds: CreateReplace
+  upgrade:
+    crds: CreateReplace
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: cloudnative-pg
+  namespace: cnpg-system
+spec:
+  interval: 1h
+  chart:
+    spec:
+      chart: cloudnative-pg
+      version: 0.29.1 # CloudNativePG v1.30.x，给 Keycloak 提供 PostgreSQL
+      sourceRef:
+        kind: HelmRepository
+        name: cnpg
+        namespace: flux-system
+  install:
+    crds: CreateReplace
+  upgrade:
+    crds: CreateReplace
