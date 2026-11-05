@@ -1,0 +1,26 @@
+# X710 的 SR-IOV：device plugin 把宿主建好的 VF（绑在 vfio-pci 上）按用途分成几个资源池，
+# KubeVirt 按 NetworkAttachmentDefinition 上的资源名申请 VF；SR-IOV CNI 在 VM 启动前从 PF 上
+# 设置这块 VF 的 VLAN、MAC、trust、spoofchk（见 ../../config/networks.yaml）。
+#
+# 没有用 SR-IOV Network Operator：它会自己去宿主上建 VF、改驱动，和 NixOS 管宿主的方式冲突。
+# 这里只用它的两个组件，VF 由宿主的 pits-sriov 服务建（modules/sriov.nix）。
+#
+# 资源池（config.json，用 PF 的 PCI 地址和 VF 编号划分）：
+#   pits.io/sfp0_trunk    sfp0 的 vf0      网络节点的干道
+#   pits.io/sfp0_storage  sfp0 的 vf1      存储节点
+#   pits.io/sfp0_shared   sfp0 的 vf2–7    各实验区的控制面 VM
+#   pits.io/sfp1_trunk    sfp1 的 vf0      网络节点的第二条干道
+# 存储节点和网络节点各占一个池，控制面 VM 再多也挤不掉它们。sfp1 的 vf1–3 暂不分配。
+# 改宿主的 VF 数量（site/core.nix 的 sriov.pfs）时同步这里的编号范围。
+#
+# config.json 变了，生成的 ConfigMap 名字会带上新的哈希，device plugin 随之滚动重启。
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - device-plugin.yaml
+  - cni.yaml
+configMapGenerator:
+  - name: sriovdp-config
+    namespace: kube-system
+    files:
+      - config.json

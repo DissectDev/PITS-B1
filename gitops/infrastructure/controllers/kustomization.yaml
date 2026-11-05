@@ -6,3 +6,5 @@ resources:
   # 并核对 KubeVirt 支持的 K8s 版本（https://github.com/kubevirt/sig-release/blob/main/releases/k8s-support-matrix.md）。
   - kubevirt-operator-v1.9.1.yaml
   - cdi-operator-v1.66.1.yaml
+  # X710 的 SR-IOV device plugin 和 CNI，见 sriov/kustomization.yaml
+  - sriov

@@ -8,7 +8,7 @@ metadata:
 data:
   # 管理服务的域名后缀，例如 keycloak.<域名>。需要在局域网 DNS 里把这些名字指向宿主管理口。
   PITS_DOMAIN: "pits.home.arpa"
-  # 存储节点上的 S3（Garage，默认端口 3900）。存储节点在 br-core 上的地址见 docs/addressing.md。
+  # 存储节点上的 S3（Garage，默认端口 3900）。存储节点在核心网段上的地址见 docs/addressing.md。
   PITS_S3_STORAGE_URL: "http://10.88.0.10:3900"
   PITS_S3_STORAGE_BUCKET: "pits-backup"
   PITS_S3_STORAGE_REGION: "garage"

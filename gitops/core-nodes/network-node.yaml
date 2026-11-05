@@ -1,4 +1,6 @@
-# 网络节点（PITS Network）：直通 I226-LM 和 X710 的两个口，再用一块 virtio 网卡接 br-core。
+# 网络节点（PITS Network）：直通 I226-LM 做上行，从 X710 的两个口各拿一块干道 VF。
+# 干道 VF 不带端口 VLAN，网络节点在 sfp0 的干道上建 VLAN 10 子接口，做核心网段的网关（10.88.0.1）。
+# 它看不到、也改不了存储节点和控制面 VM 的 VF：那些 VF 的 VLAN 由宿主从 PF 上设置。
 # 内部用什么路由系统、怎么配置，由 PITS Network 的设计决定；这里只管资源、直通和启动。
 #
 # 系统盘必须能从镜像重建：配置放在 Git 里，系统盘丢了就重新导入镜像、重新下发配置。
@@ -35,7 +37,7 @@ spec:
     spec:
       domain:
         cpu:
-          # 2 个 P 核 × 2 线程。能否真的分到 P 核要在 P3 实测（见 docs/plan.md 风险表）。
+          # 2 个 P 核 × 2 线程。能否真的分到 P 核要在 P3 实测（见 README 开头链接的实施规划里的风险表）。
           sockets: 1
           cores: 2
           threads: 2
@@ -51,22 +53,24 @@ spec:
               disk:
                 bus: virtio
           hostDevices:
-            - name: uplink # I226-LM，建议接光猫做上行
+            - name: uplink # I226-LM，接光猫做上行
               deviceName: pits.io/i226-lm
-            - name: sfp1
-              deviceName: pits.io/x710
-            - name: sfp2
-              deviceName: pits.io/x710
           interfaces:
-            - name: core
-              bridge: {}
-              # 固定 MAC，网络节点在 br-core 上的地址是 10.88.0.1（docs/addressing.md）
+            - name: trunk0
+              sriov: {}
+              # 固定 MAC。VLAN 10 子接口沿用它，网络节点在核心网段上的地址是 10.88.0.1（docs/addressing.md）
               macAddress: "02:50:00:00:00:01"
+            - name: trunk1
+              sriov: {}
+              macAddress: "02:50:00:00:00:02"
       networks:
-        # 不接 Pod 网络：网络节点只通过直通网卡和 br-core 收发流量。
-        - name: core
+        # 不接 Pod 网络：网络节点只通过直通网卡和 VF 收发流量。
+        - name: trunk0
           multus:
-            networkName: pits-net/br-core
+            networkName: pits-net/sfp0-trunk
+        - name: trunk1
+          multus:
+            networkName: pits-net/sfp1-trunk
       volumes:
         - name: root
           dataVolume:

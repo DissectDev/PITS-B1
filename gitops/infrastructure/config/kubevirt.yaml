@@ -6,6 +6,9 @@
 #
 # 下面的 ID 已按 P0 盘点结果填写。四块盘型号各不相同，系统盘（Crucial P310，c0a9:5426）
 # 不在列表里；三块数据盘共用一个资源名，存储节点按数量申请。换盘时记得同步这里。
+#
+# X710 不在这里：它的两个口留在宿主上做 SR-IOV，VF（8086:154c）由 SR-IOV device plugin 分配
+# （controllers/sriov）。VF 不能同时写进这里，否则两个 device plugin 会把同一块 VF 分给两台 VM。
 ---
 apiVersion: kubevirt.io/v1
 kind: KubeVirt
@@ -24,8 +27,6 @@ spec:
       pciHostDevices:
         - pciVendorSelector: "8086:125B" # I226-LM（网络节点上行）
           resourceName: pits.io/i226-lm
-        - pciVendorSelector: "8086:1572" # X710 10G SFP+（网络节点）
-          resourceName: pits.io/x710
         - pciVendorSelector: "2646:2263" # Kingston A2000 1TB（存储节点）
           resourceName: pits.io/nvme-data
         - pciVendorSelector: "144D:A809" # Samsung 980 1TB（存储节点）

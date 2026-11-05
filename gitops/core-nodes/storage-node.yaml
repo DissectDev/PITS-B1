@@ -1,4 +1,5 @@
-# 存储节点（PITS Storage）：直通三块数据盘，用一块 virtio 网卡接 br-core。
+# 存储节点（PITS Storage）：直通三块数据盘，从 X710 的 sfp0 拿一块 VF 接核心网段（VLAN 10）。
+# 它和分支在同一个二层网段里直接通信，出这个网段的流量才经过网络节点。
 # 它同时是各分支集群的外部 LINSTOR controller（分支的 Piraeus 用 externalController 指向它）。
 # 内部设计（ZFS 池布局、LINSTOR、SMB/NFS/S3）由 PITS Storage 决定。
 #
@@ -61,13 +62,13 @@ spec:
               deviceName: pits.io/nvme-data
           interfaces:
             - name: core
-              bridge: {}
-              # 固定 MAC，存储节点在 br-core 上的地址是 10.88.0.10（docs/addressing.md）
+              sriov: {}
+              # 固定 MAC，存储节点在核心网段上的地址是 10.88.0.10（docs/addressing.md）
               macAddress: "02:50:00:00:00:10"
       networks:
         - name: core
           multus:
-            networkName: pits-net/br-core
+            networkName: pits-net/core-storage
       volumes:
         - name: root
           dataVolume:

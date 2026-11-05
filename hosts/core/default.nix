@@ -8,6 +8,7 @@
     ../../modules/base.nix
     ../../modules/network.nix
     ../../modules/vfio.nix
+    ../../modules/sriov.nix
     ../../modules/tailscale.nix
     ../../modules/ups.nix
     ../../modules/rke2.nix

@@ -75,6 +75,7 @@
     ethtool
     tcpdump
     util-linux
+    psmisc # fuser：脚本用它判断 vfio 设备有没有被 VM 占用
   ];
 
   # 机密文件（密码哈希、Tailscale auth key、S3 密钥）放这里，不进 Git、不进 Nix store。

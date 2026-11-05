@@ -65,7 +65,8 @@ cat <<'EOF'
 
 ==== 怎么填 site/core.nix ====
 - mgmt.pciAddress：driver=igc、接着光猫、有地址的那个口（I226-V）的 PCI 地址。
-- passthrough.networkNode：另一个 igc 口（I226-LM）和两个 i40e 口（X710）的 PCI 地址。
+- passthrough.networkNode：另一个 igc 口（I226-LM）的 PCI 地址。
+- sriov.pfs：两个 i40e 口（X710）的 PCI 地址。
 - passthrough.storageNode：三块数据盘的 PCI 地址。
 - systemDisk：剩下那块盘的 /dev/disk/by-id 路径。建议用最慢的 x2 位那块。
 - 关卡：每个要直通的设备所在的 IOMMU 分组里，不能有宿主还要用的设备

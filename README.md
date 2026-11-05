@@ -2,7 +2,7 @@
 
 PITS 核心机（MS-01）的基础设施代码，按[《PITS 核心机实施规划》](https://claude.ai/artifact/KVQQAv1pwzuTFeb2wTM5Bo)实现。一个仓库里有两部分：
 
-- **NixOS flake**：宿主（管理域），只管管理网，把数据盘和其余网卡直通给两台核心节点 VM。
+- **NixOS flake**：宿主（管理域），只在管理网上有地址。数据盘和 I226-LM 整个直通给两台核心节点 VM；X710 的两个口留在宿主上，切成 SR-IOV 的 VF 分给各台 VM。
 - **GitOps 树**：核心 RKE2 集群里的一切，由 Flux 从 `gitops/clusters/core` 开始部署。
 
 ## 架构一句话
@@ -14,15 +14,15 @@ PITS 核心机（MS-01）的基础设施代码，按[《PITS 核心机实施规�
 | 路径 | 内容 |
 | --- | --- |
 | `flake.nix`、`hosts/core/` | 核心机的 NixOS 配置入口、硬件和系统盘分区 |
-| `modules/` | 宿主模块：基础、网络（mgmt0 和 br-core）、VFIO 直通、Tailscale、UPS、RKE2 |
+| `modules/` | 宿主模块：基础、网络（mgmt0）、VFIO 直通、X710 的 SR-IOV、Tailscale、UPS、RKE2 |
 | `site/core.nix` | 宿主的站点参数，所有因机器而异的值只在这里填 |
 | `gitops/clusters/core/` | Flux 入口：外部来源、部署顺序、GitOps 侧的站点参数 |
-| `gitops/infrastructure/` | 命名空间、集群控制器（cert-manager、Kyverno、CNPG、KubeVirt、CDI）、KubeVirt 配置、br-core、内部 CA、镜像服务 |
+| `gitops/infrastructure/` | 命名空间、集群控制器（cert-manager、Kyverno、CNPG、KubeVirt、CDI、SR-IOV device plugin 和 CNI）、KubeVirt 配置、VM 用的 SR-IOV 网络、内部 CA、镜像服务 |
 | `gitops/policies/` | 故障域标签策略 |
 | `gitops/core-nodes/` | 网络节点和存储节点 VM |
 | `gitops/management/` | 管理服务：`platform`（监控、zot、Velero）、`services`（Keycloak、ManageIQ、告警）、`compliance`（Steampipe、Powerpipe） |
 | `gitops/zones/` | 区清单（唯一来源）、实验区控制面模板、各区目录 |
-| `scripts/` | P0 硬件盘点、P1 直通验收、新建实验区、注册区 provider |
+| `scripts/` | P0 硬件盘点、P1 直通验收和 SR-IOV 自检、新建实验区、注册区 provider |
 | `docs/` | 分阶段实施步骤、硬件盘点记录、地址规划、机密清单、合规检查说明 |
 
 ## 站点参数

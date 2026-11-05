@@ -5,6 +5,8 @@ let
   isPlaceholder = s: lib.hasInfix "TODO" s;
   pciAddr = a: builtins.match "[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]" a != null;
   allPassthrough = site.passthrough.networkNode ++ site.passthrough.storageNode;
+  pfAddrs = map (pf: pf.pciAddress) site.sriov.pfs;
+  pfNames = map (pf: pf.name) site.sriov.pfs;
 in
 {
   assertions = [
@@ -53,6 +55,30 @@ in
     {
       assertion = lib.length (lib.unique allPassthrough) == lib.length allPassthrough;
       message = "site: passthrough 里有重复的 PCI 地址。";
+    }
+    {
+      assertion = lib.all pciAddr pfAddrs;
+      message = "site: sriov.pfs 里有不是 PCI 地址的 pciAddress（格式应为 0000:03:00.0，小写）。";
+    }
+    {
+      assertion =
+        !(lib.elem site.mgmt.pciAddress pfAddrs) && lib.all (a: !(lib.elem a allPassthrough)) pfAddrs;
+      message = "site: sriov.pfs 里的口不能同时是管理口或整口直通的设备。";
+    }
+    {
+      assertion =
+        lib.length (lib.unique pfAddrs) == lib.length pfAddrs
+        && lib.length (lib.unique pfNames) == lib.length pfNames;
+      message = "site: sriov.pfs 里有重复的 PCI 地址或名字。";
+    }
+    {
+      # 名字要和 scripts/check-passthrough.sh 认的一致；也不能撞上 mgmt0。
+      assertion = lib.all (n: builtins.match "sfp[0-9]" n != null) pfNames;
+      message = "site: sriov.pfs 的 name 要写成 sfp0、sfp1 这样。";
+    }
+    {
+      assertion = lib.all (pf: builtins.isInt pf.numVfs && pf.numVfs >= 1 && pf.numVfs <= 64) site.sriov.pfs;
+      message = "site: sriov.pfs 的 numVfs 要在 1–64 之间。网卡实际支持多少块以 sysfs 的 sriov_totalvfs 为准，pits-sriov 启动时会再检查。";
     }
     {
       assertion = site.admin.sshKeys != [ ] && lib.all (k: !isPlaceholder k) site.admin.sshKeys;
