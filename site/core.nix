@@ -10,10 +10,11 @@
   # 宿主内核。7.3 是当前版本；NixOS 26.11 发布后换成它的 LTS 内核（例如 "linux_7_x"）。
   kernel = "linux_7_3";
 
-  # 管理口：2.5G 口 A（I226-V），接光猫。按永久 MAC 地址匹配，并改名为 mgmt0。
+  # 管理口：2.5G 口 A（I226-V，8086:125c），接光猫。按 PCI 地址匹配，并改名为 mgmt0。
   mgmt = {
-    mac = "TODO:aa:bb:cc:dd:ee:ff";
-    # 地址由上游光猫保证（建议在光猫上做 DHCP 保留）。改用静态地址时，把 dhcp 设为 false 并填下面三项。
+    pciAddress = "0000:58:00.0";
+    # 地址由上游光猫保证（P0 时 DHCP 拿到 192.168.71.35，建议在光猫上做 DHCP 保留）。
+    # 改用静态地址时，把 dhcp 设为 false 并填下面三项。
     dhcp = true;
     address = null; # 例如 "192.168.1.10/24"
     gateway = null; # 例如 "192.168.1.1"
@@ -21,27 +22,28 @@
   };
 
   # 系统盘（/dev/disk/by-id 下的名字）。disko 只会格式化这一块盘。
-  systemDisk = "/dev/disk/by-id/nvme-TODO";
+  # Crucial P310 1TB（c0a9:5426），0000:5a:00.0；P0 时它就是当前系统所在的盘。
+  systemDisk = "/dev/disk/by-id/nvme-CT1000P310SSD8_24514CD9A8E1";
 
   # 直通给 VM 的 PCI 设备，按 PCI 地址写（`lspci -D` 的第一列）。
   # 不要写系统盘和管理口；写错会让宿主失去它们。
   passthrough = {
     # 网络节点：I226-LM 和 X710 的两个口
     networkNode = [
-      "TODO-0000:00:00.0" # I226-LM
-      "TODO-0000:00:00.0" # X710 端口 1
-      "TODO-0000:00:00.1" # X710 端口 2
+      "0000:5b:00.0" # I226-LM（8086:125b），IOMMU 组 23
+      "0000:03:00.0" # X710 端口 1（8086:1572），IOMMU 组 18
+      "0000:03:00.1" # X710 端口 2（8086:1572），IOMMU 组 19
     ];
-    # 存储节点：三块数据盘
+    # 存储节点：三块数据盘，各自独占一个 IOMMU 组
     storageNode = [
-      "TODO-0000:00:00.0"
-      "TODO-0000:00:00.0"
-      "TODO-0000:00:00.0"
+      "0000:01:00.0" # Kingston A2000 1TB（2646:2263），IOMMU 组 16
+      "0000:02:00.0" # Samsung 980 1TB（144d:a809），IOMMU 组 17
+      "0000:59:00.0" # WD_BLACK SN770 2TB（15b7:5017），IOMMU 组 21
     ];
   };
 
   # 留给宿主（kubelet、containerd、系统服务）的 CPU，其余进入 kubelet 的分配池。
-  # 默认假设 P 核线程在前（cpu0–7）；用 `lscpu --extended` 核对后再定。
+  # P0 已核对：cpu0–7 是 4 个 P 核（4.5 GHz，每核两线程），cpu8–15 是 8 个 E 核（3.3 GHz）。
   cpu.reservedSystemCPUs = "14-15";
 
   admin = {

@@ -12,7 +12,7 @@
    nix-shell -p pciutils ethtool util-linux --run 'sudo bash scripts/p0-inventory.sh'
    ```
 
-4. 按输出填写 `site/core.nix`：系统盘、管理口 MAC、直通设备的 PCI 地址、`cpu.reservedSystemCPUs`。
+4. 按输出填写 `site/core.nix`：系统盘、管理口和直通设备的 PCI 地址、`cpu.reservedSystemCPUs`。结果记进 [hardware.md](hardware.md)。
 5. 用 `lspci -nn` 查数据盘的 vendor:device ID，填进 `gitops/infrastructure/config/kubevirt.yaml`。同时核对 I226-LM（`8086:125b`）和 X710（`8086:1572`）的 ID。
 6. 本地评估一次：`nix eval .#nixosConfigurations.core.config.system.build.toplevel.drvPath`。
 
@@ -41,6 +41,7 @@
    ```
 
    disko 只会格式化 `site.systemDisk`。三块数据盘不在 disko 配置里，不会被碰。
+   系统盘（Crucial P310）上现有的 NixOS 会被整盘清掉，需要保留的东西先拷走。
 3. 重启后执行：`sudo bash scripts/check-passthrough.sh`。
 
 **验收：**

@@ -23,13 +23,13 @@ PITS 核心机（MS-01）的基础设施代码，按[《PITS 核心机实施规�
 | `gitops/management/` | 管理服务：`platform`（监控、zot、Velero）、`services`（Keycloak、ManageIQ、启动镜像、告警）、`compliance`（Steampipe、Powerpipe） |
 | `gitops/zones/` | 区清单（唯一来源）、实验区控制面模板、各区目录 |
 | `scripts/` | P0 硬件盘点、P1 直通验收、新建实验区、注册区 provider |
-| `docs/` | 分阶段实施步骤、机密清单、合规检查说明 |
+| `docs/` | 分阶段实施步骤、硬件盘点记录、机密清单、合规检查说明 |
 
 ## 站点参数
 
 因环境而异的值集中在三处，填完才能部署：
 
-1. `site/core.nix`：系统盘、管理口 MAC、直通设备的 PCI 地址、SSH 公钥、CPU 划分、RKE2 版本、etcd 机外 S3。还有占位值时，评估会直接失败。
+1. `site/core.nix`：系统盘、管理口和直通设备的 PCI 地址、SSH 公钥、CPU 划分、RKE2 版本、etcd 机外 S3。还有占位值时，评估会直接失败。
 2. `gitops/clusters/core/site-vars.yaml`：域名后缀、存储节点和机外的 S3 地址。
 3. `gitops/infrastructure/config/kubevirt.yaml`：数据盘的 PCI vendor:device ID。
 

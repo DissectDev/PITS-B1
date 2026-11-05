@@ -9,9 +9,9 @@
   systemd.network = {
     enable = true;
 
-    # 按永久 MAC 匹配管理口并改名，避免网卡枚举顺序变化。
+    # 按 PCI 地址匹配管理口并改名，避免网卡枚举顺序变化。
     links."10-mgmt" = {
-      matchConfig.PermanentMACAddress = site.mgmt.mac;
+      matchConfig.Path = "pci-${site.mgmt.pciAddress}";
       linkConfig.Name = "mgmt0";
     };
 

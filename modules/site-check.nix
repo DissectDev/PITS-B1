@@ -13,8 +13,12 @@ in
       message = "site: systemDisk 还是占位值。先在核心机上跑 scripts/p0-inventory.sh，再填写 site/core.nix。";
     }
     {
-      assertion = !isPlaceholder site.mgmt.mac;
-      message = "site: mgmt.mac（管理口 I226-V 的 MAC）还是占位值。";
+      assertion = pciAddr site.mgmt.pciAddress;
+      message = "site: mgmt.pciAddress（管理口 I226-V 的 PCI 地址）格式不对，应为 0000:58:00.0 这样的小写形式。";
+    }
+    {
+      assertion = !(lib.elem site.mgmt.pciAddress allPassthrough);
+      message = "site: 管理口 ${site.mgmt.pciAddress} 出现在 passthrough 里，宿主会失去管理口。";
     }
     {
       assertion = site.mgmt.dhcp || (site.mgmt.address != null && site.mgmt.gateway != null);
