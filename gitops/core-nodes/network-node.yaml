@@ -24,7 +24,8 @@ spec:
               storage: 16Gi
         source:
           http:
-            url: "https://TODO/network-node.qcow2" # TODO：PITS Network 的系统镜像
+            # PITS Network 的系统镜像，P3 时上传到启动镜像服务（gitops/infrastructure/images）
+            url: "http://boot-images.pits-boot.svc/network-node.qcow2"
   template:
     metadata:
       labels:
@@ -59,6 +60,8 @@ spec:
           interfaces:
             - name: core
               bridge: {}
+              # 固定 MAC，网络节点在 br-core 上的地址是 10.88.0.1（docs/addressing.md）
+              macAddress: "02:50:00:00:00:01"
       networks:
         # 不接 Pod 网络：网络节点只通过直通网卡和 br-core 收发流量。
         - name: core

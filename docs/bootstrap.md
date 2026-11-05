@@ -12,7 +12,7 @@
    nix-shell -p pciutils ethtool util-linux --run 'sudo bash scripts/p0-inventory.sh'
    ```
 
-4. 按输出填写 `site/core.nix`：系统盘、管理口 MAC、直通设备的 PCI 地址、`cpu.reservedSystemCPUs`。
+4. 按输出填写 `site/core.nix`：系统盘、管理口和直通设备的 PCI 地址、`cpu.reservedSystemCPUs`。结果记进 [hardware.md](hardware.md)。
 5. 用 `lspci -nn` 查数据盘的 vendor:device ID，填进 `gitops/infrastructure/config/kubevirt.yaml`。同时核对 I226-LM（`8086:125b`）和 X710（`8086:1572`）的 ID。
 6. 本地评估一次：`nix eval .#nixosConfigurations.core.config.system.build.toplevel.drvPath`。
 
@@ -24,7 +24,52 @@
 
 ## P1 宿主
 
-1. 准备机密文件（见 [secrets.md](secrets.md)），放进一个临时目录：
+系统盘有两种来法，由 `site/core.nix` 里的 `systemDiskLayout` 决定：
+
+| 方式 | `systemDiskLayout` | 什么时候用 | 系统盘 |
+| --- | --- | --- | --- |
+| A：就地切换 | `"existing"`（当前设置） | 盘上已经装好 NixOS，现在就是这种情况 | 不清盘，按 UUID 沿用现有分区 |
+| B：重装 | `"disko"` | 系统盘坏了换新盘，或做“空盘重装”演练 | 整盘清空后按 `hosts/core/disko.nix` 重新分区 |
+
+### 方式 A：在机器上 nixos-rebuild
+
+1. 确认 `site/core.nix` 里的 `admin.user`（`libraskywalker`）和 `admin.sshKeys` 就是你现在登录用的账号和公钥。
+   配置里设了 `users.mutableUsers = false`，没在配置里声明的用户和密码都会被清掉，root 密码也一样。
+   在光猫上给网络节点上行口（I226-LM）预留 192.168.71.2（见 [addressing.md](addressing.md)）。P1 时这个地址上还没有设备，宿主只是先装好指向它的路由。
+2. 在核心机上放好密码哈希：
+
+   ```sh
+   sudo install -d -m 700 /var/lib/pits/secrets
+   nix-shell -p mkpasswd --run 'mkpasswd -m yescrypt' | sudo tee /var/lib/pits/secrets/admin.hash >/dev/null
+   sudo chmod 600 /var/lib/pits/secrets/admin.hash
+   ```
+
+3. 把仓库拉到核心机上，构建并设为下次启动：
+
+   ```sh
+   nix-shell -p git --run 'git clone https://github.com/DissectDev/PITS-B1.git' && cd PITS-B1
+   sudo nixos-rebuild boot --flake .#core \
+     --option extra-experimental-features 'nix-command flakes' \
+     --option substituters "https://mirrors.ustc.edu.cn/nix-channels/store https://cache.nixos.org"
+   ```
+
+   - **用 `boot` 而不是 `switch`。** 网络会从 NetworkManager 换成 networkd，网卡改名为 `mgmt0`，同时要做直通绑定、换内核。当场切换会断掉 SSH。
+   - **要带镜像源。** rebuild 时用的是当前系统的 nix.conf，新配置里的镜像要到切换之后才生效，所以要在命令里带上。
+   - **首次运行会生成 `flake.lock`。** 它会从 GitHub 拉 nixpkgs 和 disko 的源码。成功后把 `flake.lock` 提交回仓库。
+
+4. 手边准备好显示器和键盘，然后重启。起不来就在 systemd-boot 菜单里选上一代。
+5. Tailscale 的登录状态会保留，所以 `site.tailscale.authKeyFile` 设为 `null`。主机名和标签不会自动更新，要手动执行一次：
+
+   ```sh
+   sudo tailscale up --hostname=pits-core --accept-dns=false --advertise-tags=tag:pits-core
+   ```
+
+   使用这个标签前，tailnet 的 ACL 里要先给它配 `tagOwners`。
+
+### 方式 B：nixos-anywhere 重装
+
+1. 把 `systemDiskLayout` 改成 `"disko"`，`tailscale.authKeyFile` 改成 `"/var/lib/pits/secrets/tailscale-authkey"`。
+2. 准备机密文件，放进一个临时目录（见 [secrets.md](secrets.md)）：
 
    ```sh
    mkdir -p staging/var/lib/pits/secrets && chmod 700 staging/var/lib/pits/secrets
@@ -33,20 +78,22 @@
    chmod 600 staging/var/lib/pits/secrets/*
    ```
 
-2. 在安装盘上设好 root 的 SSH 登录，然后从另一台机器执行：
+3. 用安装盘启动核心机，设好 root 的 SSH 登录，然后从另一台机器执行：
 
    ```sh
    nix run github:nix-community/nixos-anywhere -- \
      --flake .#core --extra-files ./staging --target-host root@<安装盘的地址>
    ```
 
-   disko 只会格式化 `site.systemDisk`。三块数据盘不在 disko 配置里，不会被碰。
-3. 重启后执行：`sudo bash scripts/check-passthrough.sh`。
+   disko 只会格式化 `site.systemDisk`。三块数据盘不在 disko 配置里，不会被碰。系统盘上原有的内容会全部清掉。
 
-**验收：**
+### 验收
+
+重启后执行 `sudo bash scripts/check-passthrough.sh`，然后确认：
+
 - 直通设备都绑在 vfio-pci 上，宿主只看得到 mgmt0 和系统盘。
 - 断电重启后能通过 Tailscale 登录。
-- 在空盘上用 flake 重装，得到的系统完全相同。
+- “空盘重装得到完全相同的系统”要用方式 B 才能验证。走方式 A 的话，把这一项挪到 P5 的恢复演练里做。
 
 `pits-vfio-bind` 服务在绑定前会检查设备有没有被宿主使用，例如挂载着的盘或者管理口。如果地址写错，它会拒绝绑定并报错，不会把系统盘交出去。
 
@@ -65,12 +112,23 @@
 4. `flux get kustomizations` 应当看到：`namespaces`、`controllers`、`local-path`、`config`、`policies` 等就绪，`core-nodes` 和 `zones` 处于暂停状态。
 
 **验收：**
-- `sudo rke2 etcd-snapshot save` 生成的快照出现在机外 S3 里。
-- 在重装后的宿主上，用机外的快照（`rke2 server --cluster-reset --cluster-reset-restore-path=...`）恢复出原来的集群。
+- `sudo rke2 etcd-snapshot save` 能生成快照，`sudo rke2 etcd-snapshot list` 能看到它。
+- 用这份快照（`rke2 server --cluster-reset --cluster-reset-restore-path=...`）恢复出原来的集群。
+
+机外 S3 目前还没有，快照只留在本机。机外这一份在 P5 之前补上，补法见 `gitops/management/platform/backup.yaml` 末尾。补上之后，再用机外的快照做一次恢复。
 
 ## P3 虚拟化与两台核心节点
 
-1. 准备网络节点和存储节点的系统镜像（分别由 PITS Network 和 PITS Storage 的设计决定），放到任一 HTTP 地址，填进 `gitops/core-nodes/*.yaml`。
+1. 准备网络节点和存储节点的系统镜像（qcow2，分别由 PITS Network 和 PITS Storage 的设计决定），上传到镜像服务：
+
+   ```sh
+   pod=$(kubectl -n pits-boot get pod -l app=boot-images -o name)
+   kubectl -n pits-boot cp network-node.qcow2 ${pod#pod/}:/usr/share/nginx/html/network-node.qcow2
+   kubectl -n pits-boot cp storage-node.qcow2 ${pod#pod/}:/usr/share/nginx/html/storage-node.qcow2
+   ```
+
+   镜像服务的卷是只读挂载的，上传前把 `gitops/infrastructure/images/boot-images.yaml` 里的 `readOnly: true` 临时去掉，或者直接把文件复制到宿主上该卷对应的目录（`/var/lib/pits-local/` 下以 `pvc-` 开头、名字里带 `boot-images` 的目录）。
+   两台节点在 br-core 上的地址和 MAC 见 [addressing.md](addressing.md)，节点内部的网络按这张表配置。
 2. 把 `gitops/clusters/core/stack.yaml` 里 `core-nodes` 的 `suspend` 改成 `false`，然后提交。
 3. 检查：
    - `kubectl -n core-nodes get vm,vmi`：两台 VM 都在运行。

@@ -8,6 +8,9 @@ set -u
 
 hr() { printf '\n==== %s ====\n' "$1"; }
 
+# 设备当前协商到的 PCIe 速率和宽度（需要 root 才能读到）
+lnk() { lspci -vv -s "$1" 2>/dev/null | awk '/LnkSta:/ {sub(/^[ \t]*LnkSta:[ \t]*/, ""); sub(/,[ \t]*TrErr.*/, ""); print; exit}'; }
+
 hr "CPU 拓扑（P 核有两个线程且 MAXMHZ 更高；E 核每核一个线程）"
 lscpu --extended=CPU,CORE,MAXMHZ,ONLINE 2>/dev/null || lscpu --extended
 
@@ -32,7 +35,7 @@ for c in /sys/class/nvme/nvme*; do
   model=$(cat "$c/model" 2>/dev/null | xargs)
   serial=$(cat "$c/serial" 2>/dev/null | xargs)
   group=$(basename "$(readlink -f "$c/device/iommu_group")")
-  echo "$addr  iommu=$group  $model  SN=$serial"
+  echo "$addr  iommu=$group  $model  SN=$serial  链路: $(lnk "$addr")"
   for ns in "$c"/nvme*n*; do
     [ -e "$ns" ] || continue
     n=$(basename "$ns")
@@ -51,16 +54,17 @@ for n in /sys/class/net/*; do
   addr=$(basename "$(readlink -f "$n/device")")
   drv=$(basename "$(readlink -f "$n/device/driver")")
   perm=$(ethtool -P "$name" 2>/dev/null | awk '{print $NF}')
+  [ -n "$perm" ] || perm=$(cat "$n/address" 2>/dev/null)
   group=$(basename "$(readlink -f "$n/device/iommu_group")")
   link=$(cat "$n/operstate" 2>/dev/null)
   ip4=$(ip -4 -o addr show "$name" 2>/dev/null | awk '{print $4}' | tr '\n' ' ')
-  echo "$name  $addr  iommu=$group  driver=$drv  mac=${perm:-?}  link=$link  ${ip4}"
+  echo "$name  $addr  iommu=$group  driver=$drv  mac=${perm:-?}  link=$link  ${ip4}  链路: $(lnk "$addr")"
 done
 
 cat <<'EOF'
 
 ==== 怎么填 site/core.nix ====
-- mgmt.mac：driver=igc、接着光猫、有地址的那个口（I226-V）的永久 MAC。
+- mgmt.pciAddress：driver=igc、接着光猫、有地址的那个口（I226-V）的 PCI 地址。
 - passthrough.networkNode：另一个 igc 口（I226-LM）和两个 i40e 口（X710）的 PCI 地址。
 - passthrough.storageNode：三块数据盘的 PCI 地址。
 - systemDisk：剩下那块盘的 /dev/disk/by-id 路径。建议用最慢的 x2 位那块。

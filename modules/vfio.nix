@@ -58,10 +58,14 @@ in
     script = ''
       set -eu
       modprobe vfio-pci
-      mgmt_mac=${lib.escapeShellArg (lib.toLower site.mgmt.mac)}
+      mgmt_addr=${lib.escapeShellArg site.mgmt.pciAddress}
 
       for dev in ${lib.escapeShellArgs devices}; do
         p=/sys/bus/pci/devices/$dev
+        if [ "$dev" = "$mgmt_addr" ]; then
+          echo "pits-vfio: $dev 是管理口，拒绝直通" >&2
+          exit 1
+        fi
         if [ ! -e "$p" ]; then
           echo "pits-vfio: $dev 不存在，检查 site/core.nix 里的地址" >&2
           exit 1
@@ -81,8 +85,8 @@ in
             fi
           done
           for net in "$p"/net/*; do
-            [ -e "$net/address" ] || continue
-            if [ "$(cat "$net/address")" = "$mgmt_mac" ] || [ "$(basename "$net")" = "mgmt0" ]; then
+            [ -e "$net" ] || continue
+            if [ "$(basename "$net")" = "mgmt0" ]; then
               echo "pits-vfio: $dev 是管理口，拒绝直通" >&2
               exit 1
             fi

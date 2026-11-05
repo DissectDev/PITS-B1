@@ -9,9 +9,9 @@
   systemd.network = {
     enable = true;
 
-    # 按永久 MAC 匹配管理口并改名，避免网卡枚举顺序变化。
+    # 按 PCI 地址匹配管理口并改名，避免网卡枚举顺序变化。
     links."10-mgmt" = {
-      matchConfig.PermanentMACAddress = site.mgmt.mac;
+      matchConfig.Path = "pci-${site.mgmt.pciAddress}";
       linkConfig.Name = "mgmt0";
     };
 
@@ -28,6 +28,11 @@
       address = lib.optional (!site.mgmt.dhcp) site.mgmt.address;
       gateway = lib.optional (!site.mgmt.dhcp) site.mgmt.gateway;
       dns = site.mgmt.dns;
+      # 核心机内部网络和实验区经网络节点的上行口访问（见 site.coreNet）。
+      routes = map (prefix: {
+        Destination = prefix;
+        Gateway = site.coreNet.via;
+      }) site.coreNet.routedPrefixes;
       linkConfig.RequiredForOnline = "routable";
     };
 
@@ -55,7 +60,7 @@
       22
       443
       6443
-      30080 # 启动镜像（gitops/management/services/boot-images）
+      30080 # 启动镜像（gitops/infrastructure/images）
       30500 # zot 镜像缓存（gitops/management/platform/registry.yaml）
     ];
     # Pod 网络（Canal：cali* 和 flannel.1）和 tailnet 视为可信。

@@ -9,12 +9,34 @@ in
 {
   assertions = [
     {
+      assertion = lib.elem site.systemDiskLayout [
+        "existing"
+        "disko"
+      ];
+      message = "site: systemDiskLayout 只能是 \"existing\" 或 \"disko\"。";
+    }
+    {
+      assertion =
+        site.systemDiskLayout != "existing"
+        || (lib.hasPrefix "/dev/disk/by-uuid/" site.existingFileSystems.root
+          && lib.hasPrefix "/dev/disk/by-uuid/" site.existingFileSystems.boot);
+      message = "site: systemDiskLayout = \"existing\" 时，existingFileSystems.root 和 boot 要写成 /dev/disk/by-uuid/... 的形式。";
+    }
+    {
       assertion = !isPlaceholder site.systemDisk;
       message = "site: systemDisk 还是占位值。先在核心机上跑 scripts/p0-inventory.sh，再填写 site/core.nix。";
     }
     {
-      assertion = !isPlaceholder site.mgmt.mac;
-      message = "site: mgmt.mac（管理口 I226-V 的 MAC）还是占位值。";
+      assertion = pciAddr site.mgmt.pciAddress;
+      message = "site: mgmt.pciAddress（管理口 I226-V 的 PCI 地址）格式不对，应为 0000:58:00.0 这样的小写形式。";
+    }
+    {
+      assertion = !(lib.elem site.mgmt.pciAddress allPassthrough);
+      message = "site: 管理口 ${site.mgmt.pciAddress} 出现在 passthrough 里，宿主会失去管理口。";
+    }
+    {
+      assertion = builtins.match "[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+" site.coreNet.via != null;
+      message = "site: coreNet.via 应当是网络节点上行口的 IPv4 地址。";
     }
     {
       assertion = site.mgmt.dhcp || (site.mgmt.address != null && site.mgmt.gateway != null);

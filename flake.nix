@@ -36,9 +36,26 @@
         core = mkCore (import ./site/core.nix);
 
         # 用示例参数评估，只用于检查模块本身是否正确，不要部署。
+        # 两种系统盘方式各评估一份。
         ci-core = mkCore (import ./site/example.nix);
+        ci-core-disko =
+          let
+            example = import ./site/example.nix;
+          in
+          mkCore (
+            example
+            // {
+              systemDiskLayout = "disko";
+              tailscale = example.tailscale // {
+                authKeyFile = "/var/lib/pits/secrets/tailscale-authkey";
+              };
+            }
+          );
       };
 
-      checks.${system}.ci-core = self.nixosConfigurations.ci-core.config.system.build.toplevel;
+      checks.${system} = {
+        ci-core = self.nixosConfigurations.ci-core.config.system.build.toplevel;
+        ci-core-disko = self.nixosConfigurations.ci-core-disko.config.system.build.toplevel;
+      };
     };
 }

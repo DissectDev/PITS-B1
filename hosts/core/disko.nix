@@ -1,13 +1,13 @@
-# 系统盘分区。只描述系统盘：三块数据盘直通给存储节点，绝不能出现在这里，
-# 否则重装时会被格式化。
+# 系统盘分区（site.systemDiskLayout = "disko" 时生效，配合 nixos-anywhere 装机）。
+# 只描述系统盘：三块数据盘直通给存储节点，绝不能出现在这里，否则重装时会被格式化。
 #
 # 系统盘上的内容：
 #   /boot                ESP
 #   /                    NixOS
 #   /var/lib/rancher     RKE2 的 etcd 和容器镜像（在根分区里）
 #   /var/lib/pits-local  local-path 本地卷：管理服务的数据、各台 VM 的系统盘（在根分区里，需要备份）
-{ site, ... }:
-{
+{ lib, site, ... }:
+lib.mkIf (site.systemDiskLayout == "disko") {
   disko.devices.disk.system = {
     type = "disk";
     device = site.systemDisk;

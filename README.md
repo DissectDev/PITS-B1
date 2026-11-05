@@ -17,20 +17,20 @@ PITS 核心机（MS-01）的基础设施代码，按[《PITS 核心机实施规�
 | `modules/` | 宿主模块：基础、网络（mgmt0 和 br-core）、VFIO 直通、Tailscale、UPS、RKE2 |
 | `site/core.nix` | 宿主的站点参数，所有因机器而异的值只在这里填 |
 | `gitops/clusters/core/` | Flux 入口：外部来源、部署顺序、GitOps 侧的站点参数 |
-| `gitops/infrastructure/` | 命名空间、集群控制器（cert-manager、Kyverno、CNPG、KubeVirt、CDI）、KubeVirt 配置、br-core、内部 CA |
+| `gitops/infrastructure/` | 命名空间、集群控制器（cert-manager、Kyverno、CNPG、KubeVirt、CDI）、KubeVirt 配置、br-core、内部 CA、镜像服务 |
 | `gitops/policies/` | 故障域标签策略 |
 | `gitops/core-nodes/` | 网络节点和存储节点 VM |
-| `gitops/management/` | 管理服务：`platform`（监控、zot、Velero）、`services`（Keycloak、ManageIQ、启动镜像、告警）、`compliance`（Steampipe、Powerpipe） |
+| `gitops/management/` | 管理服务：`platform`（监控、zot、Velero）、`services`（Keycloak、ManageIQ、告警）、`compliance`（Steampipe、Powerpipe） |
 | `gitops/zones/` | 区清单（唯一来源）、实验区控制面模板、各区目录 |
 | `scripts/` | P0 硬件盘点、P1 直通验收、新建实验区、注册区 provider |
-| `docs/` | 分阶段实施步骤、机密清单、合规检查说明 |
+| `docs/` | 分阶段实施步骤、硬件盘点记录、地址规划、机密清单、合规检查说明 |
 
 ## 站点参数
 
 因环境而异的值集中在三处，填完才能部署：
 
-1. `site/core.nix`：系统盘、管理口 MAC、直通设备的 PCI 地址、SSH 公钥、CPU 划分、RKE2 版本、etcd 机外 S3。还有占位值时，评估会直接失败。
-2. `gitops/clusters/core/site-vars.yaml`：域名后缀、存储节点和机外的 S3 地址。
+1. `site/core.nix`：系统盘、管理口和直通设备的 PCI 地址、到核心机内部网络的路由、账号和 SSH 公钥、CPU 划分、RKE2 版本、etcd 机外 S3。如果出现占位值，评估会直接失败。
+2. `gitops/clusters/core/site-vars.yaml`：域名后缀、存储节点的 S3 地址。
 3. `gitops/infrastructure/config/kubevirt.yaml`：数据盘的 PCI vendor:device ID。
 
 机密（密码、token、S3 密钥）一律不进 Git，清单见 [docs/secrets.md](docs/secrets.md)。
@@ -40,8 +40,8 @@ PITS 核心机（MS-01）的基础设施代码，按[《PITS 核心机实施规�
 | 阶段 | 做什么 | 相关路径 |
 | --- | --- | --- |
 | P0 准备（关卡） | 盘点硬件、检查 IOMMU 分组、填站点参数 | `scripts/p0-inventory.sh`、`site/core.nix` |
-| P1 宿主 | nixos-anywhere 安装、直通验收 | `hosts/core/`、`modules/`、`scripts/check-passthrough.sh` |
-| P2 核心集群 | RKE2 起来后 `flux bootstrap`，etcd 快照推到机外 | `modules/rke2.nix`、`gitops/clusters/core/` |
+| P1 宿主 | 就地 `nixos-rebuild` 或 nixos-anywhere 重装、直通验收 | `hosts/core/`、`modules/`、`scripts/check-passthrough.sh` |
+| P2 核心集群 | RKE2 起来后 `flux bootstrap`，etcd 快照与恢复（机外 S3 待补） | `modules/rke2.nix`、`gitops/clusters/core/` |
 | P3 虚拟化与核心节点 | 填镜像地址和数据盘 ID，打开 `core-nodes` | `gitops/infrastructure/config/`、`gitops/core-nodes/` |
 | P4 管理与治理（关卡） | 验证 ManageIQ 能否管 RKE2 上的 KubeVirt；合规基准 | `gitops/management/` |
 | P5 核心节点内部与备份 | 两台节点按 PITS Network / Storage 配置；Velero 两处备份；恢复演练 | `gitops/management/platform/backup.yaml` |

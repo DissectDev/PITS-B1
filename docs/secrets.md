@@ -4,15 +4,15 @@
 
 | 机密 | 放在哪 | 什么时候建 | 用途 |
 | --- | --- | --- | --- |
-| 管理员密码哈希 | 宿主 `/var/lib/pits/secrets/admin.hash` | P1 装机时随 `--extra-files` 放入 | 控制台登录、sudo。生成：`mkpasswd -m yescrypt` |
-| Tailscale auth key | 宿主 `/var/lib/pits/secrets/tailscale-authkey` | P1 | 一次性、带 `tag:pits-core`、短有效期 |
+| 管理员密码哈希 | 宿主 `/var/lib/pits/secrets/admin.hash` | P1：就地 rebuild 前手动放好；重装时随 `--extra-files` 放入 | 控制台登录、sudo。生成：`mkpasswd -m yescrypt` |
+| Tailscale auth key | 宿主 `/var/lib/pits/secrets/tailscale-authkey` | 只在用 nixos-anywhere 重装时需要 | 一次性、带 `tag:pits-core`、短有效期。就地 rebuild 时沿用已有的登录状态 |
 | NUT 密码 | 宿主 `/var/lib/pits/secrets/nut-upsmon` | 有 UPS 时 | upsmon 连 upsd |
-| etcd 机外 S3 密钥 | 宿主 `/etc/rancher/rke2/config.yaml.d/90-secrets.yaml` | P2 | 见下方示例 |
+| etcd 机外 S3 密钥 | 宿主 `/etc/rancher/rke2/config.yaml.d/90-secrets.yaml` | 配置机外 S3 时（目前未配置） | 见下方示例 |
 | Steampipe 数据库密码 | Secret `pits-compliance/steampipe-db`（键 `password`） | P4 | Steampipe 服务和 Powerpipe |
 | ManageIQ API 账号 | Secret `pits-compliance/pits-miq-api`（键 `user`、`password`） | P4 打开写回时 | 合规结果写回 ManageIQ 标签，只给打标签的权限 |
 | ManageIQ OIDC 客户端 | Secret `manageiq/manageiq-oidc`（键 `CLIENT_ID`、`CLIENT_SECRET`） | P4 切到 Keycloak 时 | ManageIQ 统一登录 |
 | Velero 存储节点 S3 | Secret `velero/velero-s3-storage`（键 `cloud`） | P5 | 备份到存储节点 |
-| Velero 机外 S3 | Secret `velero/velero-s3-offsite`（键 `cloud`） | P5 | 备份到机外 |
+| Velero 机外 S3 | Secret `velero/velero-s3-offsite`（键 `cloud`） | 配置机外 S3 时（目前未配置） | 备份到机外 |
 | 实验区控制面 cloud-init | Secret `zones/zone-<区名>-cp-cloudinit`（键 `userdata`） | P6 每建一个区 | 含该区的 rke2 token |
 | 实验区只读 kubeconfig | Secret `pits-compliance/steampipe-zone-kubeconfigs`（每区一个键） | P6 | Steampipe 的区连接，由 `scripts/register-zone-provider.sh` 写入 |
 
