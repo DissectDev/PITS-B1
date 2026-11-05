@@ -1,6 +1,6 @@
 # 分阶段实施步骤
 
-每个阶段验收通过后再进入下一个。P0 和 P4 是关卡：P0 决定直通方案能否成立，P4 决定申领用哪种做法。P1 的 SR-IOV 自检也是关卡：它决定 X710 能不能按宽松模式切给各台 VM。
+每个阶段验收通过后再进入下一个，例外是 P3 和 P4：两者互不依赖，P4 可以先做，不用等两台核心节点的镜像。P0 和 P4 是关卡：P0 决定直通方案能否成立，P4 决定申领用哪种做法。P1 的 SR-IOV 自检也是关卡：它决定 X710 能不能按宽松模式切给各台 VM。合规检查（Steampipe、Powerpipe）后置，放在本文末尾。
 
 ## P0 准备（关卡）
 
@@ -198,9 +198,11 @@ sudo bash scripts/sriov-selftest.sh sfp0     # 拔掉 sfp0 的光纤再跑一次
 
 - 停掉代理（`sudo systemctl stop mihomo`）后重启 rke2-server，集群照样起来：镜像已经在本地，不再需要外网。验完再 `sudo systemctl start mihomo`。
 
-机外 S3 目前还没有，快照只留在本机。机外这一份在 P5 之前补上，补法见 `gitops/management/platform/backup.yaml` 末尾。补上之后，再用机外的快照做一次恢复。
+机外 S3 目前还没有，快照只留在本机。机外这一份在 P5 之前补上，补法见 `gitops/management/backup/backup.yaml` 末尾。补上之后，再用机外的快照做一次恢复。
 
 ## P3 虚拟化与两台核心节点
+
+P3 和 P4 互不依赖。两台节点的镜像还没准备好时，可以先做 P4。
 
 1. 准备网络节点和存储节点的系统镜像（qcow2，分别由 PITS Network 和 PITS Storage 的设计决定），上传到镜像服务：
 
@@ -232,36 +234,32 @@ sudo bash scripts/sriov-selftest.sh sfp0     # 拔掉 sfp0 的光纤再跑一次
 - 宿主重启后，两台 VM 自动起来，直通设备都在。
 - `virtctl -n core-nodes stop network-node` 之后，宿主的管理和核心集群都不受影响；分支和存储节点之间照样互通（同一网段，不经过网络节点），只是出不了这个网段。
 - 在网络节点里改干道 VF 的 VLAN 或 MAC 设置，存储节点那块 VF 不受影响（`ip link show sfp0` 里 vf1 不变）。
+- P4 已经完成的话，ManageIQ 的台账里能看到这两台节点。
 
 ## P4 管理与治理（关卡）
 
-先把 `gitops/clusters/core/stack.yaml` 里 `management-platform`、`management`、`compliance` 的 `suspend` 改成 `false`，提交后由 Flux 部署。
+P4 不依赖 P3。ManageIQ 负责申领（profile、provision），关卡验证的是它能不能在 RKE2 上管 KubeVirt，用一台测试 VM 就能验证，不用等两台核心节点。合规检查后置，见本文末尾。
 
-1. 创建 Steampipe 的数据库密码：
+先把 `gitops/clusters/core/stack.yaml` 里 `management-platform`、`management` 的 `suspend` 改成 `false`，提交后由 Flux 部署监控、zot、Keycloak 和 ManageIQ。
 
-   ```sh
-   kubectl -n pits-compliance create secret generic steampipe-db \
-     --from-literal=password=$(openssl rand -hex 16)
-   ```
-
-2. 在局域网 DNS 里把 `*.<域名>` 指向宿主管理口。域名在 `gitops/clusters/core/site-vars.yaml` 里设置。
-3. 等 `management-platform`、`management`、`compliance` 都就绪后，登录 ManageIQ（`https://manageiq.<域名>`），立即修改默认管理员密码。
-4. **关卡验证：** 把核心集群加为 provider，选 Kubernetes 并带上 KubeVirt 端点。PoC 阶段可以用一个 cluster-admin 的 ServiceAccount token。然后按顺序走一遍：从模板创建 VM、审批、配额、退役。
-5. 核对 README 里列出的、需要在 P4 确认的几处（镜像地址、Steampipe 自省表等）。
+1. 在局域网 DNS 里把 `*.<域名>` 指向宿主管理口。域名在 `gitops/clusters/core/site-vars.yaml` 里设置（现在是 `pits.home.arpa`）。光猫不支持泛域名解析的话，先在电脑的 hosts 文件里加两行，把 `manageiq.pits.home.arpa` 和 `keycloak.pits.home.arpa` 指向 192.168.71.35。
+2. 等 `management-platform`、`management` 都就绪后，登录 ManageIQ（`https://manageiq.<域名>`），立即修改默认管理员密码。
+3. **关卡验证：** 把核心集群加为 provider，选 Kubernetes 并带上 KubeVirt 端点。PoC 阶段可以用一个 cluster-admin 的 ServiceAccount token。然后按顺序走一遍：从模板创建 VM、审批、配额、退役。
+4. 核对 README 里列出的、需要在 P4 确认的几处（ManageIQ operator 镜像、zot 的同步写法等）。
 
 **验收（关卡）：**
-- ManageIQ 能在 RKE2 上创建并回收 KubeVirt VM，并把两台核心节点记进台账。
-- Powerpipe 基准能跑通。
+- ManageIQ 能在 RKE2 上创建并回收 KubeVirt VM。
 
 不通过就启用退路：申请改成向本仓库提 PR，PR 本身就是台账和审批记录，由 Flux 执行。ManageIQ 可以只保留台账，或者撤掉。
 
-通过后，按 [compliance.md](compliance.md) 打开合规结果写回，并把 ManageIQ 切到 Keycloak 登录（见 `gitops/management/services/manageiq/manageiq.yaml` 里的注释）。
+通过后，把 ManageIQ 切到 Keycloak 登录（见 `gitops/management/services/manageiq/manageiq.yaml` 里的注释）。
 
 ## P5 核心节点内部与备份
 
 1. 按 PITS Network 和 PITS Storage 的设计，配置两台节点的内部。
 2. 在 `site-vars.yaml` 里填好两处 S3 的地址，并创建 Velero 的两个 Secret（见 [secrets.md](secrets.md)）。
-3. `velero backup-location get`：两个位置都应当是 Available。
+3. 把 `stack.yaml` 里 `backup` 的 `suspend` 改成 `false`，提交后由 Flux 部署 Velero。
+4. `velero backup-location get`：两个位置都应当是 Available。
 
 **验收（做两次恢复演练）：**
 - 删掉 Keycloak 的数据库卷，用 `velero restore create --from-backup <备份名>` 恢复。
@@ -288,3 +286,21 @@ sudo bash scripts/sriov-selftest.sh sfp0     # 拔掉 sfp0 的光纤再跑一次
 - 在 ManageIQ 里给这个区申请一个 VM 成功。
 - 合规基准里 `zone_connections_match_registry` 为 ok。
 - 核心集群除了多出一台控制面 VM，没有别的变化。
+
+## 合规检查（后置）
+
+Steampipe 和 Powerpipe 在 P3 之后再打开。最好先定好 PITS 的系统级指标（实施规划里的待定项），这样检查不只是看配置有没有照声明来，还能看出哪个子系统在牺牲整体。P6 的一项验收（`zone_connections_match_registry`）要用到它，所以要在 P6 之前打开。
+
+1. 创建 Steampipe 的数据库密码：
+
+   ```sh
+   sudo kubectl -n pits-compliance create secret generic steampipe-db \
+     --from-literal=password=$(openssl rand -hex 16)
+   ```
+
+2. 把 `stack.yaml` 里 `compliance` 的 `suspend` 改成 `false`，提交。
+3. 核对 README 里列出的 Steampipe、Powerpipe 镜像地址和自省表的名字。
+4. P4 关卡通过的话，按 [compliance.md](compliance.md) 打开合规结果写回 ManageIQ。
+
+**验收：**
+- Powerpipe 基准能跑通，每项检查都有结果。

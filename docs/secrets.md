@@ -9,8 +9,8 @@
 | 代理订阅配置 | 宿主 `/var/lib/pits/secrets/mihomo.yaml` | P2 | mihomo 的配置（Clash/mihomo 格式），含代理节点的凭据。服务商给的完整配置可以直接放；只有订阅链接时，用下方的最小配置 |
 | NUT 密码 | 宿主 `/var/lib/pits/secrets/nut-upsmon` | 有 UPS 时 | upsmon 连 upsd |
 | etcd 机外 S3 密钥 | 宿主 `/etc/rancher/rke2/config.yaml.d/90-secrets.yaml` | 配置机外 S3 时（目前未配置） | 见下方示例 |
-| Steampipe 数据库密码 | Secret `pits-compliance/steampipe-db`（键 `password`） | P4 | Steampipe 服务和 Powerpipe |
-| ManageIQ API 账号 | Secret `pits-compliance/pits-miq-api`（键 `user`、`password`） | P4 打开写回时 | 合规结果写回 ManageIQ 标签，只给打标签的权限 |
+| Steampipe 数据库密码 | Secret `pits-compliance/steampipe-db`（键 `password`） | 打开合规检查时（后置） | Steampipe 服务和 Powerpipe |
+| ManageIQ API 账号 | Secret `pits-compliance/pits-miq-api`（键 `user`、`password`） | 打开写回时 | 合规结果写回 ManageIQ 标签，只给打标签的权限 |
 | ManageIQ OIDC 客户端 | Secret `manageiq/manageiq-oidc`（键 `CLIENT_ID`、`CLIENT_SECRET`） | P4 切到 Keycloak 时 | ManageIQ 统一登录 |
 | Velero 存储节点 S3 | Secret `velero/velero-s3-storage`（键 `cloud`） | P5 | 备份到存储节点 |
 | Velero 机外 S3 | Secret `velero/velero-s3-offsite`（键 `cloud`） | 配置机外 S3 时（目前未配置） | 备份到机外 |
