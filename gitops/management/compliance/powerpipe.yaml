@@ -3,7 +3,7 @@
 # 定时任务每 2 小时跑一次基准：
 #   1. 运行基准，结果写成 JSON；
 #   2. 打开写回（MIQ_WRITEBACK=true）后，把不合规的 VM 在 ManageIQ 里打上 pits_compliance/noncompliant 标签，
-#      合规的去掉该标签。写回在 P4 关卡通过后再打开，见 docs/compliance.md。
+#      合规的去掉该标签。写回在 P3 关卡通过后再打开，见 docs/compliance.md。
 # 任务是否按时成功由 Prometheus 告警（gitops/management/services/alerts）盯着。
 ---
 apiVersion: apps/v1
@@ -30,7 +30,7 @@ spec:
             - { name: mod, mountPath: /mod }
       containers:
         - name: powerpipe
-          # P4 时核对镜像地址和 tag。
+          # P3 时核对镜像地址和 tag。
           image: ghcr.io/turbot/powerpipe:1.5.7
           workingDir: /mod
           args:

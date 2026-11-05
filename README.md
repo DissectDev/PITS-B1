@@ -20,7 +20,7 @@ PITS 核心机（MS-01）的基础设施代码，按[《PITS 核心机实施规�
 | `gitops/infrastructure/` | 命名空间、集群控制器（cert-manager、Kyverno、CNPG、KubeVirt、CDI、SR-IOV device plugin 和 CNI）、KubeVirt 配置、VM 用的 SR-IOV 网络、内部 CA、镜像服务 |
 | `gitops/policies/` | 故障域标签策略 |
 | `gitops/core-nodes/` | 网络节点和存储节点 VM |
-| `gitops/management/` | 管理服务：`platform`（监控、zot、Velero）、`services`（Keycloak、ManageIQ、告警）、`compliance`（Steampipe、Powerpipe） |
+| `gitops/management/` | 管理服务：`platform`（监控、zot）、`services`（Keycloak、ManageIQ、告警）、`backup`（Velero）、`compliance`（Steampipe、Powerpipe）、`manageiq-operator` |
 | `gitops/zones/` | 区清单（唯一来源）、实验区控制面模板、各区目录 |
 | `scripts/` | P0 硬件盘点、P1 直通验收和 SR-IOV 自检、新建实验区、注册区 provider |
 | `docs/` | 分阶段实施步骤、硬件盘点记录、地址规划、机密清单、合规检查说明 |
@@ -40,12 +40,12 @@ PITS 核心机（MS-01）的基础设施代码，按[《PITS 核心机实施规�
 | 阶段 | 做什么 | 相关路径 |
 | --- | --- | --- |
 | P0 准备（关卡） | 盘点硬件、检查 IOMMU 分组、填站点参数 | `scripts/p0-inventory.sh`、`site/core.nix` |
-| P1 宿主 | 就地 `nixos-rebuild` 或 nixos-anywhere 重装、直通验收 | `hosts/core/`、`modules/`、`scripts/check-passthrough.sh` |
-| P2 核心集群 | RKE2 起来后 `flux bootstrap`，etcd 快照与恢复（机外 S3 待补） | `modules/rke2.nix`、`gitops/clusters/core/` |
-| P3 虚拟化与核心节点 | 填镜像地址和数据盘 ID，打开 `core-nodes` | `gitops/infrastructure/config/`、`gitops/core-nodes/` |
-| P4 管理与治理（关卡） | 验证 ManageIQ 能否管 RKE2 上的 KubeVirt；合规基准 | `gitops/management/` |
-| P5 核心节点内部与备份 | 两台节点按 PITS Network / Storage 配置；Velero 两处备份；恢复演练 | `gitops/management/platform/backup.yaml` |
-| P6 分支支撑 | 新建实验区、注册 provider、分支网络启动 | `gitops/zones/`、`scripts/new-zone.sh` |
+| P1 宿主 | 就地 `nixos-rebuild` 或 nixos-anywhere 重装、直通和 SR-IOV 验收 | `hosts/core/`、`modules/`、`scripts/check-passthrough.sh`、`scripts/sriov-selftest.sh` |
+| P2 核心集群 | 宿主代理、RKE2、手动应用一次 Flux 清单，etcd 快照与恢复（机外 S3 待补） | `modules/proxy.nix`、`modules/rke2.nix`、`gitops/clusters/core/` |
+| P3 管理与治理（关卡） | 监控、zot、Keycloak、ManageIQ；验证 ManageIQ 能否管 RKE2 上的 KubeVirt | `gitops/management/platform/`、`gitops/management/services/` |
+| P4 核心节点 | 网络节点和存储节点 VM 起来，内部按 PITS Network / Storage 配置；Velero 两处备份；恢复演练 | `gitops/core-nodes/`、`gitops/infrastructure/config/`、`gitops/management/backup/` |
+| 合规检查（后置） | P4 之后、P5 之前打开 Steampipe 和 Powerpipe；最好先定好系统级指标 | `gitops/management/compliance/` |
+| P5 分支支撑 | 新建实验区、注册 provider、分支网络启动 | `gitops/zones/`、`scripts/new-zone.sh` |
 
 每一步的命令和验收标准见 [docs/bootstrap.md](docs/bootstrap.md)。
 
@@ -63,9 +63,8 @@ nix eval .#nixosConfigurations.ci-core.config.system.build.toplevel.drvPath
 
 下面这些是按文档写的，需要在对应阶段实测：
 
-- **P4：** ManageIQ 在原生 K8s 上接管 KubeVirt 的方式。见 `scripts/register-zone-provider.sh`，它正是关卡要验证的那一步。
-- **P4：** Steampipe 和 Powerpipe 的镜像地址，以及 Steampipe 自省表的名字（`steampipe_internal.steampipe_connection`）。
-- **P4：** ManageIQ operator 的镜像 tag `spassky-1`。
-- **P4：** zot 按需同步的 `destination` 写法。
-- **P3：** 两台核心节点 VM 能否真的分到 P 核（CPU Manager 不区分 P 核和 E 核）。
-- **P3：** AMT 在 I226-LM 直通后是否可用。
+- **P3：** ManageIQ 在原生 K8s 上接管 KubeVirt 的方式。见 `scripts/register-zone-provider.sh`，它正是关卡要验证的那一步。
+- **合规检查（后置）：** Steampipe 和 Powerpipe 的镜像地址，以及 Steampipe 自省表的名字（`steampipe_internal.steampipe_connection`）。
+- **P3：** zot 按需同步的 `destination` 写法。
+- **P4：** 两台核心节点 VM 能否真的分到 P 核（CPU Manager 不区分 P 核和 E 核）。
+- **P4：** AMT 在 I226-LM 直通后是否可用。

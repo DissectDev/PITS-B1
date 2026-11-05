@@ -26,7 +26,7 @@ spec:
               storage: 20Gi
         source:
           http:
-            # 控制面镜像由本仓库的 flake 构建（P6 的第一项工作），上传到启动镜像服务
+            # 控制面镜像由本仓库的 flake 构建（P5 的第一项工作），上传到启动镜像服务
             url: "http://boot-images.pits-boot.svc/zone-cp.qcow2"
   template:
     metadata:

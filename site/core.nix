@@ -139,7 +139,7 @@
     airgapImages = true;
     # 额外的证书 SAN，例如 Tailscale 的 MagicDNS 名字
     tlsSans = [ ];
-    # etcd 快照推到机外 S3。目前还没有机外 S3，先关着，快照只留在本机；P5 前补上。
+    # etcd 快照推到机外 S3。目前还没有机外 S3，先关着，快照只留在本机；P4 前补上。
     # 访问密钥不写在这里，见 docs/secrets.md。
     etcdS3 = {
       enable = false;

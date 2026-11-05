@@ -6,7 +6,7 @@
 #   MIQ_URL=https://manageiq.<域名> MIQ_USER=admin MIQ_PASSWORD=... \
 #     scripts/register-zone-provider.sh <区名> <控制面地址> <token 文件> [只读 kubeconfig 文件]
 #
-# 注意：第 1 步正是 P4 关卡要验证的内容。ManageIQ 能否在原生 K8s 上接管 KubeVirt 还没有确认，
+# 注意：第 1 步正是 P3 关卡要验证的内容。ManageIQ 能否在原生 K8s 上接管 KubeVirt 还没有确认，
 # 下面的请求体按 ManageIQ REST API 的 provider 格式写，关卡验证时以实际返回为准再调整。
 set -euo pipefail
 
