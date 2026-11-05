@@ -3,7 +3,6 @@
 {
   imports = [
     ./hardware.nix
-    ./disko.nix
     ./filesystems.nix
     ../../modules/site-check.nix
     ../../modules/base.nix

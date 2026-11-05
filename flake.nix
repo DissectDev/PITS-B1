@@ -2,9 +2,11 @@
   description = "PITS-B1 核心机：NixOS 宿主（管理域）与核心 RKE2 集群";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    # nixpkgs 从清华 TUNA 的 git 镜像取，国内拉取快；flake.lock 锁定的 rev 和 GitHub 上一致。
+    nixpkgs.url = "git+https://mirrors.tuna.tsinghua.edu.cn/git/nixpkgs.git?ref=nixos-26.05&shallow=1";
+    # disko 只在 systemDiskLayout = "disko"（重装）时用到，就地 rebuild 时不会下载它。
     disko = {
-      url = "github:nix-community/disko/v1.13.0";
+      url = "git+https://github.com/nix-community/disko?ref=refs/tags/v1.13.0&shallow=1";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -25,8 +27,12 @@
         nixpkgs.lib.nixosSystem {
           specialArgs = { inherit site; };
           modules = [
-            disko.nixosModules.disko
             ./hosts/core
+          ]
+          # 只有重装时才引入 disko，这样就地 rebuild 不需要访问 GitHub。
+          ++ nixpkgs.lib.optionals (site.systemDiskLayout == "disko") [
+            disko.nixosModules.disko
+            ./hosts/core/disko.nix
           ];
         };
     in
