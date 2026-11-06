@@ -80,6 +80,7 @@
     ethtool
     tcpdump
     util-linux
+    k9s
     psmisc # fuser：脚本用它判断 vfio 设备有没有被 VM 占用
   ];
 
