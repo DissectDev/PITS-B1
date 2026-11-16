@@ -26,7 +26,7 @@ spec:
               storage: 16Gi
         source:
           http:
-            # PITS Network 的系统镜像，P3 时上传到启动镜像服务（gitops/infrastructure/images）
+            # PITS Network 的系统镜像，P4 时上传到启动镜像服务（gitops/infrastructure/images）
             url: "http://boot-images.pits-boot.svc/network-node.qcow2"
   template:
     metadata:
@@ -37,7 +37,7 @@ spec:
     spec:
       domain:
         cpu:
-          # 2 个 P 核 × 2 线程。能否真的分到 P 核要在 P3 实测（见 README 开头链接的实施规划里的风险表）。
+          # 2 个 P 核 × 2 线程。能否真的分到 P 核要在 P4 实测（见 README 开头链接的实施规划里的风险表）。
           sockets: 1
           cores: 2
           threads: 2

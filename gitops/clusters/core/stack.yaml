@@ -1,14 +1,20 @@
 # 核心集群的部署顺序。每一层只依赖它前面的层。后面几段默认暂停，到对应阶段再打开
-# （把 suspend 改成 false）：core-nodes 在 P3，management-platform、management、compliance 在 P4，
-# zones 在 P6。P2 只部署到 policies 为止。
+# （把 suspend 改成 false）：
+#   management-platform、management   P3
+#   core-nodes、backup                 P4（backup 要存储节点上的 S3）
+#   compliance                        后置：P4 之后、P5 之前，最好先定好系统级指标
+#   zones                             P5
+# P2 只部署到 policies 为止。
 #
 #   namespaces → controllers → config ─┬→ policies
 #                local-path ───────────┤
 #                keycloak-operator ────┤
 #                manageiq-operator ────┤
-#                                      ├→ core-nodes（P3）
-#                                      ├→ management-platform → management、compliance（P4–P5）
-#                                      └→ zones（P6）
+#                                      ├→ core-nodes（P4）
+#                                      ├→ management-platform ─┬→ management（P3）
+#                                      │                       └→ compliance（后置）
+#                                      ├→ backup（P4）
+#                                      └→ zones（P5）
 ---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
@@ -148,7 +154,7 @@ metadata:
   name: core-nodes
   namespace: flux-system
 spec:
-  # P3：在 gitops/core-nodes 和 gitops/infrastructure/config/kubevirt.yaml 里填好
+  # P4：在 gitops/core-nodes 和 gitops/infrastructure/config/kubevirt.yaml 里填好
   # 镜像地址和数据盘的 PCI ID 之后，改成 false。
   suspend: true
   dependsOn:
@@ -172,7 +178,7 @@ metadata:
   name: management-platform
   namespace: flux-system
 spec:
-  suspend: true # P4 打开
+  suspend: true # P3 打开
   dependsOn:
     - name: config
     - name: local-path
@@ -196,7 +202,7 @@ metadata:
   name: management
   namespace: flux-system
 spec:
-  suspend: true # P4 打开
+  suspend: true # P3 打开
   dependsOn:
     - name: management-platform
     - name: keycloak-operator
@@ -220,7 +226,7 @@ metadata:
   name: compliance
   namespace: flux-system
 spec:
-  suspend: true # P4 打开
+  suspend: true # 后置：P4 之后、定好系统级指标再打开
   dependsOn:
     - name: management-platform
   interval: 1h
@@ -231,13 +237,38 @@ spec:
   path: ./gitops/management/compliance
   prune: true
 ---
+# Velero 的备份目标是存储节点上的 S3，等它就绪（P4）再打开。单独成一段，管理服务不用等存储节点。
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: backup
+  namespace: flux-system
+spec:
+  suspend: true # P4 打开
+  dependsOn:
+    - name: config
+    - name: local-path
+    - name: policies
+  interval: 1h
+  timeout: 10m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./gitops/management/backup
+  prune: true
+  wait: true
+  postBuild:
+    substituteFrom:
+      - kind: ConfigMap
+        name: pits-site
+---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
   name: zones
   namespace: flux-system
 spec:
-  # P6：控制面 VM 镜像就绪后改成 false。
+  # P5：控制面 VM 镜像就绪后改成 false。
   suspend: true
   dependsOn:
     - name: config

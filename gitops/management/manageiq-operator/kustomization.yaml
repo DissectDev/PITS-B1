@@ -17,5 +17,5 @@ resources:
   - manager.yaml
 images:
   - name: docker.io/manageiq/manageiq-operator
-    # 和上游标签保持一致。P4 时核对该镜像 tag 是否存在。
+    # 和上游标签保持一致。P3 时核对该镜像 tag 是否存在。
     newTag: spassky-1

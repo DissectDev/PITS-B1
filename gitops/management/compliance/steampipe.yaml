@@ -97,7 +97,7 @@ spec:
             - { name: zone-kubeconfigs, mountPath: /zone-kubeconfigs }
             - { name: home, mountPath: /home/steampipe/.steampipe }
         - name: install-plugins
-          # P4 时核对镜像地址和 tag。
+          # P3 时核对镜像地址和 tag。
           image: ghcr.io/turbot/steampipe:2.4.9
           command: ["steampipe", "plugin", "install", "kubernetes"]
           volumeMounts:

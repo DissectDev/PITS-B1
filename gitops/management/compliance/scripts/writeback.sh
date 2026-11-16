@@ -1,6 +1,6 @@
 #!/bin/sh
 # 把合规结果写回 ManageIQ：不合规的 VM 打上 pits_compliance/noncompliant 标签，恢复合规的去掉。
-# 前提（P4，见 docs/compliance.md）：
+# 前提（P3，见 docs/compliance.md）：
 #   - ManageIQ 里已有标签分类 pits_compliance，含标签 noncompliant；
 #   - Secret pits-miq-api 里有 user 和 password（只给打标签的权限）；
 #   - 环境变量 MIQ_WRITEBACK=true。

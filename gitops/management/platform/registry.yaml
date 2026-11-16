@@ -30,7 +30,7 @@ spec:
     mountConfig: true
     configFiles:
       # 按需同步：分支第一次拉某个镜像时 zot 去上游取，之后走本地。
-      # P4 时按 zot 文档核对 sync 的 destination 写法。
+      # P3 时按 zot 文档核对 sync 的 destination 写法。
       config.json: |-
         {
           "storage": { "rootDirectory": "/var/lib/registry", "gc": true },

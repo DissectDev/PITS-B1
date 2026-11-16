@@ -27,7 +27,7 @@ spec:
         source:
           http:
             # PITS Storage 的系统镜像（例如 bootc-image-builder 生成的 qcow2），
-            # P3 时上传到启动镜像服务（gitops/infrastructure/images）
+            # P4 时上传到启动镜像服务（gitops/infrastructure/images）
             url: "http://boot-images.pits-boot.svc/storage-node.qcow2"
   template:
     metadata:

@@ -1,0 +1,6 @@
+# Velero。备份目标是存储节点上的 S3，所以单独成一段，等存储节点和它的 S3 就绪（P4）再打开；
+# 这样 P3 的管理服务不用等 P4。
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - backup.yaml

@@ -23,7 +23,7 @@ ManageIQ 管申请时的规则（审批、配额），Kyverno 管创建时的拦
 | `zone_connections_match_registry` | Steampipe 的区连接数和区清单对不上：某个区少了 kubeconfig，查询会悄悄少一块 |
 | `etcd_snapshot_recent` | 核心集群 24 小时内没有 etcd 快照 |
 
-## 打开写回（P4 关卡通过后）
+## 打开写回（合规检查部署、P3 关卡通过后）
 
 1. 在 ManageIQ 里建标签分类和标签（也可以在界面里建）：
 

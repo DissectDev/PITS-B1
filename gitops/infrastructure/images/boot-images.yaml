@@ -2,7 +2,7 @@
 # CDI 从集群内地址 http://boot-images.pits-boot.svc/<文件名> 导入 VM 系统盘；
 # 网络节点的 DHCP 给分支下发 iPXE 参数，指向 http://<宿主管理口>:30080/。
 # 放在基础设施层，而不是管理服务层：核心节点重建系统盘时不能依赖管理服务。
-# 镜像丢了可以重新构建，所以不备份。上传方法见 docs/bootstrap.md 的 P3。
+# 镜像丢了可以重新构建，所以不备份。上传方法见 docs/bootstrap.md 的 P4。
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

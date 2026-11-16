@@ -63,4 +63,4 @@ spec:
         enabled: true
         hosts:
           - grafana.${PITS_DOMAIN}
-      # P4：Keycloak 就绪后在这里打开 generic_oauth（OIDC），保留本地 admin 作为应急入口。
+      # P3：Keycloak 就绪后在这里打开 generic_oauth（OIDC），保留本地 admin 作为应急入口。
