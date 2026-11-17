@@ -6,6 +6,8 @@
     openFirewall = true;
     useRoutingFeatures = "none";
     authKeyFile = site.tailscale.authKeyFile;
+    # Apply on every start, including devices already enrolled in the tailnet.
+    extraSetFlags = [ "--ssh=true" ];
     extraUpFlags = [
       "--hostname=${site.hostName}"
       "--accept-dns=false"

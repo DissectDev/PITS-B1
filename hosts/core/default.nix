@@ -2,6 +2,8 @@
 { site, ... }:
 {
   imports = [
+    ../../modules/pits-agent.nix
+    ../../modules/pits-portal.nix
     ./hardware.nix
     ./filesystems.nix
     ../../modules/site-check.nix
@@ -10,9 +12,13 @@
     ../../modules/vfio.nix
     ../../modules/sriov.nix
     ../../modules/tailscale.nix
+    ../../modules/tailscale-relay.nix
     ../../modules/proxy.nix
     ../../modules/ups.nix
     ../../modules/rke2.nix
+    ../../modules/btrfs.nix
+    ../../modules/netboot.nix
+    ../../modules/thunderbolt.nix
   ];
 
   networking.hostName = site.hostName;

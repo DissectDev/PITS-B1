@@ -1,14 +1,5 @@
-# KubeVirt 和 CDI 的配置。
-#
-# permittedHostDevices 按 vendor:device ID 列出可以交给 VM 的设备；KubeVirt 只会分配
-# 已经绑在 vfio-pci 上的设备（绑定由宿主的 modules/vfio.nix 按 PCI 地址完成），
-# 所以即使系统盘和数据盘同型号，系统盘也不会被分出去。
-#
-# 下面的 ID 已按 P0 盘点结果填写。四块盘型号各不相同，系统盘（Crucial P310，c0a9:5426）
-# 不在列表里；三块数据盘共用一个资源名，存储节点按数量申请。换盘时记得同步这里。
-#
-# X710 不在这里：它的两个口留在宿主上做 SR-IOV，VF（8086:154c）由 SR-IOV device plugin 分配
-# （controllers/sriov）。VF 不能同时写进这里，否则两个 device plugin 会把同一块 VF 分给两台 VM。
+# KubeVirt retains only VM-owned PCI devices; data NVMe belongs to the Btrfs container.
+# X710 VFs continue to be allocated by the SR-IOV device plugin.
 ---
 apiVersion: kubevirt.io/v1
 kind: KubeVirt
@@ -27,12 +18,6 @@ spec:
       pciHostDevices:
         - pciVendorSelector: "8086:125B" # I226-LM（网络节点上行）
           resourceName: pits.io/i226-lm
-        - pciVendorSelector: "2646:2263" # Kingston A2000 1TB（存储节点）
-          resourceName: pits.io/nvme-data
-        - pciVendorSelector: "144D:A809" # Samsung 980 1TB（存储节点）
-          resourceName: pits.io/nvme-data
-        - pciVendorSelector: "15B7:5017" # WD_BLACK SN770 2TB（存储节点）
-          resourceName: pits.io/nvme-data
   customizeComponents: {}
   imagePullPolicy: IfNotPresent
   workloadUpdateStrategy: {}

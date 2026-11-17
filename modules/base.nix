@@ -26,17 +26,22 @@
     hashedPasswordFile = site.admin.hashedPasswordFile;
   };
 
+  # Root SSH uses the administrator public keys declared in the site configuration.
+  users.users.root.openssh.authorizedKeys.keys = site.admin.sshKeys;
+
   # sudo 时保留 KUBECONFIG，`sudo kubectl`、`sudo flux` 直接用 RKE2 的 kubeconfig（它只有 root 能读）。
   security.sudo.extraConfig = ''
     Defaults env_keep += "KUBECONFIG"
   '';
 
   services.openssh = {
-    enable = true;
+    enable = false;
+    openFirewall = false;
     settings = {
+      PubkeyAuthentication = true;
       PasswordAuthentication = false;
       KbdInteractiveAuthentication = false;
-      PermitRootLogin = "no";
+      PermitRootLogin = "prohibit-password";
     };
   };
 

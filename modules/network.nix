@@ -26,6 +26,12 @@
           }
         else
           { IPv6AcceptRA = true; };
+      ipv6AcceptRAConfig = {
+        DHCPv6Client = false;
+      }
+      // lib.optionalAttrs ((site.mgmt.ipv6RouterAllowList or [ ]) != [ ]) {
+        RouterAllowList = lib.concatStringsSep " " site.mgmt.ipv6RouterAllowList;
+      };
       address = lib.optional (!site.mgmt.dhcp) site.mgmt.address;
       gateway = lib.optional (!site.mgmt.dhcp) site.mgmt.gateway;
       dns = site.mgmt.dns;
@@ -48,7 +54,6 @@
       let
         ports = lib.concatStringsSep "," (
           map toString [
-            22 # SSH
             443 # ingress
             6443 # RKE2 API
             30080 # 镜像服务（gitops/infrastructure/images）
@@ -57,9 +62,14 @@
         );
         sources = [ site.mgmt.lanCidr ] ++ site.coreNet.routedPrefixes;
       in
-      lib.concatMapStrings (src: ''
+      (lib.concatMapStrings (src: ''
         iptables -A nixos-fw -p tcp -s ${src} -m multiport --dports ${ports} -j nixos-fw-accept
-      '') sources;
+      '') sources) + ''
+        # Cilium Pod control traffic only; do not trust the entire interface.
+        iptables -A nixos-fw -i lxc+ -s 10.42.128.0/17 -p tcp -m multiport --dports 6443,10250 -j nixos-fw-accept
+        # Existing Flux HTTP(S) proxy on the host.
+        iptables -A nixos-fw -i lxc+ -s 10.42.128.0/17 -p tcp --dport 7890 -j nixos-fw-accept
+      '';
     # Pod 网络（Canal：cali* 和 flannel.1）和 tailnet 视为可信。
     trustedInterfaces = [
       "cali+"

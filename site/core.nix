@@ -22,6 +22,8 @@
     address = null; # 例如 "192.168.1.10/24"
     gateway = null; # 例如 "192.168.1.1"
     dns = [ ];
+    # 同网段同时存在多个 IPv6 RA 路由器时，只接受指定链路本地地址的 RA（避免源地址与默认网关错配）。
+    ipv6RouterAllowList = [ "fe80::1" ];
   };
 
   # 系统盘：Crucial P310 1TB（c0a9:5426），0000:5a:00.0。
@@ -59,12 +61,8 @@
     networkNode = [
       "0000:5b:00.0" # I226-LM（8086:125b），IOMMU 组 23
     ];
-    # 存储节点：三块数据盘，各自独占一个 IOMMU 组
-    storageNode = [
-      "0000:01:00.0" # Kingston A2000 1TB（2646:2263），IOMMU 组 16
-      "0000:02:00.0" # Samsung 980 1TB（144d:a809），IOMMU 组 17
-      "0000:59:00.0" # WD_BLACK SN770 2TB（15b7:5017），IOMMU 组 21
-    ];
+    # 数据盘由宿主 NVMe 驱动提供给 Btrfs 管理容器，不再直通 VM
+    storageNode = [ ]; # Data NVMe devices are managed by the Btrfs container.
   };
 
   # X710 的两个 SFP+ 口不整口直通，而是留在宿主上（i40e 驱动），用 SR-IOV 切成 VF 分给各台 VM。
@@ -108,7 +106,7 @@
     # 重装（systemDiskLayout = "disko"）时改成 "/var/lib/pits/secrets/tailscale-authkey"，
     # 放一个一次性、带标签、短有效期的 auth key。文件不进 Git。
     authKeyFile = null;
-    tags = [ "tag:pits-core" ];
+    tags = [ "tag:server" ];
   };
 
   # 出国代理：宿主上跑 mihomo，只给拉镜像、拉 chart 和 Git 的几个进程用

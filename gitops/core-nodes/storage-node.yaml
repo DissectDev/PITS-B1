@@ -1,3 +1,4 @@
+# Legacy VM reference only; data NVMe ownership moved to the Btrfs container.
 # 存储节点（PITS Storage）：直通三块数据盘，从 X710 的 sfp0 拿一块 VF 接核心网段（VLAN 10）。
 # 它和分支在同一个二层网段里直接通信，出这个网段的流量才经过网络节点。
 # 它同时是各分支集群的外部 LINSTOR controller（分支的 Piraeus 用 externalController 指向它）。
