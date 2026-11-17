@@ -26,6 +26,7 @@ In every conversation and every session within this project (`c:\Project\PITS\In
 ## 2. CI & Verification Isolation
 - **Independent Subproject CI + Shared Base**: Each subproject (`client/`, `server/`, `portal/`, `test-pool/`) maintains its own independent GitHub Actions workflow (`.github/workflows/`) and DevSpace test-pool shard (`shard-rust`, `shard-go`, `shard-portal`, `shard-npu-dra`), while `Base/` NixOS & GitOps evaluation and `test-pool/` runner infrastructure are shared across the whole `Infra` workspace.
 - **Pre-Promotion Gate**: Always verify modified subprojects via `test-pool/scripts/Invoke-PitsTestPool.ps1` before running `deploy/nixos/promote-portal.ps1`.
+- **Antigravity App Launch**: Whenever starting or relaunching Antigravity on this workstation (`win11-001`), ALWAYS use `C:\Users\pitsadmin\Desktop\Start-Antigravity-App.cmd` (which configures `http://127.0.0.1:7897` proxy flags) instead of invoking `Antigravity.exe` directly.
 
 ## 3. PITS Workspace Safety Invariants
 - **Self-Session Lock**: This workstation (`pits-vms/win11-001`) runs inside the Lab Talos KubeVirt cluster. Never stop, reboot, or disrupt `win11-001` or its active Talos host without explicit user authorization or a detached `systemd-run` failover/cutover command.
