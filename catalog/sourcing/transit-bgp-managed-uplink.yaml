@@ -1,0 +1,32 @@
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: transit-bgp-managed-uplink
+  description: 双线 BGP 托管专线与跨集群边缘带宽服务
+  labels:
+    sourcing.company.io/quadrant: leverage
+    sourcing.company.io/windmill-mismatch: "false"
+  annotations:
+    finops.company.io/cost-allocation-id: "cc-infra-wan-034"
+    sourcing.company.io/adapter-abstracted: "true"
+spec:
+  type: managed-infra
+  owner: group:default/operators
+  system: pits-infrastructure
+  sourcingAudit:
+    contractMeta:
+      vendorName: "MetroCarrier Telecom"
+      renewalDate: "2027-08-15"
+      lastAuditedAt: "2026-11-15"
+      baselineProdDependents: 1
+      blindScoreVarianceAlert: false
+    manualScores:
+      y2_coreCompetitiveness: 2.4
+      y4_priceElasticity: 4.0
+      x2_marketScarcity: 2.5
+      x3_customizationDepth: 2.5
+      x4_complianceFragility: 3.5
+    supplierPreference:
+      estimatedWalletShareTier: "5-to-15pct"
+      accountAttractivenessScore: 3.7
+      perceivedStatus: "development"

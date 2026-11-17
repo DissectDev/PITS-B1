@@ -1,4 +1,29 @@
+# Nix
 result
 result-*
 .direnv/
 *.swp
+
+# Rust (`client/`)
+client/target/
+client/bin/
+
+# Node / Portal (`portal/`)
+portal/node_modules/
+portal/dist/
+
+# Go (`server/`)
+server/bin/
+
+# TestPool (`test-pool/`)
+test-pool/.devspace/
+
+# Binaries & Secrets (never commit)
+*.exe
+*.pdb
+*.pem
+*.key
+*.kubeconfig
+*.rdp
+credentials.json
+auth.json

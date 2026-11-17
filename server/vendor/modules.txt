@@ -1,0 +1,42 @@
+# github.com/fsnotify/fsnotify v1.9.0
+## explicit; go 1.17
+github.com/fsnotify/fsnotify
+github.com/fsnotify/fsnotify/internal
+# github.com/kr/text v0.2.0
+## explicit
+# github.com/lunixbochs/struc v0.0.0-20200521075829-a4cb8d33dbbe
+## explicit; go 1.12
+github.com/lunixbochs/struc
+# github.com/sirupsen/logrus v1.9.3
+## explicit; go 1.13
+github.com/sirupsen/logrus
+# go.fd.io/govpp v0.13.0
+## explicit; go 1.24.0
+go.fd.io/govpp
+go.fd.io/govpp/adapter
+go.fd.io/govpp/adapter/socketclient
+go.fd.io/govpp/api
+go.fd.io/govpp/binapi/acl
+go.fd.io/govpp/binapi/acl_types
+go.fd.io/govpp/binapi/ethernet_types
+go.fd.io/govpp/binapi/fib_types
+go.fd.io/govpp/binapi/interface
+go.fd.io/govpp/binapi/interface_types
+go.fd.io/govpp/binapi/ip
+go.fd.io/govpp/binapi/ip_types
+go.fd.io/govpp/binapi/memclnt
+go.fd.io/govpp/binapi/mfib_types
+go.fd.io/govpp/binapi/nat44_ed
+go.fd.io/govpp/binapi/nat_types
+go.fd.io/govpp/binapi/vlib
+go.fd.io/govpp/codec
+go.fd.io/govpp/core
+go.fd.io/govpp/core/genericpool
+go.fd.io/govpp/internal/version
+# go.yaml.in/yaml/v3 v3.0.4
+## explicit; go 1.16
+go.yaml.in/yaml/v3
+# golang.org/x/sys v0.35.0
+## explicit; go 1.23.0
+golang.org/x/sys/unix
+golang.org/x/sys/windows

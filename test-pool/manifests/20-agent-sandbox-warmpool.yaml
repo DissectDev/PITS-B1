@@ -1,0 +1,70 @@
+# Official Kubernetes SIG Apps `agent-sandbox` (`v1.0.11`) Dynamic Warm Pool.
+# Enables `/teamwork` swarms and concurrent Antigravity Verifier Subagents to claim
+# isolated pre-warmed `tmpfs` sandboxes in <100ms via `SandboxClaim` without colliding.
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: pits-verifier-template
+  namespace: pits-test-pool
+spec:
+  networkPolicyManagement: Unmanaged
+  podTemplate:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pits-agent-sandbox
+        pits.io/pool: agent-warmpool
+    spec:
+      serviceAccountName: pits-test-runner
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      - netboot-004
+      containers:
+        - name: runner
+          image: docker.io/pits/test-runner:v1.2
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: "12"
+              memory: 10Gi
+          volumeMounts:
+            - name: ramdisk
+              mountPath: /ramdisk
+            - name: tmp
+              mountPath: /tmp
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: ramdisk
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: pits-agent-warmpool
+  namespace: pits-test-pool
+spec:
+  replicas: 2
+  sandboxTemplateRef:
+    name: pits-verifier-template
+  updateStrategy:
+    type: OnReplenish

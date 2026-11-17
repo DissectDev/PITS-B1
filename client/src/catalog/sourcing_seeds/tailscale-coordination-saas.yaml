@@ -1,0 +1,32 @@
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: tailscale-coordination-saas
+  description: Mesh Overlay VPN 控制面与跨站点中继协调 SaaS
+  labels:
+    sourcing.company.io/quadrant: leverage
+    sourcing.company.io/windmill-mismatch: "false"
+  annotations:
+    finops.company.io/cost-allocation-id: "cc-infra-net-012"
+    sourcing.company.io/adapter-abstracted: "true"
+spec:
+  type: vendor-saas
+  owner: group:default/operators
+  system: pits-infrastructure
+  sourcingAudit:
+    contractMeta:
+      vendorName: "Tailscale Inc."
+      renewalDate: "2027-09-30"
+      lastAuditedAt: "2026-11-15"
+      baselineProdDependents: 2
+      blindScoreVarianceAlert: false
+    manualScores:
+      y2_coreCompetitiveness: 3.6
+      y4_priceElasticity: 3.8
+      x2_marketScarcity: 3.0
+      x3_customizationDepth: 2.5
+      x4_complianceFragility: 2.8
+    supplierPreference:
+      estimatedWalletShareTier: "1-to-5pct"
+      accountAttractivenessScore: 4.1
+      perceivedStatus: "core"

@@ -1,0 +1,13 @@
+FROM alpine:3.22
+
+RUN set -eux; \
+    apk add --no-cache \
+        bash \
+        git \
+        make \
+        python3 \
+        py3-ply
+
+COPY govpp /
+
+ENTRYPOINT ["/govpp"]

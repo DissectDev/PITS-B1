@@ -1,0 +1,32 @@
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: commercial-mip-solver-sdk
+  description: 城市路网与地块布局混合整数规划商业求解器 SDK
+  labels:
+    sourcing.company.io/quadrant: bottleneck
+    sourcing.company.io/windmill-mismatch: "true"
+  annotations:
+    finops.company.io/cost-allocation-id: "cc-sim-solver-021"
+    sourcing.company.io/adapter-abstracted: "false"
+spec:
+  type: commercial-sdk
+  owner: group:default/operators
+  system: pits-city-pipeline
+  sourcingAudit:
+    contractMeta:
+      vendorName: "OptiCore Mathware"
+      renewalDate: "2027-11-01"
+      lastAuditedAt: "2026-11-15"
+      baselineProdDependents: 1
+      blindScoreVarianceAlert: true
+    manualScores:
+      y2_coreCompetitiveness: 2.5
+      y4_priceElasticity: 1.5
+      x2_marketScarcity: 5.0
+      x3_customizationDepth: 3.5
+      x4_complianceFragility: 3.0
+    supplierPreference:
+      estimatedWalletShareTier: "under-1pct"
+      accountAttractivenessScore: 2.0
+      perceivedStatus: "exploitable"

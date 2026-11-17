@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PITS Unified Infrastructure Console (Rust Client + Go Agent)</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: #131b31;
+      --panel-alt: #18233f;
+      --border: #26355d;
+      --text: #e7eefc;
+      --muted: #93a4c8;
+      --accent: #38bdf8;
+      --accent-strong: #0284c7;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --err: #ef4444;
+      --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+      --sans: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      display: flex;
+      min-height: 100vh;
+    }
+    aside {
+      width: 268px;
+      background: #080d1a;
+      border-right: 1px solid var(--border);
+      padding: 20px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .brand {
+      padding: 6px 10px 16px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 10px;
+    }
+    .brand h1 {
+      font-size: 17px;
+      margin: 0 0 4px;
+      letter-spacing: 0.4px;
+      color: var(--accent);
+    }
+    .brand p {
+      margin: 0;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .nav-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--muted);
+      text-align: left;
+      padding: 10px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 13.5px;
+      font-weight: 500;
+      transition: all 0.15s ease;
+    }
+    .nav-btn:hover { background: var(--panel); color: var(--text); }
+    .nav-btn.active {
+      background: var(--panel-alt);
+      color: var(--accent);
+      border-color: var(--border);
+    }
+    main {
+      flex: 1;
+      padding: 24px 30px;
+      overflow-y: auto;
+      max-width: 1440px;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    header h2 { margin: 0; font-size: 21px; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      background: var(--panel-alt);
+      border: 1px solid var(--border);
+    }
+    .badge.ok { color: var(--ok); border-color: rgba(34,197,94,0.4); }
+    .badge.warn { color: var(--warn); border-color: rgba(245,158,11,0.4); }
+    .badge.err { color: var(--err); border-color: rgba(239,68,68,0.4); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px 18px;
+    }
+    .card h3 {
+      margin: 0 0 10px;
+      font-size: 15px;
+      color: var(--accent);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .kv { font-size: 13px; line-height: 1.65; color: var(--muted); }
+    .kv strong { color: var(--text); }
+    .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    button.act {
+      background: var(--accent-strong);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 13px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.act.secondary {
+      background: var(--panel-alt);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    button.act.danger { background: #b91c1c; }
+    button.act:hover { opacity: 0.92; }
+    select, input, textarea {
+      background: #0a1022;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 7px 10px;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      width: 100%;
+    }
+    textarea { min-height: 190px; resize: vertical; line-height: 1.45; }
+    pre {
+      background: #070b16;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 13px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.48;
+      color: #cfe0ff;
+      max-height: 440px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12.5px;
+      margin-top: 8px;
+    }
+    th, td {
+      text-align: left;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    th { color: var(--muted); font-weight: 600; }
+    .tab { display: none; }
+    .tab.active { display: block; }
+    .mono { font-family: var(--mono); }
+    .field-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <aside>
+    <div class="brand">
+      <h1>PITS Control Plane</h1>
+      <p>Rust Client (`pitsctl`) + Go Agent</p>
+    </div>
+    <button class="nav-btn active" onclick="switchTab('overview', this)">0. 全局态势 & 连接配置</button>
+    <button class="nav-btn" onclick="switchTab('router', this)">1. RKE2 路由器 & VPP</button>
+    <button class="nav-btn" onclick="switchTab('san', this)">2. NVMe/TCP SAN & Btrfs</button>
+    <button class="nav-btn" onclick="switchTab('pxe', this)">3. Tinkerbell PXE & Hook</button>
+    <button class="nav-btn" onclick="switchTab('talos', this)">4. Talos Linux & Guard</button>
+    <button class="nav-btn" onclick="switchTab('k8s', this)">5. 双 K8s 集群 & NPU DRA</button>
+    <button class="nav-btn" onclick="switchTab('vm', this)">6. KubeVirt 虚拟机 & RDP</button>
+  </aside>
+
+  <main>
+    <header>
+      <h2 id="page-title">全局态势 & 连接配置 (Zero-Script Native Engine)</h2>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <span id="agent-pill" class="badge warn">pits-agent: 检测中</span>
+        <button class="act secondary" onclick="refreshOverview()">刷新全局状态</button>
+      </div>
+    </header>
+
+    <!-- TAB 0: OVERVIEW -->
+    <section id="tab-overview" class="tab active">
+      <div class="grid" id="overview-cards"></div>
+      <div class="card">
+        <h3>已导入的 PITS 节点契约 (`netboot-001..004` + 确定性 UUIDv5 SAN WWID)</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>设备 ID</th>
+              <th>具体机型 & CPU</th>
+              <th>节点 IP / SAN Target</th>
+              <th>PXE MAC</th>
+              <th>System WWID (NSID 1)</th>
+              <th>VMStore / 物理 NPU</th>
+            </tr>
+          </thead>
+          <tbody id="nodes-tbody"></tbody>
+        </table>
+      </div>
+      <div class="card" style="margin-top:16px;">
+        <h3>连接配置与 mTLS 证书签发 (`%LOCALAPPDATA%\PITS\Client`)</h3>
+        <div class="field-grid">
+          <div>
+            <label>Go `pits-agent` 地址 (`pits-core`)</label>
+            <input id="prof-agent-url" placeholder="https://192.168.71.50:18443" />
+          </div>
+          <div>
+            <label>Core RKE2 Kubeconfig 路径</label>
+            <input id="prof-core-kube" placeholder="C:\Users\...\pits-core.yaml" />
+          </div>
+          <div>
+            <label>Lab Talos Kubeconfig 路径 (自动经 Agent CONNECT 隧道)</label>
+            <input id="prof-lab-kube" placeholder="C:\Users\...\lab.yaml" />
+          </div>
+          <div>
+            <label>Talosconfig 路径 (原生支持 Ed25519 mTLS)</label>
+            <input id="prof-talos-cfg" placeholder="C:\Users\...\talosconfig" />
+          </div>
+        </div>
+        <div class="btn-row">
+          <button class="act" onclick="saveProfile()">保存本地 Profile</button>
+          <button class="act secondary" onclick="generatePki()">签发全新 Ed25519 mTLS 证书束</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 1: ROUTER -->
+    <section id="tab-router" class="tab">
+      <div class="grid">
+        <div class="card">
+          <h3>RKE2 路由器策略安全不变量 (`edge/pits-core`)</h3>
+          <div id="router-validation-box" class="kv">加载中...</div>
+          <div class="btn-row">
+            <button class="act" onclick="validateRouterYaml()">校验下方 EdgeRouter YAML</button>
+            <button class="act" onclick="applyRouterYaml()">SSA 下发 EdgeRouter</button>
+            <button class="act secondary" onclick="toggleCrossplanePause(true)">暂停 Crossplane</button>
+            <button class="act secondary" onclick="toggleCrossplanePause(false)">恢复 Crossplane</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>DPDK / VFIO 硬件守护与 GoVPP 实时诊断</h3>
+          <div class="kv">
+            <div>管理口守护: <strong class="mono">mgmt0 = 0000:58:00.0 (严禁解绑)</strong></div>
+            <div>WAN DPDK: <strong class="mono">0000:5b:00.0 (vfio-pci)</strong></div>
+            <div>LAN Trunk VF0: <strong class="mono">0000:03:02.0 (sfp0 VF0 VLAN 10/20)</strong></div>
+          </div>
+          <div class="btn-row">
+            <button class="act secondary" onclick="callApi('GET','/api/v1/router/status')">查询实时网关状态</button>
+            <button class="act secondary" onclick="callApi('POST','/api/v1/router/vpp-trace', {count:50})">GoVPP 抓包追踪 (dpdk-input)</button>
+            <button class="act danger" onclick="callApi('POST','/api/v1/router/recover', {cleanupPerfNetns:true, refreshDevicePlugins:true})">安全恢复 VFIO & Gateway</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>`EdgeRouter` 声明式配置 (`platform.edge.router/v1alpha1`)</h3>
+        <textarea id="router-yaml-editor"></textarea>
+      </div>
+    </section>
+
+    <!-- TAB 2: SAN & BTRFS -->
+    <section id="tab-san" class="tab">
+      <div class="grid">
+        <div class="card">
+          <h3>NVMe/TCP SAN 目标编排 (`nvmet` + 4KiB GPT `META`/`STATE`)</h3>
+          <div class="field-grid">
+            <div>
+              <label>选择已注册无盘节点</label>
+              <select id="san-node-select">
+                <option value="netboot-001">netboot-001 (10.89.20.11:4420)</option>
+                <option value="netboot-002">netboot-002 (10.89.20.15:4420)</option>
+                <option value="netboot-003">netboot-003 (10.89.20.16:4420)</option>
+                <option value="netboot-004" selected>netboot-004 (10.89.20.17:4420 + vmstore)</option>
+              </select>
+            </div>
+            <div>
+              <label>在线扩容字节数 (仅允许 4KiB 对齐单调增长)</label>
+              <input id="san-expand-gib" type="number" value="160" placeholder="目标 GiB (NSID 2)" />
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="act secondary" onclick="previewSanK8s()">生成 nvmet K8s 清单</button>
+            <button class="act secondary" onclick="inspectSanNode()">检查 configfs & GPT 状态</button>
+            <button class="act" onclick="provisionSanNode(false)">调谐 SAN 目标</button>
+            <button class="act" onclick="provisionSanNode(true)">热添加命名空间 (Hot-Add)</button>
+            <button class="act secondary" onclick="expandSanNode()">在线无损扩容 NSID 2</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>`pits-data` Btrfs 存储池 (`777b7660-ef8e-421a-ac60-d6c4cb2fea39`)</h3>
+          <div class="kv">
+            <div>挂载点: <strong class="mono">/var/mnt/tank (@data, @archive, @snapshots)</strong></div>
+            <div>NOCOW 策略: <strong>每节点 SAN 目录独立启用 `FS_NOCOW_FL`</strong></div>
+            <div>Samsung SMART 基线: <strong>监控历史 1 次介质计数，严守 0 递增</strong></div>
+          </div>
+          <div class="btn-row">
+            <button class="act secondary" onclick="callApi('GET','/api/v1/btrfs/status')">读取 Btrfs sysfs 健康度</button>
+            <button class="act" onclick="callApi('POST','/api/v1/btrfs/maintain',{operation:'trim'})">执行 FITRIM 回收</button>
+            <button class="act secondary" onclick="callApi('POST','/api/v1/btrfs/maintain',{operation:'scrub'})">校验 Scrub 零错误标记</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: PXE -->
+    <section id="tab-pxe" class="tab">
+      <div class="card">
+        <h3>Tinkerbell PXE `Hardware` / Minisforum 直连 iPXE 编译器 & Hook 硬件审计</h3>
+        <div class="field-grid">
+          <div>
+            <label>目标无盘节点</label>
+            <select id="pxe-node-select">
+              <option value="netboot-001">netboot-001</option>
+              <option value="netboot-002">netboot-002</option>
+              <option value="netboot-003">netboot-003</option>
+              <option value="netboot-004" selected>netboot-004</option>
+            </select>
+          </div>
+          <div>
+            <label>网络引导模式</label>
+            <select id="pxe-boot-mode">
+              <option value="talos-netboot">Talos v1.14.5 无盘 SAN 引导 (默认)</option>
+              <option value="hook-inventory">Hook 非破坏性硬件发现 (禁止写盘)</option>
+            </select>
+          </div>
+        </div>
+        <div class="btn-row">
+          <button class="act secondary" onclick="renderPxeArtifacts()">编译 iPXE 脚本与 Tinkerbell Hardware YAML</button>
+          <button class="act" onclick="applyPxeHardware()">下发 Hardware 至 tink-system</button>
+          <button class="act secondary" onclick="verifyPxeAssets()">校验 vmlinuz / initramfs SHA-256</button>
+          <button class="act secondary" onclick="callApi('GET','/api/v1/pxe/inventory')">查看已采集 Hook 硬件报告</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: TALOS -->
+    <section id="tab-talos" class="tab">
+      <div class="grid">
+        <div class="card">
+          <h3>Talos v1.14.5 配置合成器 & 原生 `netboot-guard` 策略门禁</h3>
+          <div class="field-grid">
+            <div>
+              <label>目标节点</label>
+              <select id="talos-node-select" onchange="loadNodeTalosConfig()">
+                <option value="netboot-001">netboot-001 (10.89.20.21)</option>
+                <option value="netboot-002">netboot-002 (10.89.20.22)</option>
+                <option value="netboot-003">netboot-003 (10.89.20.23)</option>
+                <option value="netboot-004" selected>netboot-004 (10.89.20.24)</option>
+              </select>
+            </div>
+            <div>
+              <label>下发模式 (`MachineService/ApplyConfiguration`)</label>
+              <select id="talos-apply-mode">
+                <option value="2">NO_REBOOT (在线热更新)</option>
+                <option value="1">AUTO</option>
+                <option value="5">TRY (自动回滚保护)</option>
+              </select>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="act secondary" onclick="loadNodeTalosConfig()">生成标准无盘配置</button>
+            <button class="act" onclick="runNetbootGuard()">执行 netboot-guard 静态门禁</button>
+            <button class="act" onclick="applyTalosConfig()">COSI 预检并 gRPC 下发配置</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>原生 HTTP/2 + Ed25519 mTLS gRPC 节点控制 (`:50000`)</h3>
+          <div class="kv">
+            <div>协议栈: <strong>纯 Rust Protobuf + HTTP/2 mTLS (`rustls-rustcrypto`)</strong></div>
+            <div>跨网段穿透: <strong>自动经 `pits-agent` `HTTP CONNECT` 桥接 VLAN 20</strong></div>
+          </div>
+          <div class="btn-row">
+            <button class="act secondary" onclick="inspectTalosNode()">查询 Version / ServiceList / Etcd / COSI WWID</button>
+            <button class="act secondary" onclick="renderImagerProfile()">生成 pits-nvme-early Imager Profile</button>
+            <button class="act danger" onclick="rebootTalosNode(true)">gRPC POWERCYCLE 重启验证 PXE</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Talos 多文档配置编辑器 (受 `netboot-guard` 实时保护)</h3>
+        <textarea id="talos-yaml-editor"></textarea>
+      </div>
+    </section>
+
+    <!-- TAB 5: K8S & NPU -->
+    <section id="tab-k8s" class="tab">
+      <div class="grid">
+        <div class="card">
+          <h3>双 Kubernetes 控制平面 (`pits-core` RKE2 v1.35.8 + Lab Talos v1.37.1)</h3>
+          <div class="btn-row">
+            <button class="act" onclick="callApi('GET','/api/v1/k8s/summary')">探测双集群节点 / Pod / PV / NPU Slices</button>
+            <button class="act" onclick="callApi('GET','/api/v1/k8s/npu-audit')">全集群 5 机型号 ↔ 物理 NPU ↔ DRA 比对审计</button>
+            <button class="act secondary" onclick="previewSanPv()">生成静态 SAN Local PV/PVC</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Intel / AMD NPU DRA v1 (`resource.k8s.io/v1`) 调度与 OpenVINO 验证</h3>
+          <div class="field-grid">
+            <div>
+              <label>目标 Intel NPU 就绪节点 (`8086:7d1d`, `netboot-003` 为 AMD `1022:1502` 驱动待合入)</label>
+              <select id="npu-node-select">
+                <option value="netboot-001">netboot-001 (ASUS NUC 14 Pro / Ultra 7 155H)</option>
+                <option value="netboot-002" selected>netboot-002 (ASUS NUC 14 Pro / Ultra 7 155H)</option>
+                <option value="netboot-004">netboot-004 (AtomMan X7 Ti / Ultra 9 185H)</option>
+              </select>
+            </div>
+            <div>
+              <label>DRA DeviceClass (`pits-intel-npu` / `pits-npu` / `pits-amd-npu`)</label>
+              <input id="npu-device-class" value="pits-intel-npu" />
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="act secondary" onclick="previewNpuJob()">预览 ResourceClaim + UID 1000 验证 Job</button>
+            <button class="act" onclick="launchNpuJob()">在 Lab 集群启动 NPU OpenVINO 验证</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 6: VM MANAGER -->
+    <section id="tab-vm" class="tab">
+      <div class="grid">
+        <div class="card">
+          <h3>跨集群 KubeVirt 虚拟机生命周期控制</h3>
+          <div class="field-grid">
+            <div>
+              <label>目标虚拟机实例</label>
+              <select id="vm-target-select">
+                <option value="lab|pits-vms|win11-001">Lab: pits-vms/win11-001 (Windows 11 Pro @ netboot-004)</option>
+                <option value="core|edge-access-lab|access-lab">Core: edge-access-lab/access-lab (MAC 7e:0a:35:9a:5a:d3)</option>
+              </select>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="act secondary" onclick="callApi('GET','/api/v1/vms')">列出双集群 VM 状态</button>
+            <button class="act" onclick="vmAction('start')">启动 (Start)</button>
+            <button class="act secondary" onclick="vmAction('restart')">重启 (Restart)</button>
+            <button class="act danger" onclick="vmAction('stop')">关机 (Stop)</button>
+            <button class="act secondary" onclick="finalizeWin11()">Win11 安装后卸载 ISO (Finalize)</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Windows 11 原生 RDP X.224 + TLS 指纹校验与高分屏连接</h3>
+          <div class="field-grid">
+            <div>
+              <label>RDP 地址 (`netboot-004` NodePort)</label>
+              <input id="rdp-host" value="10.89.20.24" />
+            </div>
+            <div>
+              <label>端口</label>
+              <input id="rdp-port" type="number" value="30389" />
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="act" onclick="verifyRdpTls(false)">X.224 握手并提取 TLS 证书指纹</button>
+            <button class="act secondary" onclick="verifyRdpTls(true)">生成 3072×1920 钉扎 .rdp 并拉起 mstsc</button>
+            <button class="act secondary" onclick="previewVmManifests()">预览 Win11 / access-lab 标准清单</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="card" style="margin-top:18px;">
+      <h3>执行输出与协议遥测明细 <span id="out-status" class="badge">就绪</span></h3>
+      <pre id="output-console">// 点击上方任意模块操作按钮查看实时协议响应、策略门禁结果或生成的声明式清单。</pre>
+    </div>
+  </main>
+
+  <script>
+    const titles = {
+      overview: '0. 全局态势 & 连接配置 (Zero-Script Native Engine)',
+      router: '1. RKE2 路由器 & GoVPP 数据面控制 (`edge/pits-core`)',
+      san: '2. NVMe/TCP SAN 目标 & `pits-data` Btrfs 存储池',
+      pxe: '3. Tinkerbell PXE 服务器、iPXE 编译器 & Hook 硬件审计',
+      talos: '4. Talos Linux v1.14.5 生命周期、`netboot-guard` & COSI/gRPC',
+      k8s: '5. 双 Kubernetes 控制平面 & Intel NPU DRA v1 调度',
+      vm: '6. KubeVirt 跨集群虚拟机管理器 & 原生 RDP TLS 校验'
+    };
+
+    function switchTab(id, btn) {
+      document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
+      document.getElementById('tab-' + id).classList.add('active');
+      btn.classList.add('active');
+      document.getElementById('page-title').textContent = titles[id] || id;
+    }
+
+    function showOut(label, ok, data) {
+      const pill = document.getElementById('out-status');
+      pill.textContent = label;
+      pill.className = 'badge ' + (ok ? 'ok' : 'err');
+      document.getElementById('output-console').textContent =
+        typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+    }
+
+    async function callApi(method, path, body) {
+      try {
+        const opts = { method, headers: {} };
+        if (body !== undefined) {
+          opts.headers['Content-Type'] = 'application/json';
+          opts.body = JSON.stringify(body);
+        }
+        const res = await fetch(path, opts);
+        const json = await res.json();
+        showOut(`${method} ${path} (${res.status})`, res.ok, json);
+        return { ok: res.ok, data: json };
+      } catch (e) {
+        showOut(`网络/调用异常`, false, String(e));
+        return { ok: false, data: null };
+      }
+    }
+
+    async function refreshOverview() {
+      const res = await callApi('GET', '/api/v1/overview');
+      if (!res.ok || !res.data) return;
+      const d = res.data;
+      const pill = document.getElementById('agent-pill');
+      if (d.agentHealth && d.agentHealth.version) {
+        pill.textContent = `pits-agent: 在线 (${d.agentHealth.version})`;
+        pill.className = 'badge ok';
+      } else {
+        pill.textContent = 'pits-agent: 离线/本地离线编排模式';
+        pill.className = 'badge warn';
+      }
+
+      document.getElementById('prof-agent-url').value = d.profile.agentEndpoint || '';
+      document.getElementById('prof-core-kube').value = d.profile.coreKubeconfigPath || '';
+      document.getElementById('prof-lab-kube').value = d.profile.labKubeconfigPath || '';
+      document.getElementById('prof-talos-cfg').value = d.profile.talosconfigPath || '';
+
+      const cards = document.getElementById('overview-cards');
+      cards.innerHTML = `
+        <div class="card">
+          <h3>RKE2 网关安全契约 <span class="badge ${d.routerValidation.valid ? 'ok' : 'err'}">${d.routerValidation.valid ? 'PASS' : 'FAIL'}</span></h3>
+          <div class="kv">
+            <div>Core ↔ Lab 双向隔离: <strong>${d.routerValidation.coreLabIsolated ? '已强制' : '缺失'}</strong></div>
+            <div>Lab → 管理网拦截: <strong>${d.routerValidation.labMgmtBlocked ? '已强制' : '缺失'}</strong></div>
+            <div>mgmt0 (0000:58:00.0) 保护: <strong>${d.routerValidation.mgmt0PciSafe ? '安全' : '危险'}</strong></div>
+            <div>Desired SHA-256: <strong class="mono">${d.routerValidation.desiredSpecSha256.slice(0, 16)}…</strong></div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>已纳管无盘节点 & SAN 命名空间</h3>
+          <div class="kv">
+            <div>Talos 节点总数: <strong>${d.nodes.length} 台 (v1.14.5 / K8s v1.37.1)</strong></div>
+            <div>NVMe/TCP 确定性命名空间: <strong>9 个 (含 netboot-004 vmstore)</strong></div>
+            <div>工作区契约源: <strong class="mono">${d.workspaceSource || '内置 PITS 基线'}</strong></div>
+            <div>已导入真实文件数: <strong>${d.importedFilesCount} 个</strong></div>
+          </div>
+        </div>
+      `;
+
+      const tbody = document.getElementById('nodes-tbody');
+      tbody.innerHTML = d.nodes.map(n => {
+        let npuBadge = '-';
+        if (n.hasIntelNpu) {
+          npuBadge = `<span class="badge ok">Intel NPU (${n.npuPciId || '8086:7d1d'})</span>`;
+        } else if (n.npuVendor === 'amd') {
+          npuBadge = `<span class="badge warn">AMD XDNA (${n.npuPciId || '1022:1502'} 驱动待启用)</span>`;
+        }
+        return `
+        <tr>
+          <td class="mono"><strong>${n.deviceId}</strong></td>
+          <td><div><strong>${n.model || '-'}</strong></div><div class="mono" style="font-size:11.5px;color:var(--muted)">${n.cpuModel || ''}</div></td>
+          <td class="mono">${n.nodeIp}<br/><span style="color:var(--muted)">${n.targetIp}:4420</span></td>
+          <td class="mono">${n.pxeMac}</td>
+          <td class="mono">${n.systemWwid}</td>
+          <td>${n.vmStore ? '<span class="badge ok">vmstore (NSID 3)</span> ' : ''}${npuBadge}</td>
+        </tr>
+      `}).join('');
+
+      if (d.defaultRouterYaml && !document.getElementById('router-yaml-editor').value) {
+        document.getElementById('router-yaml-editor').value = d.defaultRouterYaml;
+      }
+      document.getElementById('router-validation-box').innerHTML = `
+        <div>策略校验: <strong>${d.routerValidation.valid ? '通过' : '拒绝'}</strong></div>
+        <div>VLAN 10 / 20 隔离: <strong>${d.routerValidation.coreLabIsolated}</strong> | 管理平面保护: <strong>${d.routerValidation.labMgmtBlocked}</strong></div>
+      `;
+    }
+
+    async function saveProfile() {
+      await callApi('POST', '/api/v1/profile', {
+        agentEndpoint: document.getElementById('prof-agent-url').value,
+        coreKubeconfigPath: document.getElementById('prof-core-kube').value || null,
+        labKubeconfigPath: document.getElementById('prof-lab-kube').value || null,
+        talosconfigPath: document.getElementById('prof-talos-cfg').value || null
+      });
+      await refreshOverview();
+    }
+
+    async function generatePki() {
+      await callApi('POST', '/api/v1/profile/generate-pki', { serverSan: '192.168.71.50' });
+    }
+
+    async function validateRouterYaml() {
+      const yaml = document.getElementById('router-yaml-editor').value;
+      await callApi('POST', '/api/v1/router/validate', { yaml });
+    }
+
+    async function applyRouterYaml() {
+      const yaml = document.getElementById('router-yaml-editor').value;
+      await callApi('POST', '/api/v1/router/apply', { yaml });
+    }
+
+    async function toggleCrossplanePause(paused) {
+      await callApi('POST', '/api/v1/router/pause', { paused });
+    }
+
+    async function previewSanK8s() {
+      const dev = document.getElementById('san-node-select').value;
+      const r = await callApi('GET', `/api/v1/san/render-k8s/${dev}`);
+      if (r.ok && r.data.manifest) showOut(`nvmet-${dev} K8s 清单`, true, r.data.manifest);
+    }
+
+    async function inspectSanNode() {
+      const dev = document.getElementById('san-node-select').value;
+      await callApi('POST', `/api/v1/san/inspect/${dev}`);
+    }
+
+    async function provisionSanNode(hotAddOnly) {
+      const dev = document.getElementById('san-node-select').value;
+      await callApi('POST', `/api/v1/san/provision/${dev}`, { hotAddOnly, configureListener: !hotAddOnly, dryRun: false });
+    }
+
+    async function expandSanNode() {
+      const dev = document.getElementById('san-node-select').value;
+      const gib = Number(document.getElementById('san-expand-gib').value || 160);
+      await callApi('POST', `/api/v1/san/expand/${dev}`, { namespaceId: 2, newBytes: gib * 1024 * 1024 * 1024 });
+    }
+
+    async function renderPxeArtifacts() {
+      const dev = document.getElementById('pxe-node-select').value;
+      const mode = document.getElementById('pxe-boot-mode').value;
+      const r = await callApi('POST', '/api/v1/pxe/render', { deviceId: dev, mode });
+      if (r.ok) showOut(`PXE iPXE + Hardware (${dev})`, true, `# --- iPXE Script ---\n${r.data.ipxeScript}\n# --- Tinkerbell Hardware ---\n${r.data.hardwareYaml}`);
+    }
+
+    async function applyPxeHardware() {
+      const dev = document.getElementById('pxe-node-select').value;
+      const mode = document.getElementById('pxe-boot-mode').value;
+      await callApi('POST', '/api/v1/pxe/apply-hardware', { deviceId: dev, mode });
+    }
+
+    async function verifyPxeAssets() {
+      const dev = document.getElementById('pxe-node-select').value;
+      await callApi('POST', '/api/v1/pxe/verify-assets', { deviceId: dev });
+    }
+
+    async function loadNodeTalosConfig() {
+      const dev = document.getElementById('talos-node-select').value;
+      const r = await callApi('GET', `/api/v1/talos/render/${dev}`);
+      if (r.ok && r.data.yaml) {
+        document.getElementById('talos-yaml-editor').value = r.data.yaml;
+      }
+    }
+
+    async function runNetbootGuard() {
+      const dev = document.getElementById('talos-node-select').value;
+      const yaml = document.getElementById('talos-yaml-editor').value;
+      await callApi('POST', '/api/v1/talos/guard', { deviceId: dev, yaml });
+    }
+
+    async function applyTalosConfig() {
+      const dev = document.getElementById('talos-node-select').value;
+      const yaml = document.getElementById('talos-yaml-editor').value;
+      const mode = Number(document.getElementById('talos-apply-mode').value);
+      await callApi('POST', '/api/v1/talos/apply', { deviceId: dev, yaml, mode, verifyLiveWwids: true });
+    }
+
+    async function inspectTalosNode() {
+      const dev = document.getElementById('talos-node-select').value;
+      await callApi('GET', `/api/v1/talos/status/${dev}`);
+    }
+
+    async function renderImagerProfile() {
+      const dev = document.getElementById('talos-node-select').value;
+      const r = await callApi('GET', `/api/v1/talos/imager/${dev}`);
+      if (r.ok && r.data.profileYaml) showOut(`Imager Profile (${dev})`, true, r.data.profileYaml);
+    }
+
+    async function rebootTalosNode(powercycle) {
+      const dev = document.getElementById('talos-node-select').value;
+      await callApi('POST', '/api/v1/talos/reboot', { deviceId: dev, powercycle });
+    }
+
+    async function previewSanPv() {
+      const r = await callApi('GET', '/api/v1/k8s/render-san-pv');
+      if (r.ok && r.data.yaml) showOut('Static SAN PV/PVC YAML', true, r.data.yaml);
+    }
+
+    async function previewNpuJob() {
+      const node = document.getElementById('npu-node-select').value;
+      const deviceClass = document.getElementById('npu-device-class').value;
+      const r = await callApi('POST', '/api/v1/k8s/npu-preview', { node, deviceClass });
+      if (r.ok && r.data.yaml) showOut(`Intel NPU DRA v1 (${node})`, true, r.data.yaml);
+    }
+
+    async function launchNpuJob() {
+      const node = document.getElementById('npu-node-select').value;
+      const deviceClass = document.getElementById('npu-device-class').value;
+      await callApi('POST', '/api/v1/k8s/npu-launch', { node, deviceClass });
+    }
+
+    async function vmAction(action) {
+      const [cluster, namespace, name] = document.getElementById('vm-target-select').value.split('|');
+      await callApi('POST', '/api/v1/vms/lifecycle', { cluster, namespace, name, action });
+    }
+
+    async function finalizeWin11() {
+      await callApi('POST', '/api/v1/vms/finalize-win11');
+    }
+
+    async function verifyRdpTls(launch) {
+      const host = document.getElementById('rdp-host').value;
+      const port = Number(document.getElementById('rdp-port').value || 30389);
+      await callApi('POST', '/api/v1/vms/rdp', { host, port, launch });
+    }
+
+    async function previewVmManifests() {
+      const r = await callApi('GET', '/api/v1/vms/templates');
+      if (r.ok) showOut('KubeVirt Enrolled VM Manifests', true, `# === pits-vms/win11-001 (Finalized) ===\n${r.data.win11}\n# === edge-access-lab/access-lab ===\n${r.data.accessLab}`);
+    }
+
+    refreshOverview().then(() => loadNodeTalosConfig());
+  </script>
+</body>
+</html>

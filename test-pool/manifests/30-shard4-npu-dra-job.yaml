@@ -1,0 +1,89 @@
+# On-demand Shard 4 Hardware Gate: Kubernetes DRA v1 (`resource.k8s.io/v1`) Intel AI Boost NPU
+# allocation & character device verification on `netboot-001` or `netboot-002` (excludes `003` & `004`).
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaim
+metadata:
+  name: testpool-intel-npu-claim
+  namespace: pits-test-pool
+spec:
+  devices:
+    requests:
+      - name: intel-npu
+        exactly:
+          deviceClassName: pits-intel-npu
+          allocationMode: ExactCount
+          count: 1
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: shard4-npu-dra-verify
+  namespace: pits-test-pool
+  labels:
+    pits.io/shard: npu-dra
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 120
+  template:
+    metadata:
+      labels:
+        pits.io/shard: npu-dra
+    spec:
+      serviceAccountName: pits-test-runner
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - netboot-001
+                      - netboot-002
+      resourceClaims:
+        - name: npu
+          resourceClaimName: testpool-intel-npu-claim
+      containers:
+        - name: verify-npu
+          image: docker.io/pits/test-runner:v1.2
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              START_MS=$(date +%s%3N)
+              NODE_HOST="$(uname -n)"
+              ACCEL_DEV="$(ls /dev/accel/accel* 2>/dev/null | head -n 1 || true)"
+              if [ -z "$ACCEL_DEV" ]; then
+                echo '{"shard":"npu-dra","status":"failed","summary":"Missing /dev/accel/accel* inside DRA container"}'
+                exit 1
+              fi
+              DRV_NAME="$(basename "$(readlink -f /sys/class/accel/$(basename "$ACCEL_DEV")/device/driver 2>/dev/null || echo unknown)")"
+              PCI_ID="$(cat /sys/class/accel/$(basename "$ACCEL_DEV")/device/vendor 2>/dev/null || true):$(cat /sys/class/accel/$(basename "$ACCEL_DEV")/device/device 2>/dev/null || true)"
+              END_MS=$(date +%s%3N)
+              jq -cn \
+                --arg node "$NODE_HOST" \
+                --arg dev "$ACCEL_DEV" \
+                --arg drv "$DRV_NAME" \
+                --arg pci "$PCI_ID" \
+                --argjson durationMs "$((END_MS - START_MS))" \
+                '{
+                  shard: "npu-dra",
+                  status: "passed",
+                  exitCode: 0,
+                  node: $node,
+                  durationMs: $durationMs,
+                  summary: ("DRA v1 Intel NPU injected: " + $dev + " (driver=" + $drv + ", pci=" + $pci + ")")
+                }'
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+            claims:
+              - name: npu

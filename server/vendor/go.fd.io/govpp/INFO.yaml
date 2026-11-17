@@ -1,0 +1,60 @@
+---
+project: 'GoVPP'
+project_creation_date: '2017-04-27'
+project_category: 'Integration & Tooling'
+lifecycle_state: 'Incubation'
+project_lead: &govpp_ptl
+  name: 'Ondrej Fabry'
+  email: 'ondrej@fabry.dev'
+  id: 'ondrej-fabry'
+  timezone: 'Europe/Bratislava'
+primary_contact: *govpp_ptl
+issue_tracking:
+  type: 'github'
+  url: 'https://github.com/FDio/govpp/issues'
+mailing_list:
+  type: 'groups.io'
+  url: 'https://lists.fd.io/g/govpp-dev'
+  tag: '<[sub-project_name]>'
+realtime_discussion:
+  type: 'slack'
+  server: 'fdio-project.slack.com'
+  channel: 'govpp'
+meetings:
+  - type: 'zoom'
+    agenda: 'https://wiki.fd.io/view/GoVPP/Meeting#Agenda'
+    url: 'https://zoom.us/j/5301185804'
+    repeats: 'bi-weekly'
+    day: 'thu'
+    time: '13:30 UTC'
+repositories:
+  - 'govpp'
+committers:
+  - <<: *govpp_ptl
+  - name: 'Ondrej Fabry'
+    company: 'cisco'
+    email: 'ofabry@cisco.com'
+    id: 'ondrej-fabry'
+  - name: 'Jan Medved'
+    company: 'cisco'
+    email: 'jmedved@cisco.com'
+    id: 'jmedved'
+  - name: 'Rastislav Szabo'
+    company: 'cisco'
+    email: 'raszabo@cisco.com'
+    id: 'raszabo'
+  - name: 'Vladimir Lavor'
+    company: 'cisco'
+    email: 'vlavor@cisco.com'
+    id: 'vlavor'
+  - name: 'Nathan Skrzypczak'
+    company: 'cisco'
+    email: 'nathan.skrzypczak@gmail.com'
+    id: 'sknat'
+tsc:
+  # yamllint disable rule:line-length
+  approval: ''
+  changes:
+    - type: 'addition'
+      name: 'Nathan Skrzypczak'
+      link: 'https://ircbot.wl.linuxfoundation.org/meetings/fdio-meeting/2022/fd_io_tsc/fdio-meeting-fd_io_tsc.2022-06-16-15.01.html'

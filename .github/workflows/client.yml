@@ -1,0 +1,34 @@
+name: Client (Rust pitsctl)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "client/**"
+      - "deploy/**"
+      - "catalog/**"
+      - ".github/workflows/client.yml"
+  pull_request:
+    paths:
+      - "client/**"
+      - "deploy/**"
+      - "catalog/**"
+      - ".github/workflows/client.yml"
+  workflow_dispatch:
+
+jobs:
+  rust-test:
+    name: Cargo Check & Test (client)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Ensure portal dist placeholder for client/build.rs
+        run: |
+          mkdir -p portal/dist
+          test -f portal/dist/index.html || printf '<!doctype html><html><body>PITS Portal Stub</body></html>\n' > portal/dist/index.html
+      - name: Run cargo check and cargo test
+        working-directory: client
+        run: |
+          cargo check --locked
+          cargo test --locked

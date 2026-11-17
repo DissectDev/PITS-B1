@@ -1,0 +1,18 @@
+{
+  "pits-progress-cron-guard": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./hooks/progress-cron-guard.ps1",
+        "timeout": 10
+      }
+    ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./hooks/progress-cron-guard.ps1",
+        "timeout": 10
+      }
+    ]
+  }
+}

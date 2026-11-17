@@ -1,0 +1,31 @@
+name: Portal (Backstage v1.56 SPA)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "portal/**"
+      - ".github/workflows/portal.yml"
+  pull_request:
+    paths:
+      - "portal/**"
+      - ".github/workflows/portal.yml"
+  workflow_dispatch:
+
+jobs:
+  portal-build:
+    name: TypeScript & Vite Build (portal)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: portal/package-lock.json
+      - name: Install dependencies, typecheck, and build
+        working-directory: portal
+        run: |
+          npm ci --legacy-peer-deps
+          npx tsc --noEmit
+          npm run build

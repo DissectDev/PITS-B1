@@ -1,0 +1,50 @@
+name: Base (Shared NixOS & GitOps)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Base/**"
+      - ".github/workflows/base.yml"
+  pull_request:
+    paths:
+      - "Base/**"
+      - ".github/workflows/base.yml"
+  workflow_dispatch:
+
+jobs:
+  nix-flake-eval:
+    name: NixOS Flake Evaluation (Base)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v30
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+      - name: Evaluate ci-core and ci-core-disko
+        working-directory: Base
+        run: |
+          nix --extra-experimental-features 'nix-command flakes' eval .#nixosConfigurations.ci-core.config.system.build.toplevel.drvPath
+          nix --extra-experimental-features 'nix-command flakes' eval .#nixosConfigurations.ci-core-disko.config.system.build.toplevel.drvPath
+
+  gitops-validate:
+    name: GitOps YAML & Shell Validation (Base)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Base shell scripts & YAML files
+        run: |
+          for f in Base/scripts/*.sh Base/gitops/core-nodes/storage/*.sh; do
+            bash -n "$f"
+          done
+          python3 -c '
+          import glob, sys
+          try:
+              import yaml
+          except ImportError:
+              sys.exit(0)
+          for path in glob.glob("Base/gitops/**/*.yaml", recursive=True):
+              with open(path, "r", encoding="utf-8") as fh:
+                  list(yaml.safe_load_all(fh))
+          print("Validated Base/gitops YAML files.")
+          '

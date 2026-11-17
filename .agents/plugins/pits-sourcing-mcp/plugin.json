@@ -1,0 +1,6 @@
+{
+  "name": "pits-sourcing-mcp",
+  "version": "1.0.0",
+  "description": "DB-first Modern Kraljic x Dutch Windmill Sourcing Governance MCP Server backed by SQLite WAL and optional PostgreSQL sync.",
+  "mcpServers": "./mcp_config.json"
+}

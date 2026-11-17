@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pits-test-pool
+  labels:
+    app.kubernetes.io/part-of: pits-infrastructure
+    pits.io/tier: test-pool
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: baseline
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pits-test-runner
+  namespace: pits-test-pool
+automountServiceAccountToken: false

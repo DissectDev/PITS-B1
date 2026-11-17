@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "pits-sourcing-mcp": {
+      "command": "c:/Project/PITS/Infra/client/target/release/pitsctl.exe",
+      "args": ["mcp"],
+      "env": {
+        "PITS_SOURCING_WORKSPACE": "c:/Project/PITS/Infra"
+      }
+    }
+  }
+}

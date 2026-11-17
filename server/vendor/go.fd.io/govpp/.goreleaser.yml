@@ -1,0 +1,84 @@
+# GoReleser config
+#
+# documentation at http://goreleaser.com
+---
+version: 2
+project_name: govpp
+
+builds:
+  - id: govpp-build
+    main: ./cmd/govpp
+    binary: govpp
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+    ignore:
+      - goos: darwin
+        goarch: "386"
+    mod_timestamp: '{{ .CommitTimestamp }}'
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X go.fd.io/govpp/version.version=v{{.Version}}
+      - -X go.fd.io/govpp/version.commit={{.FullCommit}}
+      - -X go.fd.io/govpp/version.branch={{.Branch}}
+      - -X go.fd.io/govpp/version.buildStamp={{.Timestamp}}
+      - -X go.fd.io/govpp/version.buildUser={{if index .Env "USER"}}{{.Env.USER}}{{else}}goreleaser{{end}}
+      - -X go.fd.io/govpp/version.buildHost={{if index .Env "HOSTNAME"}}{{.Env.HOSTNAME}}{{else}}goreleaser{{end}}
+
+archives:
+  - id: govpp-archive
+    ids:
+      - govpp-build
+    formats: [ 'tar.gz' ]
+    wrap_in_directory: true
+    files:
+      - README.md
+      - docs/*
+    allow_different_binary_count: true
+    name_template: "govpp_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '!^docs:'
+      - typo
+
+dockers:
+  - dockerfile: Dockerfile.govpp
+    skip_push: auto
+    image_templates:
+      - "ghcr.io/fdio/govpp:{{ .Tag }}"
+      - "{{if not .Prerelease}}ghcr.io/fdio/govpp:v{{ .Major }}.{{ .Minor }}{{end}}"
+      - "{{if not .Prerelease}}ghcr.io/fdio/govpp:latest{{end}}"
+    build_flag_templates:
+      - "--pull"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.name={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.source={{.GitURL}}"
+    ids:
+      - govpp-build
+
+sboms:
+  - artifacts: archive
+
+release:
+  github:
+    owner: FDio
+    name: govpp
+  ids:
+    - govpp-archive
+  draft: true
+  prerelease: auto
+  name_template: "{{.Tag}}"

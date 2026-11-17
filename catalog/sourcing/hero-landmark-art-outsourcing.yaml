@@ -1,0 +1,32 @@
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: hero-landmark-art-outsourcing
+  description: 地标建筑 PBR 贴图与 OpenUSD 资产外包制作单元
+  labels:
+    sourcing.company.io/quadrant: non-critical
+    sourcing.company.io/windmill-mismatch: "false"
+  annotations:
+    finops.company.io/cost-allocation-id: "cc-art-ops-052"
+    sourcing.company.io/adapter-abstracted: "true"
+spec:
+  type: outsourced-dev
+  owner: group:default/operators
+  system: pits-city-pipeline
+  sourcingAudit:
+    contractMeta:
+      vendorName: "Veloce Digital Studio"
+      renewalDate: "2027-12-31"
+      lastAuditedAt: "2026-11-15"
+      baselineProdDependents: 1
+      blindScoreVarianceAlert: false
+    manualScores:
+      y2_coreCompetitiveness: 2.0
+      y4_priceElasticity: 3.0
+      x2_marketScarcity: 1.5
+      x3_customizationDepth: 2.0
+      x4_complianceFragility: 1.5
+    supplierPreference:
+      estimatedWalletShareTier: "over-15pct"
+      accountAttractivenessScore: 4.3
+      perceivedStatus: "development"

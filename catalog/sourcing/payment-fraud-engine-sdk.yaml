@@ -1,0 +1,35 @@
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: payment-fraud-engine-sdk
+  description: 第三方实时交易反欺诈闭源算法 SDK
+  labels:
+    sourcing.company.io/quadrant: strategic
+    sourcing.company.io/windmill-mismatch: "true"
+  annotations:
+    # 关联 FinOps 成本中心 ID，绝不在公开仓库明文存储敏感合同底价
+    finops.company.io/cost-allocation-id: "cc-sec-089"
+    sourcing.company.io/adapter-abstracted: "false"
+spec:
+  type: commercial-sdk
+  owner: group:default/risk-engineering
+  system: core-checkout
+  sourcingAudit:
+    contractMeta:
+      vendorName: "Acme RiskTech"
+      renewalDate: "2027-03-31"
+      lastAuditedAt: "2026-11-15"
+      baselineProdDependents: 3
+      blindScoreVarianceAlert: false
+    # 手动盲评汇总维度（1-5分）；Y1、Y3、X1 由 FactRetriever 自动计算覆盖
+    manualScores:
+      y2_coreCompetitiveness: 4.5
+      y4_priceElasticity: 2.0
+      x2_marketScarcity: 4.5
+      x3_customizationDepth: 4.0
+      x4_complianceFragility: 5.0
+    # 荷兰风车双向反审（乙方视角评估）
+    supplierPreference:
+      estimatedWalletShareTier: "under-1pct"
+      accountAttractivenessScore: 2.2
+      perceivedStatus: "nuisance"

@@ -1,0 +1,94 @@
+version: v2beta1
+name: pits-test-pool
+
+vars:
+  CLIENT_DIR: ..
+  POOL_NS: pits-test-pool
+
+deployments:
+  namespace-rbac:
+    namespace: ${POOL_NS}
+    kubectl:
+      manifests:
+        - manifests/00-namespace-rbac.yaml
+
+  warm-pool:
+    namespace: ${POOL_NS}
+    kubectl:
+      manifests:
+        - manifests/10-warm-pool-deployments.yaml
+
+  agent-sandbox-pool:
+    namespace: ${POOL_NS}
+    kubectl:
+      manifests:
+        - manifests/20-agent-sandbox-warmpool.yaml
+
+pipelines:
+  deploy: |-
+    create_deployments namespace-rbac
+    create_deployments warm-pool
+    kubectl -n "${POOL_NS}" rollout status deploy/runner-rust deploy/runner-go-linux deploy/runner-portal-e2e --timeout=180s
+    create_deployments agent-sandbox-pool
+
+  shard-rust: |-
+    devspace sync -n "${POOL_NS}" --no-warn --pick=false --no-watch --upload-only --initial-sync=mirrorLocal \
+      -l pits.io/shard=rust \
+      --path "${CLIENT_DIR}/deploy:/ramdisk/work/deploy"
+    devspace sync -n "${POOL_NS}" --no-warn --pick=false --no-watch --upload-only --initial-sync=mirrorLocal \
+      -l pits.io/shard=rust \
+      -e "target/**" -e "bin/**" -e "*.exe" -e "*.pdb" \
+      --path "${CLIENT_DIR}/client:/ramdisk/work/client"
+    exec_container -n "${POOL_NS}" --label-selector pits.io/shard=rust -- /usr/local/bin/runner-verify-shard rust
+
+  shard-go: |-
+    devspace sync -n "${POOL_NS}" --no-warn --pick=false --no-watch --upload-only --initial-sync=mirrorLocal \
+      -l pits.io/shard=go-linux \
+      -e "vendor/**" -e "bin/**" -e "*.exe" \
+      --path "${CLIENT_DIR}/server:/ramdisk/work/server"
+    exec_container -n "${POOL_NS}" --label-selector pits.io/shard=go-linux -- /usr/local/bin/runner-verify-shard go-linux
+
+  shard-portal: |-
+    devspace sync -n "${POOL_NS}" --no-warn --pick=false --no-watch --upload-only --initial-sync=mirrorLocal \
+      -l pits.io/shard=portal-e2e \
+      --path "${CLIENT_DIR}/deploy:/ramdisk/work/deploy"
+    devspace sync -n "${POOL_NS}" --no-warn --pick=false --no-watch --upload-only --initial-sync=mirrorLocal \
+      -l pits.io/shard=portal-e2e \
+      -e "node_modules/**" -e "dist/**" \
+      --path "${CLIENT_DIR}/portal:/ramdisk/work/portal"
+    devspace sync -n "${POOL_NS}" --no-warn --pick=false --no-watch --upload-only --initial-sync=mirrorLocal \
+      -l pits.io/shard=portal-e2e \
+      -e "target/**" -e "bin/**" -e "*.exe" -e "*.pdb" \
+      --path "${CLIENT_DIR}/client:/ramdisk/work/client"
+    exec_container -n "${POOL_NS}" --label-selector pits.io/shard=portal-e2e -- /usr/local/bin/runner-verify-shard portal-e2e
+
+  shard-npu-dra: |-
+    kubectl -n "${POOL_NS}" delete job/shard4-npu-dra-verify resourceclaim/testpool-intel-npu-claim --ignore-not-found || true
+    kubectl -n "${POOL_NS}" apply -f manifests/30-shard4-npu-dra-job.yaml
+    kubectl -n "${POOL_NS}" wait --for=condition=complete job/shard4-npu-dra-verify --timeout=30s
+    kubectl -n "${POOL_NS}" logs job/shard4-npu-dra-verify
+    kubectl -n "${POOL_NS}" delete job/shard4-npu-dra-verify resourceclaim/testpool-intel-npu-claim --ignore-not-found || true
+
+  # Default 3-node parallel verification (Rust on 001 + Linux Go -race on 002 + Portal Build & Chromium E2E on 003)
+  verify: |-
+    rc=0
+    run_pipelines shard-rust & p1=$!
+    run_pipelines shard-go & p2=$!
+    run_pipelines shard-portal & p3=$!
+    wait $p1 || rc=1
+    wait $p2 || rc=1
+    wait $p3 || rc=1
+    exit $rc
+
+  # Full 4-way parallel verification including Intel AI Boost NPU DRA v1 hardware claim
+  verify-full: |-
+    rc=0
+    run_pipelines shard-rust & p1=$!
+    run_pipelines shard-go & p2=$!
+    run_pipelines shard-portal & p3=$!
+    run_pipelines shard-npu-dra & p4=$!
+    wait $p1 || rc=1
+    wait $p2 || rc=1
+    wait $p3 || rc=1
+    wait $p4 || rc=1
+    exit $rc

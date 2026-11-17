@@ -1,0 +1,103 @@
+# Alternative declarative Kubernetes/GitOps deployment on NixOS `pits-core` RKE2
+# (following the same host-mounted container pattern as `pits-storage/btrfs-manager`).
+# Requires staging the static binary at `/var/lib/pits/agent/bin/pits-agent` (0755)
+# and mTLS PKI at `/var/lib/pits/agent/pki/{ca.crt,server.crt,server.key}` (0600).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pits-system
+  labels:
+    pits.io/fault-domain: core
+    pits.io/tier: control
+    pod-security.kubernetes.io/enforce: privileged
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: pits-agent
+  namespace: pits-system
+spec:
+  selector:
+    matchLabels:
+      app: pits-agent
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: pits-agent
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: pits-core
+      hostNetwork: true
+      hostPID: true
+      dnsPolicy: ClusterFirstWithHostNet
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/etcd
+          operator: Exists
+          effect: NoExecute
+      containers:
+        - name: pits-agent
+          image: docker.io/library/pits-btrfs-manager:6.19.1-20261108
+          imagePullPolicy: Never
+          command:
+            - /host-agent/bin/pits-agent
+            - -listen=0.0.0.0:18443
+            - -tls-ca=/host-agent/pki/ca.crt
+            - -tls-cert=/host-agent/pki/server.crt
+            - -tls-key=/host-agent/pki/server.key
+            - -kubeconfig=/etc/rancher/rke2/rke2.yaml
+            - -lab-netns=auto
+          securityContext:
+            privileged: true
+            runAsUser: 0
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
+          volumeMounts:
+            - name: host-agent
+              mountPath: /host-agent
+              readOnly: true
+            - name: rke2-cfg
+              mountPath: /etc/rancher/rke2/rke2.yaml
+              readOnly: true
+            - name: configfs-nvmet
+              mountPath: /sys/kernel/config/nvmet
+            - name: storage
+              mountPath: /srv/pits-storage
+            - name: btrfs-state
+              mountPath: /var/lib/pits/btrfs-manager
+            - name: tink-data
+              mountPath: /var/lib/pits/tinkerbell-20261108
+      volumes:
+        - name: host-agent
+          hostPath:
+            path: /var/lib/pits/agent
+            type: Directory
+        - name: rke2-cfg
+          hostPath:
+            path: /etc/rancher/rke2/rke2.yaml
+            type: File
+        - name: configfs-nvmet
+          hostPath:
+            path: /sys/kernel/config/nvmet
+            type: DirectoryOrCreate
+        - name: storage
+          hostPath:
+            path: /srv/pits-storage
+            type: Directory
+        - name: btrfs-state
+          hostPath:
+            path: /var/lib/pits/btrfs-manager
+            type: DirectoryOrCreate
+        - name: tink-data
+          hostPath:
+            path: /var/lib/pits/tinkerbell-20261108
+            type: DirectoryOrCreate

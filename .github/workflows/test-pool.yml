@@ -1,0 +1,39 @@
+name: TestPool (DevSpace & Sandboxes)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "test-pool/**"
+      - ".github/workflows/test-pool.yml"
+  pull_request:
+    paths:
+      - "test-pool/**"
+      - ".github/workflows/test-pool.yml"
+  workflow_dispatch:
+
+jobs:
+  validate-test-pool:
+    name: Validate TestPool Scripts & Manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Syntax check shell & node scripts and YAML manifests
+        run: |
+          bash -n test-pool/scripts/runner-verify-shard.sh
+          node --check test-pool/scripts/portal-headless-e2e.mjs
+          python3 -m py_compile test-pool/image/import-to-talos-cache.py
+          python3 -c '
+          import glob, sys
+          try:
+              import yaml
+          except ImportError:
+              sys.exit(0)
+          for path in ["test-pool/devspace.yaml"] + glob.glob("test-pool/manifests/*.yaml"):
+              with open(path, "r", encoding="utf-8") as fh:
+                  list(yaml.safe_load_all(fh))
+          print("Validated test-pool YAML files.")
+          '

@@ -1,0 +1,221 @@
+# Dedicated 3-Node Zero-Cold-Start Warm Pool on `cluster-pits-lab` (`netboot-001..003`).
+# Strictly excludes `netboot-004` (which hosts workstation VM `win11-001`) and uses pure
+# DDR5 `emptyDir: { medium: Memory }` (`tmpfs`) for zero SAN / NVMe disk wear.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: runner-rust
+  namespace: pits-test-pool
+  labels:
+    app.kubernetes.io/name: pits-test-runner
+    pits.io/pool: warm-static
+    pits.io/shard: rust
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pits-test-runner
+      pits.io/shard: rust
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pits-test-runner
+        pits.io/pool: warm-static
+        pits.io/shard: rust
+    spec:
+      serviceAccountName: pits-test-runner
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - netboot-001
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      - netboot-004
+      containers:
+        - name: runner
+          image: docker.io/pits/test-runner:v1.2
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: "20"
+              memory: 12Gi
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "test -x /tmp/devspacehelper"]
+            initialDelaySeconds: 1
+            periodSeconds: 10
+          volumeMounts:
+            - name: ramdisk
+              mountPath: /ramdisk
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: ramdisk
+          emptyDir:
+            medium: Memory
+            sizeLimit: 10Gi
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: runner-go-linux
+  namespace: pits-test-pool
+  labels:
+    app.kubernetes.io/name: pits-test-runner
+    pits.io/pool: warm-static
+    pits.io/shard: go-linux
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pits-test-runner
+      pits.io/shard: go-linux
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pits-test-runner
+        pits.io/pool: warm-static
+        pits.io/shard: go-linux
+    spec:
+      serviceAccountName: pits-test-runner
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - netboot-002
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      - netboot-004
+      containers:
+        - name: runner
+          image: docker.io/pits/test-runner:v1.2
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: "20"
+              memory: 10Gi
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "test -x /tmp/devspacehelper"]
+            initialDelaySeconds: 1
+            periodSeconds: 10
+          volumeMounts:
+            - name: ramdisk
+              mountPath: /ramdisk
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: ramdisk
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: runner-portal-e2e
+  namespace: pits-test-pool
+  labels:
+    app.kubernetes.io/name: pits-test-runner
+    pits.io/pool: warm-static
+    pits.io/shard: portal-e2e
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pits-test-runner
+      pits.io/shard: portal-e2e
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pits-test-runner
+        pits.io/pool: warm-static
+        pits.io/shard: portal-e2e
+    spec:
+      serviceAccountName: pits-test-runner
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - netboot-003
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      - netboot-004
+      containers:
+        - name: runner
+          image: docker.io/pits/test-runner:v1.2
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: PITS_PREWARM_PORTAL_DEPS
+              value: "1"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: "14"
+              memory: 11Gi
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "test -x /tmp/devspacehelper"]
+            initialDelaySeconds: 1
+            periodSeconds: 10
+          volumeMounts:
+            - name: ramdisk
+              mountPath: /ramdisk
+            - name: tmp
+              mountPath: /tmp
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: ramdisk
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
