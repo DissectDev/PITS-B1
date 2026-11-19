@@ -1,0 +1,51 @@
+apiVersion: storage.ai.pits.io/v1alpha1
+kind: AIStorageWorkspace
+metadata:
+  name: pits-agent-space
+  namespace: pits-cicd
+spec:
+  projectName: pits
+  environment: lab-rustfs
+  excludeNodes:
+    - netboot-004
+  domain: mcp.lab.martensite.dev
+  storage:
+    stateStorageClass: mayastor-2
+    cacheStorageClass: openebs-single-replica
+    rustfsSize: 40Gi
+    dbSize: 10Gi
+  images:
+    aiStore: docker.io/pits/ai-store:v0.1.0
+    rustfs: docker.io/rustfs/rustfs:latest
+    valkey: docker.io/valkey/valkey:8-alpine
+    postgres: ghcr.io/cloudnative-pg/postgresql:17.6
+  archetypes:
+    workspace:
+      enabled: true
+      pvcSize: 20Gi
+    memory:
+      enabled: true
+      ttlDays: 90
+    knowledge:
+      enabled: true
+      enableVector: true
+      enableTrigram: true
+    datasets:
+      enabled: true
+      cacheSize: 20Gi
+    artifacts:
+      enabled: true
+      maxFileSizeMB: 512
+    traces:
+      enabled: true
+      format: jsonl
+      flushIntervalSec: 15
+    state:
+      enabled: true
+    sharedDrive:
+      enabled: true
+  mcp:
+    replicas: 1
+    port: 8787
+    toolsPreset: full
+    authMode: keycloak-jwt

@@ -7,7 +7,7 @@ import (
 	"net"
 )
 
-func dialInNetns(ctx context.Context, _ string, addr string) (net.Conn, error) {
+func dialInNetns(ctx context.Context, _ string, addr string, _ RoutePlan) (net.Conn, error) {
 	var d net.Dialer
 	return d.DialContext(ctx, "tcp", addr)
 }

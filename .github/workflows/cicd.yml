@@ -1,0 +1,237 @@
+name: CICD (Lab Crossplane & GitOps Platform)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "CICD/**"
+      - ".github/workflows/cicd.yml"
+  pull_request:
+    paths:
+      - "CICD/**"
+      - ".github/workflows/cicd.yml"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Artifact target to promote via CICD/scripts/Deploy-CoreArtifacts.ps1"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - portal
+          - agent
+          - test-runner
+          - cicd-runner
+          - windows
+          - base
+      dry_run:
+        description: "Run Deploy-CoreArtifacts.ps1 with -DryRun"
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  validate-cicd:
+    name: Validate CICD Manifests, Scripts & netboot-004 Exclusion
+    runs-on: pits-lab-rust
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check bash scripts, PowerShell handover scripts & safety guards
+        run: |
+          set -euo pipefail
+          for bin in bash python3; do
+            if ! command -v "$bin" >/dev/null 2>&1; then
+              echo "Missing required toolchain binary: $bin" >&2
+              exit 1
+            fi
+          done
+          while IFS= read -r -d '' sh_file; do
+            bash -n "$sh_file"
+          done < <(find CICD -type f -name '*.sh' -print0)
+
+          python3 -c '
+          import glob, pathlib, re
+
+          forbidden = ["machine.install", "machine.disks", "DiskWipeConfig", "UnattendedInstallConfig"]
+          for p in sorted(glob.glob("CICD/**/*", recursive=True)):
+              path = pathlib.Path(p)
+              if not path.is_file():
+                  continue
+              text = path.read_text(encoding="utf-8")
+              for marker in forbidden:
+                  if marker in text:
+                      raise SystemExit(f"Forbidden Talos netboot marker {marker!r} found in {p}")
+
+          ps_files = sorted(glob.glob("CICD/**/*.ps1", recursive=True)) + ["deploy/nixos/promote-portal.ps1"]
+          for p in ps_files:
+              text = pathlib.Path(p).read_text(encoding="utf-8")
+              if not text.strip():
+                  raise SystemExit(f"Empty PowerShell script: {p}")
+
+          deploy_text = pathlib.Path("CICD/scripts/Deploy-CoreArtifacts.ps1").read_text(encoding="utf-8")
+          assert "promote-portal.ps1" in deploy_text, "Deploy-CoreArtifacts.ps1 must delegate portal promotion"
+          assert "\"windows\"" in deploy_text, "Deploy-CoreArtifacts.ps1 must support windows target"
+          invoke_text = pathlib.Path("CICD/scripts/Invoke-CicdPipeline.ps1").read_text(encoding="utf-8")
+          assert "\"windows\"" in invoke_text, "Invoke-CicdPipeline.ps1 must support windows DeployTarget"
+          runner_nix = pathlib.Path("CICD/image/cicd-runner-image.nix").read_text(encoding="utf-8")
+          assert "x86_64-pc-windows-gnu" in runner_nix, "cicd-runner-image.nix must configure x86_64-pc-windows-gnu"
+          promote_text = pathlib.Path("deploy/nixos/promote-portal.ps1").read_text(encoding="utf-8")
+          assert "Deploy-CoreArtifacts.ps1" in promote_text, "promote-portal.ps1 must document/support CICD handover"
+          print(f"Verified {len(ps_files)} PowerShell scripts and Talos netboot guards.")
+          '
+
+          if command -v pwsh >/dev/null 2>&1; then
+            pwsh -NoProfile -Command '
+              $files = Get-ChildItem -Recurse -File CICD -Include *.ps1 | Select-Object -ExpandProperty FullName
+              $files += (Resolve-Path "deploy/nixos/promote-portal.ps1").Path
+              foreach ($f in $files) {
+                $tokens = $null; $errors = $null
+                $null = [System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$tokens, [ref]$errors)
+                if ($errors -and $errors.Count -gt 0) {
+                  throw "PowerShell syntax error in ${f}: $($errors[0].Message)"
+                }
+              }
+              Write-Host "pwsh AST syntax check passed for $($files.Count) scripts."
+            '
+          fi
+
+      - name: Validate all CICD YAML manifests & assert netboot-004 exclusion
+        run: |
+          set -euo pipefail
+          python3 -c '
+          import glob, re, yaml
+
+          def has_netboot004_exclusion(affinity_obj):
+              terms = (
+                  (affinity_obj or {})
+                  .get("nodeAffinity", {})
+                  .get("requiredDuringSchedulingIgnoredDuringExecution", {})
+                  .get("nodeSelectorTerms", [])
+              )
+              for term in terms:
+                  for expr in term.get("matchExpressions", []):
+                      if (
+                          expr.get("key") == "kubernetes.io/hostname"
+                          and expr.get("operator") == "NotIn"
+                          and "netboot-004" in (expr.get("values") or [])
+                      ):
+                          return True
+              return False
+
+          yaml_files = sorted(
+              glob.glob("CICD/**/*.yaml", recursive=True)
+              + glob.glob("CICD/**/*.yml", recursive=True)
+          )
+          assert yaml_files, "No YAML files found under CICD/"
+
+          checked_workloads = 0
+          for path in yaml_files:
+              with open(path, "r", encoding="utf-8") as fh:
+                  docs = [d for d in yaml.safe_load_all(fh) if d is not None]
+              for doc in docs:
+                  if not isinstance(doc, dict):
+                      continue
+                  kind = doc.get("kind")
+                  name = (doc.get("metadata") or {}).get("name", "<unnamed>")
+                  if kind == "Deployment":
+                      checked_workloads += 1
+                      aff = ((doc.get("spec") or {}).get("template") or {}).get("spec", {}).get("affinity")
+                      if not has_netboot004_exclusion(aff):
+                          raise SystemExit(f"Deployment {name} in {path} missing netboot-004 NotIn exclusion")
+                  elif kind == "Job":
+                      checked_workloads += 1
+                      aff = ((doc.get("spec") or {}).get("template") or {}).get("spec", {}).get("affinity")
+                      if not has_netboot004_exclusion(aff):
+                          raise SystemExit(f"Job {name} in {path} missing netboot-004 NotIn exclusion")
+                  elif kind == "Cluster":
+                      checked_workloads += 1
+                      aff = (doc.get("spec") or {}).get("affinity")
+                      if not has_netboot004_exclusion(aff):
+                          raise SystemExit(f"Cluster {name} in {path} missing netboot-004 NotIn exclusion")
+                  elif kind == "DeploymentRuntimeConfig":
+                      checked_workloads += 1
+                      aff = ((((doc.get("spec") or {}).get("deploymentTemplate") or {}).get("spec") or {}).get("template") or {}).get("spec", {}).get("affinity")
+                      if not has_netboot004_exclusion(aff):
+                          raise SystemExit(f"DeploymentRuntimeConfig {name} in {path} missing netboot-004 NotIn exclusion")
+                  elif kind == "LabDevStack":
+                      excl = (doc.get("spec") or {}).get("excludeNodes") or []
+                      if "netboot-004" not in excl:
+                          raise SystemExit(f"LabDevStack {name} in {path} missing netboot-004 in spec.excludeNodes")
+                  elif kind == "GitRepository":
+                      ignore = (doc.get("spec") or {}).get("ignore") or ""
+                      assert "!/CICD/" in ignore and "Base" not in ignore, f"GitRepository {name} must scope to CICD/ and exclude Base/"
+                  elif kind == "Composition":
+                      steps = (doc.get("spec") or {}).get("pipeline") or []
+                      for step in steps:
+                          tmpl = (((step.get("input") or {}).get("inline") or {}).get("template")) or ""
+                          if not tmpl:
+                              continue
+                          # Replace Go-template directives with concrete Lab defaults to validate rendered objects
+                          rendered = re.sub(r"\{\{-?.*?\}\}", lambda m: "[\"netboot-004\"]" if "excludeNodes" in m.group(0) else "tmpl-val", tmpl, flags=re.DOTALL)
+                          rendered = "\n".join(
+                              line for line in rendered.splitlines()
+                              if not re.match(r"^\s*(?:tmpl-val|\[\"netboot-004\"\])\s*$", line)
+                          )
+                          inner_docs = [d for d in yaml.safe_load_all(rendered) if isinstance(d, dict)]
+                          for idoc in inner_docs:
+                              ikind = idoc.get("kind")
+                              iname = (idoc.get("metadata") or {}).get("name", "<unnamed>")
+                              if ikind == "Object":
+                                  man = ((idoc.get("spec") or {}).get("forProvider") or {}).get("manifest") or {}
+                                  mkind = man.get("kind")
+                                  mname = (man.get("metadata") or {}).get("name", iname)
+                                  if mkind in ("Deployment", "Job"):
+                                      checked_workloads += 1
+                                      aff = ((man.get("spec") or {}).get("template") or {}).get("spec", {}).get("affinity")
+                                      if not has_netboot004_exclusion(aff):
+                                          raise SystemExit(f"Composition {mkind} {mname} missing netboot-004 NotIn exclusion")
+                                  elif mkind == "Cluster":
+                                      checked_workloads += 1
+                                      aff = (man.get("spec") or {}).get("affinity")
+                                      if not has_netboot004_exclusion(aff):
+                                          raise SystemExit(f"Composition Cluster {mname} missing netboot-004 NotIn exclusion")
+                              elif ikind == "Release":
+                                  checked_workloads += 1
+                                  vals = ((idoc.get("spec") or {}).get("forProvider") or {}).get("values") or {}
+                                  if not has_netboot004_exclusion(vals.get("affinity")):
+                                      raise SystemExit(f"Composition Helm Release {iname} missing netboot-004 NotIn exclusion")
+
+          with open("CICD/crossplane/core/values.yaml", "r", encoding="utf-8") as fh:
+              xp_vals = yaml.safe_load(fh)
+          assert has_netboot004_exclusion(xp_vals.get("affinity")), "Crossplane values.yaml affinity missing netboot-004 NotIn"
+          assert has_netboot004_exclusion((xp_vals.get("rbacManager") or {}).get("affinity")), "Crossplane values.yaml rbacManager.affinity missing netboot-004 NotIn"
+          checked_workloads += 2
+
+          print(f"Validated {len(yaml_files)} CICD YAML files and {checked_workloads} workload/runtime netboot-004 exclusions.")
+          '
+
+  deploy-core-artifacts:
+    name: CD Handover Hook (Deploy-CoreArtifacts)
+    needs: validate-cicd
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: pits-lab-rust
+    steps:
+      - uses: actions/checkout@v4
+      - name: Execute or stage CICD/scripts/Deploy-CoreArtifacts.ps1
+        env:
+          CD_TARGET: ${{ inputs.target || 'all' }}
+          CD_DRY_RUN: ${{ inputs.dry_run || 'true' }}
+        run: |
+          set -euo pipefail
+          test -f CICD/scripts/Deploy-CoreArtifacts.ps1
+          test -f deploy/nixos/promote-portal.ps1
+          if command -v pwsh >/dev/null 2>&1; then
+            DRY_FLAG=""
+            if [ "$CD_DRY_RUN" = "true" ]; then
+              DRY_FLAG="-DryRun"
+            fi
+            pwsh -NoProfile -ExecutionPolicy Bypass -File CICD/scripts/Deploy-CoreArtifacts.ps1 \
+              -Target "$CD_TARGET" -SkipVerify $DRY_FLAG
+          elif [ "$CD_DRY_RUN" = "true" ]; then
+            echo "[CD Handover DryRun] Verified CICD/scripts/Deploy-CoreArtifacts.ps1 for target=${CD_TARGET}."
+            echo "Run on win11-001 workstation: powershell -NoProfile -ExecutionPolicy Bypass -File c:\\Project\\PITS\\Infra\\CICD\\scripts\\Deploy-CoreArtifacts.ps1 -Target ${CD_TARGET}"
+          else
+            echo "ERROR: non-dry-run CD promotion requires pwsh + pits-core SSH access (run CICD/scripts/Deploy-CoreArtifacts.ps1 from win11-001)." >&2
+            exit 1
+          fi

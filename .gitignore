@@ -4,9 +4,13 @@ result-*
 .direnv/
 *.swp
 
-# Rust (`client/`)
+# Rust (`client/` & `ai-storage/`)
 client/target/
 client/bin/
+ai-storage/target/
+ai-storage/bin/
+ai-storage/.ai-store/
+.ai-store/
 
 # Node / Portal (`portal/`)
 portal/node_modules/

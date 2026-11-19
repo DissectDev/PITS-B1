@@ -31,7 +31,71 @@ pub struct ClusterControlPlaneSummary {
     pub total_pods: usize,
     pub bound_pvs: usize,
     pub npu_slices: Vec<NpuSliceSummary>,
+    #[serde(default)]
+    pub dra_slices: Vec<DraSliceSummary>,
+    #[serde(default)]
+    pub dra_claims: Vec<DraClaimAllocation>,
+    #[serde(default)]
+    pub device_plugin_gpu_used: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub device_classes: Vec<String>,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DraClaimAllocation {
+    pub namespace: String,
+    pub name: String,
+    pub driver: String,
+    pub pool: String,
+    pub device: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_name: Option<String>,
+    #[serde(default)]
+    pub allocated: bool,
+    #[serde(default)]
+    pub consumer_pods: Vec<String>,
+    #[serde(default)]
+    pub consumer_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AcceleratorOccupancy {
+    pub total: usize,
+    pub allocated: usize,
+    pub occupancy_pct: f64,
+    pub consumer_pods: Vec<String>,
+    pub claim_names: Vec<String>,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraDeviceSummary {
+    pub name: String,
+    pub vendor: Option<String>,
+    pub model: Option<String>,
+    pub product_name: Option<String>,
+    pub architecture: Option<String>,
+    pub uuid: Option<String>,
+    pub pci_address: Option<String>,
+    pub kernel_driver: Option<String>,
+    pub driver_version: Option<String>,
+    pub memory: Option<String>,
+    #[serde(default)]
+    pub attributes: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraSliceSummary {
+    pub slice_name: String,
+    pub node_name: String,
+    pub driver: String,
+    pub device_class: String,
+    pub devices: Vec<DraDeviceSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,6 +145,10 @@ pub async fn inspect_cluster_summary(kc: &KubeClient) -> ClusterControlPlaneSumm
         total_pods: 0,
         bound_pvs: 0,
         npu_slices: Vec::new(),
+        dra_slices: Vec::new(),
+        dra_claims: Vec::new(),
+        device_plugin_gpu_used: BTreeMap::new(),
+        device_classes: Vec::new(),
         error: None,
     };
 
@@ -159,6 +227,8 @@ pub async fn inspect_cluster_summary(kc: &KubeClient) -> ClusterControlPlaneSumm
                             || k.starts_with("hugepages-")
                             || k.contains("intel")
                             || k.contains("amd")
+                            || k.contains("nvidia")
+                            || k.contains("gpu")
                             || k.contains("kubevirt.io/")
                         {
                             if let Some(s) = v.as_str() {
@@ -239,7 +309,22 @@ pub async fn inspect_cluster_summary(kc: &KubeClient) -> ClusterControlPlaneSumm
         }
     }
 
-    // Kubernetes v1.37+ DRA v1 ResourceSlice discovery (`resource.k8s.io/v1`)
+    // Kubernetes DRA v1 DeviceClasses + ResourceSlice discovery (`resource.k8s.io/v1`)
+    if let Ok(dcs) = kc
+        .get_json::<serde_json::Value>("/apis/resource.k8s.io/v1/deviceclasses")
+        .await
+    {
+        if let Some(items) = dcs.get("items").and_then(|v| v.as_array()) {
+            for item in items {
+                if let Some(name) = item.pointer("/metadata/name").and_then(|v| v.as_str()) {
+                    out.device_classes.push(name.to_string());
+                }
+            }
+            out.device_classes.sort();
+            out.device_classes.dedup();
+        }
+    }
+
     if let Ok(slices) = kc
         .get_json::<serde_json::Value>("/apis/resource.k8s.io/v1/resourceslices")
         .await
@@ -251,15 +336,578 @@ pub async fn inspect_cluster_summary(kc: &KubeClient) -> ClusterControlPlaneSumm
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                if driver != PITS_NPU_DRA_DRIVER && !driver.to_lowercase().contains("npu") {
-                    continue;
+                out.dra_slices.push(parse_dra_slice_item(item, &driver));
+                if driver == PITS_NPU_DRA_DRIVER || driver.to_lowercase().contains("npu") {
+                    out.npu_slices.push(parse_npu_slice_item(item, driver));
                 }
-                out.npu_slices.push(parse_npu_slice_item(item, driver));
             }
         }
     }
 
+    if let Ok(claims) = kc
+        .get_json::<serde_json::Value>("/apis/resource.k8s.io/v1/resourceclaims")
+        .await
+    {
+        out.dra_claims = parse_dra_claims_list(&claims);
+    }
+
+    if cluster_has_gpu_allocatable(&out.nodes) {
+        if let Ok(active_pods) = kc
+            .get_json::<serde_json::Value>(
+                "/api/v1/pods?fieldSelector=status.phase%21%3DSucceeded,status.phase%21%3DFailed",
+            )
+            .await
+        {
+            out.device_plugin_gpu_used = parse_pod_device_plugin_gpu_usage(&active_pods);
+        }
+    }
+
     out
+}
+
+pub(crate) fn is_gpu_allocatable_key(key: &str) -> bool {
+    let kl = key.to_ascii_lowercase();
+    kl == "nvidia.com/gpu" || kl == "amd.com/gpu" || kl.starts_with("gpu.intel.com/")
+}
+
+pub(crate) fn is_gpu_dra_driver(driver: &str) -> bool {
+    let drv = driver.to_ascii_lowercase();
+    drv.contains("gpu") || drv.contains("nvidia")
+}
+
+pub(crate) fn is_npu_dra_driver(driver: &str) -> bool {
+    let drv = driver.to_ascii_lowercase();
+    driver == PITS_NPU_DRA_DRIVER || drv.contains("npu")
+}
+
+pub(crate) fn cluster_has_gpu_allocatable(nodes: &[KubeNodeSummary]) -> bool {
+    nodes.iter().any(|n| {
+        n.custom_allocatable
+            .iter()
+            .any(|(k, v)| is_gpu_allocatable_key(k) && v.trim().parse::<usize>().unwrap_or(0) > 0)
+    })
+}
+
+/// Parses Kubernetes `/apis/resource.k8s.io/v1/resourceclaims` into allocated device claims.
+pub(crate) fn parse_dra_claims_list(val: &serde_json::Value) -> Vec<DraClaimAllocation> {
+    let Some(items) = val.get("items").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for item in items {
+        let ns = item
+            .pointer("/metadata/namespace")
+            .and_then(|v| v.as_str())
+            .unwrap_or("default")
+            .to_string();
+        let name = item
+            .pointer("/metadata/name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let Some(results) = item
+            .pointer("/status/allocation/devices/results")
+            .and_then(|v| v.as_array())
+        else {
+            continue;
+        };
+        if results.is_empty() {
+            continue;
+        }
+        let mut selector_node: Option<String> = None;
+        if let Some(terms) = item
+            .pointer("/status/allocation/nodeSelector/nodeSelectorTerms")
+            .and_then(|v| v.as_array())
+        {
+            for term in terms {
+                if let Some(fields) = term.get("matchFields").and_then(|v| v.as_array()) {
+                    for f in fields {
+                        if f.get("key").and_then(|v| v.as_str()) == Some("metadata.name") {
+                            if let Some(v) = f
+                                .get("values")
+                                .and_then(|a| a.as_array())
+                                .and_then(|a| a.first())
+                                .and_then(|v| v.as_str())
+                            {
+                                selector_node = Some(v.to_string());
+                                break;
+                            }
+                        }
+                    }
+                }
+                if selector_node.is_none() {
+                    if let Some(exprs) = term.get("matchExpressions").and_then(|v| v.as_array()) {
+                        for e in exprs {
+                            if e.get("key").and_then(|v| v.as_str())
+                                == Some("kubernetes.io/hostname")
+                            {
+                                if let Some(v) = e
+                                    .get("values")
+                                    .and_then(|a| a.as_array())
+                                    .and_then(|a| a.first())
+                                    .and_then(|v| v.as_str())
+                                {
+                                    selector_node = Some(v.to_string());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                if selector_node.is_some() {
+                    break;
+                }
+            }
+        }
+
+        let mut consumers = Vec::new();
+        if let Some(reserved) = item.pointer("/status/reservedFor").and_then(|v| v.as_array()) {
+            for r in reserved {
+                if let Some(rn) = r.get("name").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                    consumers.push(format!("{ns}/{rn}"));
+                }
+            }
+        }
+        consumers.sort();
+        consumers.dedup();
+
+        for res in results {
+            let driver = res
+                .get("driver")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let pool = res
+                .get("pool")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let device = res
+                .get("device")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let resolved_node = selector_node
+                .clone()
+                .or_else(|| (!pool.is_empty()).then(|| pool.clone()));
+            out.push(DraClaimAllocation {
+                namespace: ns.clone(),
+                name: name.clone(),
+                driver,
+                pool,
+                device,
+                node_name: resolved_node,
+                allocated: true,
+                consumer_count: consumers.len(),
+                consumer_pods: consumers.clone(),
+            });
+        }
+    }
+    out
+}
+
+/// Counts non-terminated DevicePlugin GPU requests/limits per node from a Kubernetes `PodList`.
+pub(crate) fn parse_pod_device_plugin_gpu_usage(val: &serde_json::Value) -> BTreeMap<String, usize> {
+    let mut used = BTreeMap::new();
+    let Some(items) = val.get("items").and_then(|v| v.as_array()) else {
+        return used;
+    };
+    for p in items {
+        let phase = p
+            .pointer("/status/phase")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if phase == "Succeeded" || phase == "Failed" {
+            continue;
+        }
+        let Some(node) = p
+            .pointer("/spec/nodeName")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        let Some(containers) = p.pointer("/spec/containers").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for c in containers {
+            let mut seen_keys = std::collections::BTreeSet::new();
+            for ptr in ["/resources/limits", "/resources/requests"] {
+                if let Some(obj) = c.pointer(ptr).and_then(|v| v.as_object()) {
+                    for (k, v) in obj {
+                        let kl = k.to_ascii_lowercase();
+                        if seen_keys.contains(&kl) || !is_gpu_allocatable_key(&kl) {
+                            continue;
+                        }
+                        let cnt = v
+                            .as_str()
+                            .and_then(|s| s.trim().parse::<usize>().ok())
+                            .or_else(|| v.as_u64().map(|u| u as usize))
+                            .unwrap_or(0);
+                        if cnt > 0 {
+                            *used.entry(node.to_string()).or_insert(0) += cnt;
+                            seen_keys.insert(kl);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    used
+}
+
+fn claim_matches_node(claim: &DraClaimAllocation, node_name: &str) -> bool {
+    claim
+        .node_name
+        .as_deref()
+        .map(|n| n.eq_ignore_ascii_case(node_name))
+        .unwrap_or(false)
+        || claim.pool.eq_ignore_ascii_case(node_name)
+}
+
+/// Computes single-GPU DRA `ResourceClaim` occupancy (`0%` or `100%`) and consuming pods.
+pub(crate) fn compute_gpu_device_occupancy(
+    cp: &ClusterControlPlaneSummary,
+    node_name: &str,
+    driver: &str,
+    device_name: &str,
+) -> AcceleratorOccupancy {
+    let mut pods = Vec::new();
+    let mut claims = Vec::new();
+    let mut allocated = false;
+
+    for c in &cp.dra_claims {
+        if !c.allocated || !is_gpu_dra_driver(&c.driver) {
+            continue;
+        }
+        let driver_ok = c.driver.eq_ignore_ascii_case(driver);
+        let device_ok = c.device.eq_ignore_ascii_case(device_name);
+        let node_ok = claim_matches_node(c, node_name);
+        if driver_ok && device_ok && node_ok {
+            allocated = true;
+            claims.push(format!("{}/{}", c.namespace, c.name));
+            pods.extend(c.consumer_pods.iter().cloned());
+        }
+    }
+    claims.sort();
+    claims.dedup();
+    pods.sort();
+    pods.dedup();
+
+    let alloc_count = if allocated { 1 } else { 0 };
+    AcceleratorOccupancy {
+        total: 1,
+        allocated: alloc_count,
+        occupancy_pct: if allocated { 100.0 } else { 0.0 },
+        consumer_pods: pods,
+        claim_names: claims,
+        source: "dra".to_string(),
+    }
+}
+
+/// Computes node-level DevicePlugin fallback GPU occupancy when DRA slices are absent.
+pub(crate) fn compute_gpu_node_device_plugin_occupancy(
+    cp: &ClusterControlPlaneSummary,
+    node_name: &str,
+    total_gpus: usize,
+) -> AcceleratorOccupancy {
+    let used = cp.device_plugin_gpu_used.get(node_name).copied().unwrap_or(0);
+    let clamped = used.min(total_gpus);
+    let pct = if total_gpus > 0 {
+        ((clamped as f64) * 100.0 / (total_gpus as f64)).min(100.0)
+    } else {
+        0.0
+    };
+    AcceleratorOccupancy {
+        total: total_gpus,
+        allocated: used,
+        occupancy_pct: pct,
+        consumer_pods: Vec::new(),
+        claim_names: Vec::new(),
+        source: "device-plugin".to_string(),
+    }
+}
+
+/// Computes single-node NPU DRA `ResourceClaim` occupancy.
+pub(crate) fn compute_npu_node_occupancy(
+    cp: &ClusterControlPlaneSummary,
+    node_name: &str,
+    total_devices: usize,
+) -> AcceleratorOccupancy {
+    let mut seen_devs = std::collections::BTreeSet::new();
+    let mut pods = Vec::new();
+    let mut claims = Vec::new();
+
+    for c in &cp.dra_claims {
+        if !c.allocated || !is_npu_dra_driver(&c.driver) || !claim_matches_node(c, node_name) {
+            continue;
+        }
+        seen_devs.insert(format!(
+            "{}/{}/{}",
+            c.driver.to_ascii_lowercase(),
+            c.pool.to_ascii_lowercase(),
+            c.device.to_ascii_lowercase()
+        ));
+        claims.push(format!("{}/{}", c.namespace, c.name));
+        pods.extend(c.consumer_pods.iter().cloned());
+    }
+    claims.sort();
+    claims.dedup();
+    pods.sort();
+    pods.dedup();
+
+    let total = total_devices.max(seen_devs.len());
+    let allocated = seen_devs.len();
+    let pct = if total > 0 {
+        ((allocated as f64) * 100.0 / (total as f64)).min(100.0)
+    } else {
+        0.0
+    };
+    AcceleratorOccupancy {
+        total,
+        allocated,
+        occupancy_pct: pct,
+        consumer_pods: pods,
+        claim_names: claims,
+        source: "dra".to_string(),
+    }
+}
+
+/// Computes cluster-wide GPU occupancy (`DRA` primary, `DevicePlugin` fallback).
+pub(crate) fn compute_cluster_gpu_occupancy(cp: &ClusterControlPlaneSummary) -> AcceleratorOccupancy {
+    let dra_total: usize = cp
+        .dra_slices
+        .iter()
+        .filter(|s| is_gpu_dra_driver(&s.driver))
+        .map(|s| s.devices.len())
+        .sum();
+    let total = if dra_total > 0 {
+        dra_total
+    } else {
+        cp.nodes
+            .iter()
+            .flat_map(|n| n.custom_allocatable.iter())
+            .filter(|(k, _)| is_gpu_allocatable_key(k))
+            .filter_map(|(_, v)| v.trim().parse::<usize>().ok())
+            .sum()
+    };
+
+    let mut dra_seen = std::collections::BTreeSet::new();
+    let mut pods = Vec::new();
+    let mut claims = Vec::new();
+    for c in &cp.dra_claims {
+        if !c.allocated || !is_gpu_dra_driver(&c.driver) {
+            continue;
+        }
+        dra_seen.insert(format!(
+            "{}/{}/{}",
+            c.driver.to_ascii_lowercase(),
+            c.pool.to_ascii_lowercase(),
+            c.device.to_ascii_lowercase()
+        ));
+        claims.push(format!("{}/{}", c.namespace, c.name));
+        pods.extend(c.consumer_pods.iter().cloned());
+    }
+    claims.sort();
+    claims.dedup();
+    pods.sort();
+    pods.dedup();
+
+    let (allocated, source) = if !dra_seen.is_empty() {
+        (dra_seen.len(), "dra")
+    } else {
+        let dp_used: usize = cp.device_plugin_gpu_used.values().sum();
+        if dp_used > 0 {
+            (dp_used, "device-plugin")
+        } else if dra_total > 0 {
+            (0, "dra")
+        } else if total > 0 {
+            (0, "device-plugin")
+        } else {
+            (0, "none")
+        }
+    };
+
+    let pct = if total > 0 {
+        ((allocated as f64) * 100.0 / (total as f64)).min(100.0)
+    } else {
+        0.0
+    };
+
+    AcceleratorOccupancy {
+        total,
+        allocated,
+        occupancy_pct: pct,
+        consumer_pods: pods,
+        claim_names: claims,
+        source: source.to_string(),
+    }
+}
+
+/// Computes cluster-wide NPU DRA occupancy.
+pub(crate) fn compute_cluster_npu_occupancy(cp: &ClusterControlPlaneSummary) -> AcceleratorOccupancy {
+    let total_from_npu: usize = cp.npu_slices.iter().map(|s| s.devices.len()).sum();
+    let total_from_dra: usize = cp
+        .dra_slices
+        .iter()
+        .filter(|s| is_npu_dra_driver(&s.driver))
+        .map(|s| s.devices.len())
+        .sum();
+    let total = total_from_npu.max(total_from_dra);
+
+    let mut dra_seen = std::collections::BTreeSet::new();
+    let mut pods = Vec::new();
+    let mut claims = Vec::new();
+    for c in &cp.dra_claims {
+        if !c.allocated || !is_npu_dra_driver(&c.driver) {
+            continue;
+        }
+        dra_seen.insert(format!(
+            "{}/{}/{}",
+            c.driver.to_ascii_lowercase(),
+            c.pool.to_ascii_lowercase(),
+            c.device.to_ascii_lowercase()
+        ));
+        claims.push(format!("{}/{}", c.namespace, c.name));
+        pods.extend(c.consumer_pods.iter().cloned());
+    }
+    claims.sort();
+    claims.dedup();
+    pods.sort();
+    pods.dedup();
+
+    let allocated = dra_seen.len();
+    let pct = if total > 0 {
+        ((allocated as f64) * 100.0 / (total as f64)).min(100.0)
+    } else {
+        0.0
+    };
+    AcceleratorOccupancy {
+        total,
+        allocated,
+        occupancy_pct: pct,
+        consumer_pods: pods,
+        claim_names: claims,
+        source: if total > 0 { "dra" } else { "none" }.to_string(),
+    }
+}
+
+fn extract_dra_attr_text(val: &serde_json::Value) -> Option<String> {
+    if let Some(s) = val
+        .get("string")
+        .or_else(|| val.get("stringValue"))
+        .or_else(|| val.get("version"))
+        .and_then(|v| v.as_str())
+    {
+        return Some(s.to_string());
+    }
+    if let Some(i) = val
+        .get("int")
+        .or_else(|| val.get("intValue"))
+        .and_then(|v| v.as_i64())
+    {
+        return Some(i.to_string());
+    }
+    val.get("bool")
+        .and_then(|v| v.as_bool())
+        .map(|b| b.to_string())
+}
+
+fn infer_dra_device_class(driver: &str) -> String {
+    let low = driver.to_ascii_lowercase();
+    if low == "gpu.nvidia.com" || low.contains("nvidia") {
+        "gpu.nvidia.com".to_string()
+    } else if low.contains("npu") {
+        "pits-intel-npu".to_string()
+    } else {
+        driver.to_string()
+    }
+}
+
+pub(crate) fn parse_dra_slice_item(item: &serde_json::Value, driver: &str) -> DraSliceSummary {
+    let slice_name = item
+        .pointer("/metadata/name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let node_name = item
+        .pointer("/spec/nodeName")
+        .and_then(|v| v.as_str())
+        .unwrap_or("cluster")
+        .to_string();
+    let mut devices = Vec::new();
+    if let Some(devs) = item.pointer("/spec/devices").and_then(|v| v.as_array()) {
+        for d in devs {
+            let dn = d
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unnamed")
+                .to_string();
+            let mut attrs = BTreeMap::new();
+            if let Some(obj) = d.get("attributes").and_then(|v| v.as_object()) {
+                for (k, v) in obj {
+                    if let Some(t) = extract_dra_attr_text(v) {
+                        attrs.insert(k.clone(), t);
+                    }
+                }
+            }
+            let memory = d
+                .pointer("/capacity/memory/value")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            let product_name = attrs
+                .get("productName")
+                .or_else(|| attrs.get("model"))
+                .cloned();
+            let vendor = attrs.get("vendor").cloned().or_else(|| {
+                let low = format!(
+                    "{} {} {}",
+                    driver,
+                    product_name.as_deref().unwrap_or(""),
+                    attrs.get("brand").map(String::as_str).unwrap_or("")
+                )
+                .to_ascii_lowercase();
+                if low.contains("nvidia") {
+                    Some("nvidia".to_string())
+                } else if low.contains("amd") {
+                    Some("amd".to_string())
+                } else if low.contains("intel") {
+                    Some("intel".to_string())
+                } else {
+                    None
+                }
+            });
+            let pci_address = attrs
+                .get("pciAddress")
+                .or_else(|| attrs.get("pcieBusID"))
+                .or_else(|| attrs.get("resource.kubernetes.io/pciBusID"))
+                .cloned();
+            let driver_version = attrs
+                .get("driverVersion")
+                .or_else(|| attrs.get("cudaDriverVersion"))
+                .cloned();
+            devices.push(DraDeviceSummary {
+                name: dn,
+                vendor,
+                model: attrs.get("model").cloned().or_else(|| product_name.clone()),
+                product_name,
+                architecture: attrs.get("architecture").cloned(),
+                uuid: attrs.get("uuid").cloned(),
+                pci_address,
+                kernel_driver: attrs.get("kernelDriver").cloned(),
+                driver_version,
+                memory,
+                attributes: attrs,
+            });
+        }
+    }
+    DraSliceSummary {
+        slice_name,
+        node_name,
+        driver: driver.to_string(),
+        device_class: infer_dra_device_class(driver),
+        devices,
+    }
 }
 
 fn parse_npu_slice_item(item: &serde_json::Value, driver: String) -> NpuSliceSummary {
@@ -907,6 +1555,60 @@ pub async fn launch_npu_validation_job(
         )
         .await?;
     Ok(())
+}
+
+/// Renders a GPU DRA v1 (`resource.k8s.io/v1`) `ResourceClaim` + CUDA verification `Job`.
+pub fn render_gpu_validation_manifests(
+    namespace: &str,
+    claim_name: &str,
+    job_name: &str,
+    device_class_name: &str,
+    target_node: Option<&str>,
+) -> String {
+    let node_selector_block = match target_node.filter(|s| !s.is_empty()) {
+        Some(n) => format!(
+            "      nodeSelector:\n        kubernetes.io/hostname: {n}\n"
+        ),
+        None => String::new(),
+    };
+
+    format!(
+        r#"apiVersion: resource.k8s.io/v1
+kind: ResourceClaim
+metadata:
+  name: {claim_name}
+  namespace: {namespace}
+spec:
+  devices:
+    requests:
+      - name: gpu
+        exactly:
+          deviceClassName: {device_class_name}
+          allocationMode: ExactCount
+          count: 1
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {job_name}
+  namespace: {namespace}
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+{node_selector_block}      containers:
+        - name: cuda-dra-probe
+          image: nvcr.io/nvidia/cuda:13.0.0-base-ubuntu24.04
+          command: ["nvidia-smi"]
+          resources:
+            claims:
+              - name: gpu
+      resourceClaims:
+        - name: gpu
+          resourceClaimName: {claim_name}
+"#
+    )
 }
 
 #[cfg(test)]

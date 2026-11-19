@@ -1,0 +1,21 @@
+# Publicly trusted wildcard TLS Certificate for *.lab.martensite.dev via ACME DNS-01.
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: lab-gateway-tls
+  namespace: istio-system
+spec:
+  secretName: lab-gateway-tls
+  duration: 2160h # 90d
+  renewBefore: 720h # 30d
+  commonName: "*.lab.martensite.dev"
+  dnsNames:
+    - "*.lab.martensite.dev"
+    - "lab.martensite.dev"
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: acme-cloudflare-dns01
+    kind: ClusterIssuer

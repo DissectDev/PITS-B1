@@ -1,18 +1,19 @@
 //! Backstage `v1.56.x` Entity Registry (`backstage.io/v1alpha1`) & Contextual Action Engine
-//! for PITS Hybrid Infrastructure + Sourcing Governance (3 Domains, 3 Systems, 7 Components, 12 Resource Types / 31 Resources).
+//! for PITS Hybrid Infrastructure + Sourcing Governance (3 Domains, 3 Systems, 7 Components, 13 Resource Types / 33 Resources).
 
 pub mod actions;
 pub mod discovery;
 pub mod model;
 pub mod sourcing;
 pub mod sourcing_db;
+pub mod summary;
 pub mod synthesizer;
 
 pub use model::{
     ActionExecutionResult, ActionInvokeRequest, ActionParamSpec, AttributeItem, AttributeSection,
     CatalogEntitiesQuery, CatalogEntity, CatalogFacetsResponse, CatalogQueryResponse,
-    EntityActionSpec, EntityMetadata, EntityRelation, FacetEntry, PitsEntityDetail,
-    ResourceTypeSummary,
+    DynamicSignal, EntityActionSpec, EntityMetadata, EntityRelation, EntitySummary, FacetEntry,
+    ObservationMode, PitsEntityDetail, ResourceTypeSummary, SummaryPill,
 };
 pub use sourcing::{
     BlindBallotRecord, BooleanCheckResult, DiscoveryCandidateRecord, SourcingAuditEvent,
@@ -51,11 +52,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn synthesizes_all_12_resource_types_and_44_4layer_entities_offline() {
+    async fn synthesizes_all_13_resource_types_and_46_4layer_entities_offline() {
         let reg = offline_registry();
 
         let types = reg.list_resource_types(false).await;
-        assert_eq!(types.len(), 12, "expected 12 first-class Resource Types (8 infra + 4 sourcing)");
+        assert_eq!(types.len(), 16, "expected 16 first-class Resource Types (12 infra + 4 sourcing)");
 
         let counts: BTreeMap<String, usize> = types
             .iter()
@@ -69,13 +70,14 @@ mod tests {
         assert_eq!(counts.get("storage-pool"), Some(&1));
         assert_eq!(counts.get("san-volume"), Some(&9));
         assert_eq!(counts.get("kubernetes-cluster"), Some(&2));
+        assert_eq!(counts.get("cicd-pipeline"), Some(&2));
         assert_eq!(counts.get("vendor-saas"), Some(&1));
         assert_eq!(counts.get("commercial-sdk"), Some(&2));
         assert_eq!(counts.get("managed-infra"), Some(&1));
         assert_eq!(counts.get("outsourced-dev"), Some(&1));
 
         let total_from_types: usize = types.iter().map(|t| t.entity_count).sum();
-        assert_eq!(total_from_types, 31);
+        assert_eq!(total_from_types, 33);
 
         // npu-accelerator must report 3 healthy (Intel) + 1 warning (netboot-003-npu AMD XDNA driver pending)
         let npu_summary = types
@@ -88,8 +90,8 @@ mod tests {
         let entities = reg.list_entities(false).await;
         assert_eq!(
             entities.len(),
-            44,
-            "expected 3 Domains + 3 Systems + 7 Components + 31 Resources = 44 total entities"
+            46,
+            "expected 3 Domains + 3 Systems + 7 Components + 33 Resources = 46 total entities"
         );
 
         let domain_count = entities.iter().filter(|e| e.kind == "Domain").count();
@@ -99,7 +101,7 @@ mod tests {
         assert_eq!(domain_count, 3);
         assert_eq!(system_count, 3);
         assert_eq!(component_count, 7);
-        assert_eq!(resource_count, 31);
+        assert_eq!(resource_count, 33);
 
         for ent in &entities {
             assert_eq!(ent.api_version, "backstage.io/v1alpha1");
@@ -307,13 +309,13 @@ mod tests {
         let kind_facets = facets_resp.facets.get("kind").expect("kind facets");
         assert_eq!(kind_facets.len(), 1);
         assert_eq!(kind_facets[0].value, "Resource");
-        assert_eq!(kind_facets[0].count, 31);
+        assert_eq!(kind_facets[0].count, 33);
 
         let type_facets = facets_resp
             .facets
             .get("spec.type")
             .expect("spec.type facets");
-        assert_eq!(type_facets.len(), 12);
+        assert_eq!(type_facets.len(), 13);
         assert_eq!(type_facets[0].value, "san-volume");
         assert_eq!(type_facets[0].count, 9);
 
@@ -619,7 +621,7 @@ name: wipe-local-nvme
             let ent = CatalogEntity::deserialize(doc).expect("valid CatalogEntity YAML document");
             parsed.push(ent);
         }
-        assert_eq!(parsed.len(), 44);
+        assert_eq!(parsed.len(), 46);
     }
 
     #[tokio::test]
@@ -800,5 +802,63 @@ name: wipe-local-nvme
             .await
             .expect_err("invalid ring size must be rejected");
         assert!(err.to_string().contains("streamRingSize"));
+    }
+
+    #[tokio::test]
+    async fn cicd_pipeline_actions_verify_and_guard_handover() {
+        let reg = offline_registry();
+
+        let verify_dry = reg
+            .execute_entity_action(
+                "default",
+                "cicd-pipeline/pits-lab-acceleration",
+                "verify-cicd-stack",
+                ActionInvokeRequest {
+                    dry_run: true,
+                    parameters: BTreeMap::new(),
+                },
+            )
+            .await
+            .expect("dry-run verify-cicd-stack");
+        assert!(verify_dry.success);
+        assert!(verify_dry
+            .rendered_artifact
+            .as_deref()
+            .unwrap_or("")
+            .contains("Verify-CicdStack.ps1"));
+
+        let handover_err = reg
+            .execute_entity_action(
+                "default",
+                "cicd-pipeline/pits-b1-ci-pipeline",
+                "preview-cicd-handover",
+                ActionInvokeRequest {
+                    dry_run: false,
+                    parameters: BTreeMap::from([("target".to_string(), json!("portal"))]),
+                },
+            )
+            .await
+            .expect_err("non-dry-run handover without confirmHandover must be blocked");
+        assert!(handover_err.to_string().contains("confirmHandover"));
+
+        let handover_ok = reg
+            .execute_entity_action(
+                "default",
+                "cicd-pipeline/pits-b1-ci-pipeline",
+                "preview-cicd-handover",
+                ActionInvokeRequest {
+                    dry_run: true,
+                    parameters: BTreeMap::from([
+                        ("target".to_string(), json!("portal")),
+                        ("deployCore".to_string(), json!(true)),
+                    ]),
+                },
+            )
+            .await
+            .expect("dry-run handover plan");
+        assert!(handover_ok.success);
+        let artifact = handover_ok.rendered_artifact.unwrap_or_default();
+        assert!(artifact.contains("Deploy-CoreArtifacts.ps1 -Target portal"));
+        assert!(artifact.contains("NotIn [netboot-004]"));
     }
 }

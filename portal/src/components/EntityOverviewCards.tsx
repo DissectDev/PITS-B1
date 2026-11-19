@@ -32,10 +32,71 @@ import { usePitsEntityDetail } from '../hooks/usePitsEntityDetail';
 import {
   RESOURCE_TYPE_DIRECTORY_META,
   type AttributeSection,
+  type DynamicSignal,
   type EntityActionSpec,
+  type ObservationMode,
+  type SummaryPill,
 } from '../types';
-import { FormattedAttributeValue, StatusPill } from './StatusPill';
+import { FormattedAttributeValue, inferStatusLevel, StatusPill } from './StatusPill';
 import { ActionExecutionDialog } from './ActionExecutionDialog';
+
+function observationModeLabel(mode?: ObservationMode): string {
+  switch (mode) {
+    case 'policy-first':
+      return 'Policy-First';
+    case 'dynamic-first':
+      return 'Dynamic-First';
+    case 'governance-event':
+      return 'Governance-Event';
+    default:
+      return 'Hybrid';
+  }
+}
+
+function signalColors(status?: string): { bg: string; color: string; border: string } {
+  const lvl = inferStatusLevel(status, status);
+  if (lvl === 'error') {
+    return {
+      bg: 'rgba(211, 47, 47, 0.09)',
+      color: '#c62828',
+      border: 'rgba(211, 47, 47, 0.35)',
+    };
+  }
+  if (lvl === 'warn') {
+    return {
+      bg: 'rgba(237, 108, 2, 0.09)',
+      color: '#e65100',
+      border: 'rgba(237, 108, 2, 0.35)',
+    };
+  }
+  if (lvl === 'ok') {
+    return {
+      bg: 'rgba(46, 125, 50, 0.09)',
+      color: '#2e7d32',
+      border: 'rgba(46, 125, 50, 0.32)',
+    };
+  }
+  return {
+    bg: 'rgba(2, 136, 209, 0.08)',
+    color: '#0277bd',
+    border: 'rgba(2, 136, 209, 0.30)',
+  };
+}
+
+function trendGlyph(trend?: string): string {
+  switch (trend) {
+    case 'up':
+      return '▲';
+    case 'down':
+      return '▼';
+    case 'changed':
+      return '◆';
+    case 'alert':
+      return '!';
+    default:
+      return '';
+  }
+}
 
 export const EntityStatusSummaryCard: React.FC = () => {
   const { entity } = useEntity();
@@ -81,6 +142,16 @@ export const EntityStatusSummaryCard: React.FC = () => {
             {typeMeta && (
               <Chip size="small" variant="outlined" label={typeMeta.domain} />
             )}
+            {detail?.summary?.observationMode && (
+              <Tooltip title={`Refresh cadence: ${detail.summary.cadenceTier || 'standard-60s'}`}>
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label={`${observationModeLabel(detail.summary.observationMode)} · ${detail.summary.cadenceTier}`}
+                  sx={{ fontFamily: 'monospace', fontWeight: 600 }}
+                />
+              </Tooltip>
+            )}
             {detail && (
               <StatusPill label={detail.status} level={detail.statusLevel} size="medium" />
             )}
@@ -103,6 +174,17 @@ export const EntityStatusSummaryCard: React.FC = () => {
         <Stack spacing={2}>
           {error && <Alert severity="warning">{error}</Alert>}
 
+          {detail?.summary?.driftDetected && (
+            <Alert
+              severity={detail.statusLevel === 'error' ? 'error' : 'warning'}
+              variant="outlined"
+              sx={{ fontWeight: 500 }}
+            >
+              <strong>Policy / Runtime Drift Detected:</strong>{' '}
+              {detail.summary.driftSummary || 'Observed state diverges from declared static contract.'}
+            </Alert>
+          )}
+
           <Paper
             variant="outlined"
             sx={{
@@ -117,7 +199,10 @@ export const EntityStatusSummaryCard: React.FC = () => {
           >
             <Box>
               <Typography variant="body1" sx={{ fontWeight: 600 }}>
-                {detail?.summaryLine || entity.metadata.description || 'PITS Infrastructure Resource Entity'}
+                {detail?.summary?.headline ||
+                  detail?.summaryLine ||
+                  entity.metadata.description ||
+                  'PITS Infrastructure Resource Entity'}
               </Typography>
               {entity.metadata.description &&
                 detail?.summaryLine &&
@@ -138,6 +223,165 @@ export const EntityStatusSummaryCard: React.FC = () => {
               />
             </Stack>
           </Paper>
+
+          {detail?.summary &&
+            (detail.summary.staticPolicy.length > 0 || detail.summary.dynamicSignals.length > 0) && (
+              <Grid container spacing={2}>
+                {detail.summary.staticPolicy.length > 0 && (
+                  <Grid item xs={12} md={6}>
+                    <Paper variant="outlined" sx={{ p: 1.5, height: '100%' }}>
+                      <Stack
+                        direction="row"
+                        justifyContent="space-between"
+                        alignItems="center"
+                        sx={{ mb: 1 }}
+                      >
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ fontWeight: 700, letterSpacing: 0.5 }}
+                        >
+                          STATIC POLICY &amp; CONTRACT BAND
+                        </Typography>
+                        <Chip
+                          size="small"
+                          variant="outlined"
+                          label={detail.summary.driftDetected ? 'Drift Guard Alert' : 'Compliant'}
+                          color={detail.summary.driftDetected ? 'warning' : 'success'}
+                          sx={{ height: 20, fontSize: '0.68rem', fontWeight: 700 }}
+                        />
+                      </Stack>
+                      <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                        {detail.summary.staticPolicy.map((p: SummaryPill) => {
+                          const c = signalColors(p.status);
+                          return (
+                            <Box
+                              key={p.key}
+                              sx={{
+                                px: 1.1,
+                                py: 0.6,
+                                borderRadius: 1,
+                                bgcolor: c.bg,
+                                border: `1px solid ${c.border}`,
+                              }}
+                            >
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                                sx={{ display: 'block', fontSize: '0.68rem', fontWeight: 700 }}
+                              >
+                                {p.label}
+                              </Typography>
+                              <Typography
+                                variant="body2"
+                                sx={{
+                                  fontFamily: 'monospace',
+                                  fontWeight: 700,
+                                  fontSize: '0.78rem',
+                                  color: c.color,
+                                }}
+                              >
+                                {p.value}
+                              </Typography>
+                            </Box>
+                          );
+                        })}
+                      </Stack>
+                    </Paper>
+                  </Grid>
+                )}
+
+                {detail.summary.dynamicSignals.length > 0 && (
+                  <Grid item xs={12} md={6}>
+                    <Paper variant="outlined" sx={{ p: 1.5, height: '100%' }}>
+                      <Stack
+                        direction="row"
+                        justifyContent="space-between"
+                        alignItems="center"
+                        sx={{ mb: 1 }}
+                      >
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ fontWeight: 700, letterSpacing: 0.5 }}
+                        >
+                          LIVE DYNAMIC SIGNALS &amp; OCCUPANCY BAND
+                        </Typography>
+                        {detail.summary.lastChangedAt && (
+                          <Typography variant="caption" color="text.secondary">
+                            Changed: {new Date(detail.summary.lastChangedAt).toLocaleTimeString()}
+                          </Typography>
+                        )}
+                      </Stack>
+                      <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                        {detail.summary.dynamicSignals.map((s: DynamicSignal) => {
+                          const c = signalColors(s.status);
+                          const glyph = trendGlyph(s.trend);
+                          return (
+                            <Box
+                              key={s.key}
+                              sx={{
+                                px: 1.1,
+                                py: 0.6,
+                                borderRadius: 1,
+                                bgcolor: c.bg,
+                                border: `1px solid ${c.border}`,
+                                minWidth: 120,
+                              }}
+                            >
+                              <Stack direction="row" justifyContent="space-between" spacing={0.75}>
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                  sx={{ fontSize: '0.68rem', fontWeight: 700 }}
+                                >
+                                  {s.label}
+                                </Typography>
+                                {typeof s.observedAgeSecs === 'number' && s.observedAgeSecs > 0 && (
+                                  <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                    sx={{ fontFamily: 'monospace', fontSize: '0.66rem' }}
+                                  >
+                                    {s.observedAgeSecs}s
+                                  </Typography>
+                                )}
+                              </Stack>
+                              <Stack direction="row" spacing={0.5} alignItems="baseline" flexWrap="wrap">
+                                <Typography
+                                  variant="body2"
+                                  sx={{
+                                    fontFamily: 'monospace',
+                                    fontWeight: 700,
+                                    fontSize: '0.78rem',
+                                    color: c.color,
+                                  }}
+                                >
+                                  {glyph ? `${glyph} ` : ''}
+                                  {s.value}
+                                </Typography>
+                                {s.delta && (
+                                  <Chip
+                                    size="small"
+                                    label={`Δ ${s.delta}`}
+                                    sx={{
+                                      height: 18,
+                                      fontFamily: 'monospace',
+                                      fontSize: '0.66rem',
+                                      fontWeight: 700,
+                                    }}
+                                  />
+                                )}
+                              </Stack>
+                            </Box>
+                          );
+                        })}
+                      </Stack>
+                    </Paper>
+                  </Grid>
+                )}
+              </Grid>
+            )}
 
           <Grid container spacing={2}>
             <Grid item xs={12} sm={6} md={3}>

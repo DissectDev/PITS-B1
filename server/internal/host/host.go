@@ -3,17 +3,11 @@
 package host
 
 import (
-	"bytes"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -22,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"go.yaml.in/yaml/v3"
 	"pits.io/server/internal/api"
+	"pits.io/server/internal/kube"
 )
 
 // Controller inspects host sysfs/procfs and performs guarded VFIO restoration.
@@ -114,7 +108,45 @@ func (c *Controller) Audit() api.HostAuditReport {
 			report.Warnings = append(report.Warnings, fmt.Sprintf("router PCI %s bound to %q instead of vfio-pci", item.addr, binding.Driver))
 		}
 	}
+	report.PCIBindings = append(report.PCIBindings, c.scanAcceleratorPCIDevices(seen)...)
 	return report
+}
+
+// scanAcceleratorPCIDevices discovers host GPUs (0x0300 VGA, 0x0302 3D controller) and
+// processing accelerators (0x1200) from /sys/bus/pci/devices.
+func (c *Controller) scanAcceleratorPCIDevices(seen map[string]bool) []api.PCIDeviceBinding {
+	pciRoot := filepath.Join(c.SysRoot, "bus/pci/devices")
+	entries, err := os.ReadDir(pciRoot)
+	if err != nil {
+		return nil
+	}
+	var out []api.PCIDeviceBinding
+	for _, ent := range entries {
+		addr := ent.Name()
+		if seen[addr] {
+			continue
+		}
+		devDir := filepath.Join(pciRoot, addr)
+		classHex := strings.ToLower(readStringFile(filepath.Join(devDir, "class")))
+		role := ""
+		switch {
+		case strings.HasPrefix(classHex, "0x0302"):
+			role = "gpu-3d-controller"
+		case strings.HasPrefix(classHex, "0x0300"):
+			vendor := strings.ToLower(readStringFile(filepath.Join(devDir, "vendor")))
+			if vendor == "0x10de" || vendor == "0x1002" || vendor == "0x8086" {
+				role = "gpu-vga-controller"
+			}
+		case strings.HasPrefix(classHex, "0x1200"):
+			role = "processing-accelerator"
+		}
+		if role == "" {
+			continue
+		}
+		seen[addr] = true
+		out = append(out, c.inspectPCIDevice(addr, role))
+	}
+	return out
 }
 
 // RecoverRouter safely restores router PCI functions to vfio-pci, guards mgmt0,
@@ -259,7 +291,7 @@ func (c *Controller) readDefaultRoute() string {
 }
 
 func (c *Controller) reconcileGatewayK8s(ctx context.Context, refreshPlugins bool, timeout time.Duration, res *api.RouterRecoveryResult) error {
-	kc, err := newLocalKubeClient(c.KubeconfigPath)
+	kc, err := kube.NewFromKubeconfig(c.KubeconfigPath)
 	if err != nil {
 		return err
 	}
@@ -269,7 +301,7 @@ func (c *Controller) reconcileGatewayK8s(ctx context.Context, refreshPlugins boo
 				Allocatable map[string]string `json:"allocatable"`
 			} `json:"status"`
 		}
-		if err := kc.getJSON(ctx, "/api/v1/nodes/pits-core", &node); err == nil {
+		if err := kc.GetJSON(ctx, "/api/v1/nodes/pits-core", &node); err == nil {
 			wanQty := node.Status.Allocatable["pits.io/i226-lm"]
 			lanQty := node.Status.Allocatable["pits.io/sfp0_trunk"]
 			if wanQty == "0" || wanQty == "" {
@@ -283,7 +315,7 @@ func (c *Controller) reconcileGatewayK8s(ctx context.Context, refreshPlugins boo
 
 	// Scale edge/gateway to 1 replica if scaled down.
 	scaleBody := `{"spec":{"replicas":1}}`
-	_ = kc.patchJSON(ctx, "/apis/apps/v1/namespaces/edge/deployments/gateway", scaleBody)
+	_ = kc.PatchJSON(ctx, "/apis/apps/v1/namespaces/edge/deployments/gateway", scaleBody)
 
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -297,7 +329,7 @@ func (c *Controller) reconcileGatewayK8s(ctx context.Context, refreshPlugins boo
 				ObservedGeneration int64  `json:"observedGeneration"`
 			} `json:"status"`
 		}
-		if err := kc.getJSON(ctx, "/apis/edge.router/v1alpha1/namespaces/edge/routers/pits-core", &routerObj); err == nil {
+		if err := kc.GetJSON(ctx, "/apis/edge.router/v1alpha1/namespaces/edge/routers/pits-core", &routerObj); err == nil {
 			res.RouterPhase = routerObj.Status.Phase
 			res.ObservedGeneration = routerObj.Status.ObservedGeneration
 			if routerObj.Status.Ready && routerObj.Status.Phase == "Applied" && routerObj.Status.ObservedGeneration == routerObj.Metadata.Generation {
@@ -312,111 +344,6 @@ func (c *Controller) reconcileGatewayK8s(ctx context.Context, refreshPlugins boo
 		}
 	}
 	return fmt.Errorf("timed out waiting for Router edge/pits-core Ready (last phase=%q)", res.RouterPhase)
-}
-
-type localKubeClient struct {
-	server string
-	token  string
-	http   *http.Client
-}
-
-func newLocalKubeClient(kubeconfigPath string) (*localKubeClient, error) {
-	raw, err := os.ReadFile(kubeconfigPath)
-	if err != nil {
-		return nil, err
-	}
-	var cfg struct {
-		Clusters []struct {
-			Cluster struct {
-				Server                   string `yaml:"server"`
-				CertificateAuthorityData string `yaml:"certificate-authority-data"`
-			} `yaml:"cluster"`
-		} `yaml:"clusters"`
-		Users []struct {
-			User struct {
-				Token                 string `yaml:"token"`
-				ClientCertificateData string `yaml:"client-certificate-data"`
-				ClientKeyData         string `yaml:"client-key-data"`
-			} `yaml:"user"`
-		} `yaml:"users"`
-	}
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
-		return nil, err
-	}
-	if len(cfg.Clusters) == 0 || len(cfg.Users) == 0 {
-		return nil, fmt.Errorf("incomplete kubeconfig %s", kubeconfigPath)
-	}
-	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
-	if caB64 := cfg.Clusters[0].Cluster.CertificateAuthorityData; caB64 != "" {
-		if caPEM, derr := decodeBase64(caB64); derr == nil {
-			pool := x509.NewCertPool()
-			pool.AppendCertsFromPEM(caPEM)
-			tlsCfg.RootCAs = pool
-		}
-	}
-	if crtB64 := cfg.Users[0].User.ClientCertificateData; crtB64 != "" {
-		crtPEM, err1 := decodeBase64(crtB64)
-		keyPEM, err2 := decodeBase64(cfg.Users[0].User.ClientKeyData)
-		if err1 == nil && err2 == nil {
-			if pair, perr := tls.X509KeyPair(crtPEM, keyPEM); perr == nil {
-				tlsCfg.Certificates = []tls.Certificate{pair}
-			}
-		}
-	}
-	return &localKubeClient{
-		server: strings.TrimRight(cfg.Clusters[0].Cluster.Server, "/"),
-		token:  cfg.Users[0].User.Token,
-		http: &http.Client{
-			Timeout:   15 * time.Second,
-			Transport: &http.Transport{TLSClientConfig: tlsCfg},
-		},
-	}, nil
-}
-
-func (k *localKubeClient) getJSON(ctx context.Context, path string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, k.server+path, nil)
-	if err != nil {
-		return err
-	}
-	if k.token != "" {
-		req.Header.Set("Authorization", "Bearer "+k.token)
-	}
-	resp, err := k.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
-	}
-	return json.NewDecoder(resp.Body).Decode(out)
-}
-
-func (k *localKubeClient) patchJSON(ctx context.Context, path, mergeBody string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, k.server+path, bytes.NewBufferString(mergeBody))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/merge-patch+json")
-	if k.token != "" {
-		req.Header.Set("Authorization", "Bearer "+k.token)
-	}
-	resp, err := k.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("PATCH %s HTTP %d: %s", path, resp.StatusCode, strings.TrimSpace(string(b)))
-	}
-	return nil
-}
-
-func decodeBase64(s string) ([]byte, error) {
-	// Standard base64 decoder without extra imports via encoding/base64.
-	return base64DecodeString(strings.TrimSpace(s))
 }
 
 func readInterfaceIPv4(name string) string {

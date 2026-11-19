@@ -39,7 +39,7 @@ export const OperatorProfilePage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [generatingPki, setGeneratingPki] = useState(false);
-  const [serverSan, setServerSan] = useState('100.74.25.42,192.168.71.35,pits-core');
+  const [serverSan, setServerSan] = useState('100.95.95.88,192.168.71.35,pits-core');
   const [generatedPki, setGeneratedPki] = useState<GeneratedPkiResult | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{
@@ -88,6 +88,7 @@ export const OperatorProfilePage: React.FC = () => {
         talosconfigPath: profile.talosconfigPath,
         talosContext: profile.talosContext,
         talosViaAgentBridge: profile.talosViaAgentBridge,
+        extraClusters: profile.extraClusters,
       });
       setSourcingDbUrlInput('');
       setClearSourcingDbUrl(false);
@@ -371,6 +372,84 @@ export const OperatorProfilePage: React.FC = () => {
                             }
                             label="Tunnel Talos COSI/gRPC (:50000 on netboot-001..004) via pits-agent mTLS bridge"
                           />
+                        </Grid>
+
+                        <Grid item xs={12}>
+                          <Divider sx={{ my: 1 }} />
+                          <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+                            <Typography variant="subtitle2">
+                              Additional Kubernetes / vCluster Endpoints ({profile.extraClusters.length})
+                            </Typography>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              onClick={() =>
+                                setProfile({
+                                  ...profile,
+                                  extraClusters: [
+                                    ...profile.extraClusters,
+                                    {
+                                      name: '',
+                                      title: '',
+                                      role: 'vcluster-gpu-dra',
+                                      kubeconfigPath: '',
+                                      viaAgentBridge: false,
+                                    },
+                                  ],
+                                })
+                              }
+                            >
+                              Add Cluster
+                            </Button>
+                          </Stack>
+                          <Stack spacing={1.25}>
+                            {profile.extraClusters.map((ec, idx) => (
+                              <Paper key={idx} variant="outlined" sx={{ p: 1.25 }}>
+                                <Grid container spacing={1.25} alignItems="center">
+                                  <Grid item xs={12} sm={4}>
+                                    <TextField
+                                      fullWidth
+                                      size="small"
+                                      label="Cluster Name"
+                                      value={ec.name}
+                                      onChange={e => {
+                                        const next = [...profile.extraClusters];
+                                        next[idx] = { ...ec, name: e.target.value };
+                                        setProfile({ ...profile, extraClusters: next });
+                                      }}
+                                    />
+                                  </Grid>
+                                  <Grid item xs={12} sm={6}>
+                                    <TextField
+                                      fullWidth
+                                      size="small"
+                                      label="Kubeconfig Path"
+                                      value={ec.kubeconfigPath}
+                                      onChange={e => {
+                                        const next = [...profile.extraClusters];
+                                        next[idx] = { ...ec, kubeconfigPath: e.target.value };
+                                        setProfile({ ...profile, extraClusters: next });
+                                      }}
+                                    />
+                                  </Grid>
+                                  <Grid item xs={12} sm={2}>
+                                    <Button
+                                      size="small"
+                                      color="error"
+                                      onClick={() =>
+                                        setProfile({
+                                          ...profile,
+                                          extraClusters: profile.extraClusters.filter((_, i) => i !== idx),
+                                        })
+                                      }
+                                    >
+                                      Remove
+                                    </Button>
+                                  </Grid>
+                                </Grid>
+                              </Paper>
+                            ))}
+                          </Stack>
                         </Grid>
                       </Grid>
 

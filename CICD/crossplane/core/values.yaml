@@ -1,0 +1,46 @@
+# Crossplane v2.4.3 Helm values for cluster-pits-lab (crossplane-system).
+# Strictly excludes netboot-004 (win11-001 host) and pulls via Talos local cache.
+replicas: 1
+
+image:
+  repository: ghcr.io/crossplane/crossplane
+  tag: v2.4.3
+  pullPolicy: IfNotPresent
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: NotIn
+              values:
+                - netboot-004
+
+rbacManager:
+  replicas: 1
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: NotIn
+                values:
+                  - netboot-004
+
+resourcesCrossplane:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+resourcesRBACManager:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi

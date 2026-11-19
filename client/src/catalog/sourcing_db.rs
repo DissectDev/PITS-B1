@@ -243,6 +243,25 @@ unsafe fn load_sqlite_api() -> Result<SqliteApi, String> {
         handle = dlopen(b"libsqlite3.dylib\0".as_ptr(), RTLD_NOW);
     }
     if handle.is_null() {
+        if let Ok(entries) = std::fs::read_dir("/nix/store") {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if name_str.contains("-sqlite-") && !name_str.ends_with(".drv") {
+                    let cand = entry.path().join("lib").join("libsqlite3.so.0");
+                    if cand.is_file() {
+                        if let Ok(cstr) = CString::new(cand.to_string_lossy().as_bytes()) {
+                            handle = dlopen(cstr.as_ptr() as *const u8, RTLD_NOW);
+                            if !handle.is_null() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if handle.is_null() {
         return Err(
             "Failed to dlopen libsqlite3.so.0 / libsqlite3.so (ensure sqlite runtime library is on LD_LIBRARY_PATH)".to_string(),
         );

@@ -1,0 +1,43 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: keycloak-tls
+  namespace: keycloak
+spec:
+  secretName: keycloak-tls
+  duration: 8760h
+  renewBefore: 720h
+  commonName: sso.martensite.dev
+  dnsNames:
+    - sso.martensite.dev
+    - keycloak.pits.home.arpa
+    - keycloak-service
+    - keycloak-service.keycloak
+    - keycloak-service.keycloak.svc
+    - keycloak-service.keycloak.svc.cluster.local
+  ipAddresses:
+    - 10.89.20.30
+    - 100.95.95.88
+    - 192.168.71.35
+  issuerRef:
+    name: pits-ca
+    kind: ClusterIssuer
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: portal-pep-tls
+  namespace: keycloak
+spec:
+  secretName: portal-pep-tls
+  duration: 8760h
+  renewBefore: 720h
+  commonName: portal.pits.home.arpa
+  dnsNames:
+    - portal.pits.home.arpa
+  ipAddresses:
+    - 100.95.95.88
+    - 192.168.71.35
+  issuerRef:
+    name: pits-ca
+    kind: ClusterIssuer

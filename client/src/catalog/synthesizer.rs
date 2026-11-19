@@ -3,6 +3,7 @@
 
 use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -10,24 +11,29 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock, Semaphore};
+use tokio::task::JoinSet;
 use uuid::Uuid;
 
 use crate::catalog::actions::{
-    actions_for_edge_router, actions_for_k8s_cluster, actions_for_npu, actions_for_pits_core_host,
-    actions_for_pxe_profile, actions_for_san_volume, actions_for_sourcing_resource,
-    actions_for_storage_pool, actions_for_talos_host, actions_for_vm,
-    canonical_action_ids_for_type,
+    actions_for_cicd_pipeline, actions_for_edge_router, actions_for_gpu, actions_for_k8s_cluster,
+    actions_for_npu, actions_for_pits_core_host, actions_for_pxe_profile, actions_for_san_volume,
+    actions_for_sourcing_resource, actions_for_storage_pool, actions_for_talos_host,
+    actions_for_vm, canonical_action_ids_for_type,
 };
 use crate::catalog::discovery::{
     build_discovered_k8s_entity_detail, collect_live_discovered_nodes,
     discover_k8s_crossplane_fast, enrich_existing_detail_from_k8s,
-    extract_sourcing_candidates_from_k8s, resolve_baseline_alias, should_ingest_k8s_object,
-    DiscoveredK8sResource,
+    extract_sourcing_candidates_from_k8s, resolve_baseline_alias, sanitize_k8s_slug,
+    should_ingest_k8s_object, DiscoveredK8sResource,
 };
 use crate::catalog::model::{
     AttributeItem, AttributeSection, CatalogEntitiesQuery, CatalogEntity, CatalogFacetsResponse,
-    CatalogQueryResponse, CatalogSnapshot, EntityMetadata, EntityRelation, FacetEntry,
-    PitsEntityDetail, ResourceTypeSummary,
+    CatalogQueryResponse, CatalogSnapshot, EntityMetadata, EntityRelation, EntitySummary,
+    FacetEntry, PitsEntityDetail, ResourceTypeSummary,
+};
+use crate::catalog::summary::{
+    compute_type_highlights, observation_mode_for_type, populate_dual_track_summaries,
+    TelemetryHistory,
 };
 use crate::catalog::sourcing::{
     canonical_component_ref, canonical_system_ref, compute_unified_diff, default_system_domain_map,
@@ -44,10 +50,14 @@ use crate::catalog::sourcing_db::{
 };
 use crate::config::{
     effective_sourcing_db_url, load_kubeconfig_file, load_talosconfig_file, local_state_dir,
-    ClientProfile, EnrolledNodeContract, WorkspaceBundle,
+    ClientProfile, EnrolledNodeContract, ExtraClusterConfig, WorkspaceBundle,
 };
 use crate::k8s::{
-    render_npu_validation_manifests, render_san_local_pv_pvc, ClusterControlPlaneSummary,
+    cluster_has_gpu_allocatable, compute_cluster_gpu_occupancy, compute_cluster_npu_occupancy,
+    compute_gpu_device_occupancy, compute_gpu_node_device_plugin_occupancy,
+    compute_npu_node_occupancy, parse_dra_claims_list, parse_pod_device_plugin_gpu_usage,
+    render_gpu_validation_manifests, render_npu_validation_manifests, render_san_local_pv_pvc,
+    ClusterControlPlaneSummary, DraClaimAllocation, DraDeviceSummary, DraSliceSummary,
     KubeNodeSummary, NpuDraDeviceSummary, NpuSliceSummary, PITS_NPU_DRA_DRIVER,
 };
 use crate::pxe::{
@@ -74,11 +84,18 @@ use crate::vm::{
     WIN11_DEFAULT_RDP_NODEPORT,
 };
 
-const CACHE_TTL: Duration = Duration::from_secs(60);
+const FAST_CACHE_TTL: Duration = Duration::from_secs(15);
+const STANDARD_CACHE_TTL: Duration = Duration::from_secs(60);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 const NODES_PROBE_TIMEOUT: Duration = Duration::from_secs(12);
 const RETRY_TIMEOUT_CUTOFF: Duration = Duration::from_secs(6);
 const SINGLEFLIGHT_REUSE_WINDOW: Duration = Duration::from_secs(4);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RefreshTier {
+    Fast,
+    Standard,
+}
 
 pub(crate) struct ResourceTypeMeta {
     pub(crate) resource_type: &'static str,
@@ -101,6 +118,12 @@ pub(crate) const RESOURCE_TYPE_METAS: &[ResourceTypeMeta] = &[
         description: "Physical Neural Processing Units (Intel AI Boost VPU & AMD Ryzen AI XDNA) orchestrated via Kubernetes v1.37 DRA v1",
     },
     ResourceTypeMeta {
+        resource_type: "gpu-accelerator",
+        category: "Compute & Accelerators",
+        title: "AI GPU Accelerators",
+        description: "Physical GPUs (NVIDIA H20 / Blackwell / AMD / Intel) discovered via Kubernetes DRA v1 (resource.k8s.io/v1) and node GPU allocatables",
+    },
+    ResourceTypeMeta {
         resource_type: "virtual-machine",
         category: "Compute & Accelerators",
         title: "KubeVirt Virtual Machines",
@@ -121,8 +144,8 @@ pub(crate) const RESOURCE_TYPE_METAS: &[ResourceTypeMeta] = &[
     ResourceTypeMeta {
         resource_type: "storage-pool",
         category: "Storage Fabric",
-        title: "Btrfs Storage Pools",
-        description: "Enterprise NVMe Btrfs storage pools backing PITS SAN extents, snapshots, and archives",
+        title: "Storage Pools (Btrfs & Mayastor)",
+        description: "Core NVMe Btrfs storage pools and Lab OpenEBS Mayastor SPDK DiskPools over VLAN 20 / Thunderbolt Net",
     },
     ResourceTypeMeta {
         resource_type: "san-volume",
@@ -131,10 +154,28 @@ pub(crate) const RESOURCE_TYPE_METAS: &[ResourceTypeMeta] = &[
         description: "Deterministic UUIDv5 NVMe/TCP namespaces exported from pits-core over Lab VLAN 20",
     },
     ResourceTypeMeta {
+        resource_type: "ai-storage-workspace",
+        category: "Storage Fabric",
+        title: "AI Storage Workspaces",
+        description: "Crossplane AIStorageWorkspace stacks (OpenDAL 8-Archetype MCP Producer, RustFS S3, CloudNativePG pgvector/pg_trgm, Valkey) with Zero-Trust Istio/Keycloak endpoints",
+    },
+    ResourceTypeMeta {
         resource_type: "kubernetes-cluster",
         category: "Control Planes",
         title: "Kubernetes Clusters",
         description: "Dual Kubernetes control planes: Core RKE2 v1.35.8 infrastructure cluster and Lab Talos K8s v1.37.1 workload/DRA cluster",
+    },
+    ResourceTypeMeta {
+        resource_type: "cicd-pipeline",
+        category: "Control Planes",
+        title: "CI/CD Pipelines & DevStack",
+        description: "Lab Crossplane LabDevStack (Gitea, CNPG, Zot OCI, Attic Nix Cache, Flux CD) and DDR5 tmpfs act_runner CI/CD handover pipelines",
+    },
+    ResourceTypeMeta {
+        resource_type: "auth-flow-bundle",
+        category: "Control Planes",
+        title: "IAM Auth Flow Bundles",
+        description: "Declarative Crossplane AuthFlowBundle workflows (Keycloak FIDO2 / WebAuthn LoA-2 step-up, realm browser bindings, and Tailscale Mode-A PEP enforcement)",
     },
     ResourceTypeMeta {
         resource_type: "vendor-saas",
@@ -162,11 +203,41 @@ pub(crate) const RESOURCE_TYPE_METAS: &[ResourceTypeMeta] = &[
     },
 ];
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CicdLiveSummary {
+    pub(crate) labdevstack_present: bool,
+    pub(crate) labdevstack_synced: bool,
+    pub(crate) labdevstack_ready: bool,
+    pub(crate) cnpg_ready_instances: u64,
+    pub(crate) cnpg_instances: u64,
+    pub(crate) flux_repo_ready: bool,
+    pub(crate) flux_kust_ready: bool,
+    pub(crate) flux_revision: Option<String>,
+    pub(crate) runner_cpu_ready: u64,
+    pub(crate) runner_cpu_desired: u64,
+    pub(crate) runner_npu_ready: u64,
+    pub(crate) runner_npu_desired: u64,
+    pub(crate) runner_gpu_ready: u64,
+    pub(crate) runner_gpu_desired: u64,
+    pub(crate) gitea_ready: bool,
+    pub(crate) zot_ready: bool,
+    pub(crate) attic_ready: bool,
+    pub(crate) pods_on_netboot_004: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ExtraClusterTelemetry {
+    pub(crate) config: ExtraClusterConfig,
+    pub(crate) summary: ClusterControlPlaneSummary,
+}
+
 #[derive(Default)]
 pub(crate) struct LiveTelemetry {
     pub(crate) any_connected: bool,
     pub(crate) connection_note: Option<String>,
     pub(crate) agent_health: Option<Value>,
+    pub(crate) agent_clusters: Option<Value>,
     pub(crate) router_live: Option<RouterLiveSummary>,
     pub(crate) btrfs: Option<Value>,
     pub(crate) san_by_device: BTreeMap<String, Value>,
@@ -176,7 +247,9 @@ pub(crate) struct LiveTelemetry {
     pub(crate) pxe_asset_verify: BTreeMap<String, Value>,
     pub(crate) core_cluster: Option<ClusterControlPlaneSummary>,
     pub(crate) lab_cluster: Option<ClusterControlPlaneSummary>,
+    pub(crate) extra_clusters: Vec<ExtraClusterTelemetry>,
     pub(crate) lab_device_classes: Vec<String>,
+    pub(crate) lab_cicd: Option<CicdLiveSummary>,
     pub(crate) talos_by_device: BTreeMap<String, TalosNodeLiveStatus>,
     pub(crate) core_vms: Option<Vec<VirtualMachineSummary>>,
     pub(crate) lab_vms: Option<Vec<VirtualMachineSummary>>,
@@ -196,11 +269,15 @@ pub struct CatalogRegistry {
     pub(crate) last_rdp_tls: Arc<RwLock<Option<RdpTlsVerification>>>,
     pub(crate) last_pxe_verify: Arc<RwLock<BTreeMap<String, Value>>>,
     pub(crate) last_talos_by_device: Arc<RwLock<BTreeMap<String, TalosNodeLiveStatus>>>,
+    pub(crate) last_hook_inventory: Arc<RwLock<BTreeMap<String, Value>>>,
+    pub(crate) last_san_by_device: Arc<RwLock<BTreeMap<String, Value>>>,
+    pub(crate) telemetry_history: Arc<RwLock<TelemetryHistory>>,
     pub(crate) refresh_lock: Arc<Mutex<()>>,
     pub(crate) seed_lock: Arc<Mutex<()>>,
     pub(crate) has_live_snapshot: Arc<AtomicBool>,
     pub(crate) refresh_in_flight: Arc<AtomicBool>,
     pub(crate) last_live_completed: Arc<RwLock<Option<Instant>>>,
+    pub(crate) last_standard_completed: Arc<RwLock<Option<Instant>>>,
 }
 
 fn detect_workspace_sourcing_dir(source_dir: Option<&str>) -> Option<PathBuf> {
@@ -259,11 +336,15 @@ impl CatalogRegistry {
             last_rdp_tls: Arc::new(RwLock::new(None)),
             last_pxe_verify: Arc::new(RwLock::new(BTreeMap::new())),
             last_talos_by_device: Arc::new(RwLock::new(BTreeMap::new())),
+            last_hook_inventory: Arc::new(RwLock::new(BTreeMap::new())),
+            last_san_by_device: Arc::new(RwLock::new(BTreeMap::new())),
+            telemetry_history: Arc::new(RwLock::new(TelemetryHistory::default())),
             refresh_lock: Arc::new(Mutex::new(())),
             seed_lock: Arc::new(Mutex::new(())),
             has_live_snapshot: Arc::new(AtomicBool::new(false)),
             refresh_in_flight: Arc::new(AtomicBool::new(false)),
             last_live_completed: Arc::new(RwLock::new(None)),
+            last_standard_completed: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -276,10 +357,22 @@ impl CatalogRegistry {
             let mut talos_guard = self.last_talos_by_device.write().await;
             talos_guard.clear();
         }
+        {
+            let mut hook_guard = self.last_hook_inventory.write().await;
+            hook_guard.clear();
+        }
+        {
+            let mut san_guard = self.last_san_by_device.write().await;
+            san_guard.clear();
+        }
         self.has_live_snapshot.store(false, Ordering::Release);
         {
             let mut last = self.last_live_completed.write().await;
             *last = None;
+        }
+        {
+            let mut last_std = self.last_standard_completed.write().await;
+            *last_std = None;
         }
     }
 
@@ -288,11 +381,23 @@ impl CatalogRegistry {
         let has_agent_creds = prof.agent_client_cert_pem.is_some()
             || prof.agent_bearer_token.is_some()
             || prof.agent_ca_pem.is_some()
-            || prof.agent_endpoint != "https://100.74.25.42:18443";
+            || prof.agent_endpoint != "https://100.95.95.88:18443";
         has_agent_creds
             || prof.core_kubeconfig_path.is_some()
             || prof.lab_kubeconfig_path.is_some()
             || prof.talosconfig_path.is_some()
+            || !prof.extra_clusters.is_empty()
+    }
+
+    pub(crate) async fn build_extra_k8s_req(&self, cfg: &ExtraClusterConfig) -> Result<KubeClient> {
+        let prof = self.profile.read().await;
+        let ep = load_kubeconfig_file(Path::new(&cfg.kubeconfig_path), cfg.context.as_deref())?;
+        if cfg.via_agent_bridge {
+            let ag = AgentClient::from_profile(&prof)?;
+            KubeClient::from_endpoint(&cfg.name, ep, Some((&prof, ag.tls_config)))
+        } else {
+            KubeClient::from_endpoint(&cfg.name, ep, None)
+        }
     }
 
     pub(crate) async fn build_agent_req(&self) -> Result<AgentClient> {
@@ -387,12 +492,27 @@ impl CatalogRegistry {
 
     /// Process-wide singleflight live telemetry refresh. Stacked callers arriving within `4s` of a
     /// completed live pass immediately share the fresh snapshot instead of launching redundant sweeps.
-    pub(crate) async fn refresh_live_singleflight(&self) -> Arc<CatalogSnapshot> {
+    pub(crate) async fn refresh_live_singleflight_tier(
+        &self,
+        tier: RefreshTier,
+    ) -> Arc<CatalogSnapshot> {
         let _singleflight = self.refresh_lock.lock().await;
 
-        if self.has_live_snapshot.load(Ordering::Acquire) {
+        if self.has_live_snapshot.load(Ordering::Acquire) && tier == RefreshTier::Fast {
             let recently_completed = self
                 .last_live_completed
+                .read()
+                .await
+                .map(|ts| ts.elapsed() < SINGLEFLIGHT_REUSE_WINDOW)
+                .unwrap_or(false);
+            if recently_completed {
+                if let Some((_, snap)) = self.cache.read().await.as_ref() {
+                    return Arc::clone(snap);
+                }
+            }
+        } else if self.has_live_snapshot.load(Ordering::Acquire) {
+            let recently_completed = self
+                .last_standard_completed
                 .read()
                 .await
                 .map(|ts| ts.elapsed() < SINGLEFLIGHT_REUSE_WINDOW)
@@ -411,7 +531,7 @@ impl CatalogRegistry {
             return snap;
         }
 
-        let snap = Arc::new(Box::pin(self.synthesize_live_snapshot()).await);
+        let snap = Arc::new(Box::pin(self.synthesize_live_snapshot_tier(tier)).await);
         let completed_at = Instant::now();
         {
             let mut guard = self.cache.write().await;
@@ -421,6 +541,10 @@ impl CatalogRegistry {
             let mut last = self.last_live_completed.write().await;
             *last = Some(completed_at);
         }
+        if tier == RefreshTier::Standard {
+            let mut last_std = self.last_standard_completed.write().await;
+            *last_std = Some(completed_at);
+        }
         self.has_live_snapshot.store(true, Ordering::Release);
         snap
     }
@@ -428,6 +552,10 @@ impl CatalogRegistry {
     /// Non-blocking background live telemetry trigger guarded by `refresh_in_flight` so at most
     /// one background Tokio refresh task runs at any moment.
     pub fn spawn_background_refresh(&self) {
+        self.spawn_background_refresh_tier(RefreshTier::Standard);
+    }
+
+    pub(crate) fn spawn_background_refresh_tier(&self, tier: RefreshTier) {
         if self
             .refresh_in_flight
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -449,7 +577,7 @@ impl CatalogRegistry {
             }
             let _reset = ResetInFlight(reg.refresh_in_flight.clone());
             if reg.is_profile_configured().await {
-                let _ = reg.refresh_live_singleflight().await;
+                let _ = reg.refresh_live_singleflight_tier(tier).await;
             }
         });
     }
@@ -464,7 +592,9 @@ impl CatalogRegistry {
         }
 
         if force_live {
-            return self.refresh_live_singleflight().await;
+            return self
+                .refresh_live_singleflight_tier(RefreshTier::Standard)
+                .await;
         }
 
         let cached_opt = {
@@ -483,11 +613,19 @@ impl CatalogRegistry {
         };
 
         let has_live = self.has_live_snapshot.load(Ordering::Acquire);
-        if (!has_live || elapsed >= CACHE_TTL)
-            && !self.refresh_in_flight.load(Ordering::Acquire)
-            && self.is_profile_configured().await
-        {
-            self.spawn_background_refresh();
+        let std_stale = self
+            .last_standard_completed
+            .read()
+            .await
+            .map(|ts| ts.elapsed() >= STANDARD_CACHE_TTL)
+            .unwrap_or(true);
+
+        if !self.refresh_in_flight.load(Ordering::Acquire) && self.is_profile_configured().await {
+            if !has_live || std_stale {
+                self.spawn_background_refresh_tier(RefreshTier::Standard);
+            } else if elapsed >= FAST_CACHE_TTL {
+                self.spawn_background_refresh_tier(RefreshTier::Fast);
+            }
         }
 
         snap
@@ -794,7 +932,11 @@ impl CatalogRegistry {
         Ok(docs.join("\n---\n") + "\n")
     }
 
-    async fn collect_live_telemetry(&self, bundle: &WorkspaceBundle) -> LiveTelemetry {
+    async fn collect_live_telemetry_tier(
+        &self,
+        bundle: &WorkspaceBundle,
+        tier: RefreshTier,
+    ) -> LiveTelemetry {
         if !self.is_profile_configured().await {
             return LiveTelemetry::default();
         }
@@ -802,8 +944,15 @@ impl CatalogRegistry {
         let agent_opt = self.build_agent_req().await.ok();
         let core_k8s_opt = self.build_core_k8s_req().await.ok();
         let lab_k8s_opt = self.build_lab_k8s_req().await.ok();
-        let talos_opt = self.build_talos_req().await.ok();
+        let talos_opt = if tier == RefreshTier::Standard {
+            self.build_talos_req().await.ok()
+        } else {
+            None
+        };
+        let extra_cluster_cfgs = self.profile.read().await.extra_clusters.clone();
         let cached_pxe_verify = self.last_pxe_verify.read().await.clone();
+        let cached_hook_inv = self.last_hook_inventory.read().await.clone();
+        let cached_san_by_dev = self.last_san_by_device.read().await.clone();
 
         // `pits-agent` (:18443) enforces `ReadHeaderTimeout: 10s` from TCP `Accept()` through
         // TLS 1.3 + HTTP request headers. Decouple `agent_sem` (4 REST streams) from `lab_sem`
@@ -816,7 +965,7 @@ impl CatalogRegistry {
 
         let agent_fut = async {
             let Some(ref ag) = agent_opt else {
-                return (None, None, BTreeMap::new(), BTreeMap::new());
+                return (None, None, None, cached_hook_inv, cached_san_by_dev);
             };
             let health_f = async {
                 for attempt in 0..2 {
@@ -841,6 +990,14 @@ impl CatalogRegistry {
                 None
             };
 
+            let clusters_f = async {
+                let _p = agent_sem.acquire().await.ok();
+                tokio::time::timeout(PROBE_TIMEOUT, ag.get_json::<Value>("/v1/clusters"))
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok())
+            };
+
             let btrfs_f = async {
                 for attempt in 0..2 {
                     let (res, attempt_elapsed) = {
@@ -863,6 +1020,9 @@ impl CatalogRegistry {
             };
 
             let inv_f = async {
+                if tier == RefreshTier::Fast && !cached_hook_inv.is_empty() {
+                    return cached_hook_inv;
+                }
                 for attempt in 0..2 {
                     let (res, attempt_elapsed) = {
                         let _p = agent_sem.acquire().await.ok();
@@ -880,10 +1040,13 @@ impl CatalogRegistry {
                         tokio::time::sleep(Duration::from_millis(150)).await;
                     }
                 }
-                BTreeMap::new()
+                cached_hook_inv
             };
 
             let san_f = async {
+                if tier == RefreshTier::Fast && !cached_san_by_dev.is_empty() {
+                    return cached_san_by_dev;
+                }
                 let mut futs = Vec::with_capacity(bundle.nodes.len());
                 for n in &bundle.nodes {
                     let ag_c = ag.clone();
@@ -919,10 +1082,14 @@ impl CatalogRegistry {
                         map.insert(d, v);
                     }
                 }
-                map
+                if map.is_empty() {
+                    cached_san_by_dev
+                } else {
+                    map
+                }
             };
 
-            tokio::join!(health_f, btrfs_f, inv_f, san_f)
+            tokio::join!(health_f, clusters_f, btrfs_f, inv_f, san_f)
         };
 
         let router_fut = async {
@@ -1020,7 +1187,7 @@ impl CatalogRegistry {
 
         let lab_k8s_fut = async {
             let Some(ref kc) = lab_k8s_opt else {
-                return (None, Vec::new(), None, Vec::new());
+                return (None, Vec::new(), None, Vec::new(), None);
             };
             let sem_ref = lab_sem.as_ref();
             let sum_f = inspect_cluster_fast(kc, Some(sem_ref));
@@ -1037,7 +1204,8 @@ impl CatalogRegistry {
                 "resource:default/cluster-pits-lab",
                 Some(&lab_sem),
             );
-            let (s, dcs, vms, disc) = tokio::join!(sum_f, dc_f, vm_f, disc_f);
+            let cicd_f = inspect_lab_cicd_fast(kc, Some(sem_ref));
+            let (s, dcs, vms, disc, cicd) = tokio::join!(sum_f, dc_f, vm_f, disc_f, cicd_f);
             let mut dc_names = Vec::new();
             if let Ok(dc_val) = dcs {
                 if let Some(items) = dc_val.get("items").and_then(|v| v.as_array()) {
@@ -1049,18 +1217,87 @@ impl CatalogRegistry {
                 }
             }
             dc_names.sort();
-            (Some(s), dc_names, vms.ok(), disc)
+            (Some(s), dc_names, vms.ok(), disc, cicd)
         };
 
-        // Wave 1: pits-agent REST + Core RKE2 + Lab K8s (bounded by decoupled `agent_sem`, `core_sem`, `lab_sem`)
+        let extra_k8s_fut = async {
+            let mut results = Vec::with_capacity(extra_cluster_cfgs.len());
+            let mut extra_disc = Vec::new();
+            let mut join_set = JoinSet::new();
+            for cfg in &extra_cluster_cfgs {
+                let reg_c = self.clone();
+                let cfg_c = cfg.clone();
+                let sem_c = core_sem.clone();
+                join_set.spawn(async move {
+                    match reg_c.build_extra_k8s_req(&cfg_c).await {
+                        Ok(kc) => {
+                            let slug = sanitize_k8s_slug(&cfg_c.name);
+                            let cluster_ref = format!("resource:default/{slug}");
+                            let (sum, disc) = tokio::join!(
+                                inspect_cluster_fast(&kc, Some(sem_c.as_ref())),
+                                discover_k8s_crossplane_fast(&kc, &slug, &cluster_ref, Some(&sem_c))
+                            );
+                            (ExtraClusterTelemetry { config: cfg_c, summary: sum }, disc)
+                        }
+                        Err(e) => (
+                            ExtraClusterTelemetry {
+                                summary: ClusterControlPlaneSummary {
+                                    cluster: cfg_c.name.clone(),
+                                    server_url: String::new(),
+                                    via_agent_bridge: cfg_c.via_agent_bridge,
+                                    reachable: false,
+                                    checked_at: Utc::now(),
+                                    git_version: None,
+                                    nodes: Vec::new(),
+                                    running_pods: 0,
+                                    total_pods: 0,
+                                    bound_pvs: 0,
+                                    npu_slices: Vec::new(),
+                                    dra_slices: Vec::new(),
+                                    dra_claims: Vec::new(),
+                                    device_plugin_gpu_used: BTreeMap::new(),
+                                    device_classes: Vec::new(),
+                                    error: Some(e.to_string()),
+                                },
+                                config: cfg_c,
+                            },
+                            Vec::new(),
+                        ),
+                    }
+                });
+            }
+            while let Some(joined) = join_set.join_next().await {
+                if let Ok((tel, mut disc)) = joined {
+                    results.push(tel);
+                    extra_disc.append(&mut disc);
+                }
+            }
+            results.sort_by(|a, b| a.config.name.cmp(&b.config.name));
+            (results, extra_disc)
+        };
+
+        // Wave 1: pits-agent REST + Core RKE2 + Lab K8s + Extra Clusters
         let (
-            (agent_health, btrfs, hook_inventory, san_by_device),
+            (agent_health, agent_clusters, btrfs, hook_inventory, san_by_device),
             router_live,
             (core_cluster, tink_hardware, tink_workflows, core_vms, mut core_disc),
-            (lab_cluster, lab_device_classes, lab_vms, mut lab_disc),
-        ) = tokio::join!(agent_fut, router_fut, core_k8s_fut, lab_k8s_fut);
+            (lab_cluster, lab_device_classes, lab_vms, mut lab_disc, lab_cicd),
+            (extra_clusters, mut extra_disc),
+        ) = tokio::join!(agent_fut, router_fut, core_k8s_fut, lab_k8s_fut, extra_k8s_fut);
+
+        if tier == RefreshTier::Standard {
+            if !hook_inventory.is_empty() {
+                let mut guard = self.last_hook_inventory.write().await;
+                *guard = hook_inventory.clone();
+            }
+            if !san_by_device.is_empty() {
+                let mut guard = self.last_san_by_device.write().await;
+                *guard = san_by_device.clone();
+            }
+        }
 
         core_disc.append(&mut lab_disc);
+        core_disc.append(&mut extra_disc);
         let registered_units = {
             let guard = self.sourcing.read().await;
             guard
@@ -1075,6 +1312,7 @@ impl CatalogRegistry {
         let wave1_connected = agent_health.is_some()
             || core_cluster.as_ref().map(|c| c.reachable).unwrap_or(false)
             || lab_cluster.as_ref().map(|c| c.reachable).unwrap_or(false)
+            || extra_clusters.iter().any(|c| c.summary.reachable)
             || prior_talos.values().any(|t| t.reachable);
 
         let mut live = LiveTelemetry {
@@ -1085,6 +1323,7 @@ impl CatalogRegistry {
                 "Live telemetry endpoints unreachable; serving baseline catalog state".to_string()
             }),
             agent_health,
+            agent_clusters,
             router_live,
             btrfs,
             san_by_device,
@@ -1094,7 +1333,9 @@ impl CatalogRegistry {
             pxe_asset_verify: cached_pxe_verify,
             core_cluster,
             lab_cluster,
+            extra_clusters,
             lab_device_classes,
+            lab_cicd,
             talos_by_device: prior_talos,
             core_vms,
             lab_vms,
@@ -1108,13 +1349,19 @@ impl CatalogRegistry {
         if talos_opt.is_some() && live.any_connected {
             let cached_rdp = self.last_rdp_tls.read().await.clone();
             let sourcing_snap = self.sourcing.read().await.clone();
-            let wave1_snap = synthesize_snapshot_from_inputs(
-                bundle,
-                cached_rdp.as_ref(),
-                &live,
-                &sourcing_snap,
-                Utc::now(),
-            );
+            let wave1_now = Utc::now();
+            let wave1_snap = {
+                let mut hist = self.telemetry_history.write().await;
+                hist.record_live_telemetry(&live, wave1_now);
+                synthesize_snapshot_from_inputs_with_history(
+                    bundle,
+                    cached_rdp.as_ref(),
+                    &live,
+                    &sourcing_snap,
+                    &mut hist,
+                    wave1_now,
+                )
+            };
             {
                 let mut guard = self.cache.write().await;
                 *guard = Some((Instant::now(), Arc::new(wave1_snap)));
@@ -1182,6 +1429,7 @@ impl CatalogRegistry {
         live.any_connected = live.agent_health.is_some()
             || live.core_cluster.as_ref().map(|c| c.reachable).unwrap_or(false)
             || live.lab_cluster.as_ref().map(|c| c.reachable).unwrap_or(false)
+            || live.extra_clusters.iter().any(|c| c.summary.reachable)
             || live.talos_by_device.values().any(|t| t.reachable);
 
         live.connection_note = Some(if live.any_connected {
@@ -1193,11 +1441,11 @@ impl CatalogRegistry {
         live
     }
 
-    async fn synthesize_live_snapshot(&self) -> CatalogSnapshot {
+    async fn synthesize_live_snapshot_tier(&self, tier: RefreshTier) -> CatalogSnapshot {
         let now = Utc::now();
         let bundle = self.bundle.read().await.clone();
         let cached_rdp = self.last_rdp_tls.read().await.clone();
-        let live = self.collect_live_telemetry(&bundle).await;
+        let live = self.collect_live_telemetry_tier(&bundle, tier).await;
         if !live.discovered_sourcing_candidates.is_empty() {
             let _ = self.sourcing_db.upsert_discovery_candidates(
                 &live.discovered_sourcing_candidates,
@@ -1208,7 +1456,16 @@ impl CatalogRegistry {
             let _ = guard.refresh_from_db();
         }
         let sourcing = self.sourcing.read().await.clone();
-        synthesize_snapshot_from_inputs(&bundle, cached_rdp.as_ref(), &live, &sourcing, now)
+        let mut hist = self.telemetry_history.write().await;
+        hist.record_live_telemetry(&live, now);
+        synthesize_snapshot_from_inputs_with_history(
+            &bundle,
+            cached_rdp.as_ref(),
+            &live,
+            &sourcing,
+            &mut hist,
+            now,
+        )
     }
 
     pub async fn sourcing_overview(&self, force_live: bool) -> SourcingOverviewResponse {
@@ -1966,6 +2223,26 @@ pub(crate) fn synthesize_snapshot_from_inputs(
     sourcing: &SourcingStore,
     now: DateTime<Utc>,
 ) -> CatalogSnapshot {
+    let mut history = TelemetryHistory::default();
+    history.record_live_telemetry(live, now);
+    synthesize_snapshot_from_inputs_with_history(
+        bundle,
+        cached_rdp,
+        live,
+        sourcing,
+        &mut history,
+        now,
+    )
+}
+
+pub(crate) fn synthesize_snapshot_from_inputs_with_history(
+    bundle: &WorkspaceBundle,
+    cached_rdp: Option<&RdpTlsVerification>,
+    live: &LiveTelemetry,
+    sourcing: &SourcingStore,
+    history: &mut TelemetryHistory,
+    now: DateTime<Utc>,
+) -> CatalogSnapshot {
     let mut ordered_refs: Vec<String> = Vec::new();
     let mut details: BTreeMap<String, PitsEntityDetail> = BTreeMap::new();
 
@@ -2022,6 +2299,7 @@ pub(crate) fn synthesize_snapshot_from_inputs(
                 status: "Active".to_string(),
                 status_level: "ok".to_string(),
                 summary_line: desc.to_string(),
+                summary: EntitySummary::default(),
                 refreshed_at: now,
                 live_connected: live.any_connected,
                 attribute_sections: vec![AttributeSection {
@@ -2046,7 +2324,7 @@ pub(crate) fn synthesize_snapshot_from_inputs(
     // 0b. Systems (3): `pits-infrastructure`, `core-checkout`, `pits-city-pipeline`
     {
         let total_sourcing = sourcing.records().count();
-        let total_resources = 26 + total_sourcing;
+        let total_resources = 28 + total_sourcing;
         let sys_ent = make_catalog_entity(
             "System",
             "default",
@@ -2085,16 +2363,17 @@ pub(crate) fn synthesize_snapshot_from_inputs(
             },
             status_level: "ok".to_string(),
             summary_line: format!(
-                "5 bare-metal machines, 4 physical NPUs, 9 NVMe/TCP SAN volumes, 2 K8s clusters, 2 KubeVirt VMs, {} external sourcing units",
+                "5 bare-metal machines, 4 physical NPUs, 9 NVMe/TCP SAN volumes, 2 K8s clusters, 2 CI/CD pipelines, 2 KubeVirt VMs, {} external sourcing units",
                 total_sourcing
             ),
+            summary: EntitySummary::default(),
             refreshed_at: now,
             live_connected: live.any_connected,
             attribute_sections: vec![AttributeSection {
                 id: "fleet-overview".to_string(),
                 title: "Fleet Architecture Summary".to_string(),
                 items: vec![
-                    attr("resourceTypes", "Registered Resource Types", "12", Some("ok"), false),
+                    attr("resourceTypes", "Registered Resource Types", RESOURCE_TYPE_METAS.len().to_string(), Some("ok"), false),
                     attr("resourceEntities", "Total Resource Entities", total_resources.to_string(), Some("ok"), false),
                     attr("agentConnected", "pits-agent mTLS Telemetry", if live.agent_health.is_some() { "Connected" } else { "Offline (Baseline)" }, Some(if live.agent_health.is_some() { "ok" } else { "info" }), false),
                 ],
@@ -2158,6 +2437,7 @@ pub(crate) fn synthesize_snapshot_from_inputs(
                 status: "Active".to_string(),
                 status_level: "ok".to_string(),
                 summary_line: desc.to_string(),
+                summary: EntitySummary::default(),
                 refreshed_at: now,
                 live_connected: live.any_connected,
                 attribute_sections: vec![AttributeSection {
@@ -2317,6 +2597,7 @@ pub(crate) fn synthesize_snapshot_from_inputs(
                     "{desc} ({} upstream Resource dependencies)",
                     dep_list.len()
                 ),
+                summary: EntitySummary::default(),
                 refreshed_at: now,
                 live_connected: live.any_connected,
                 attribute_sections: vec![AttributeSection {
@@ -2375,9 +2656,17 @@ pub(crate) fn synthesize_snapshot_from_inputs(
         details.insert(k, d);
     }
 
+    // 2b. `gpu-accelerator` (dynamic from live DRA v1 GPU ResourceSlices, node GPU allocatables, or pits-agent /v1/clusters)
+    for (k, d) in collect_gpu_accelerator_details(live, now) {
+        if !details.contains_key(&k) {
+            ordered_refs.push(k.clone());
+            details.insert(k, d);
+        }
+    }
+
     // 3. `virtual-machine` (2): `win11-001`, `access-lab`
     {
-        let win_d = build_win11_vm_detail(live, cached_rdp, now);
+        let win_d = build_win11_vm_detail(bundle, live, cached_rdp, now);
         ordered_refs.push("default/win11-001".to_string());
         details.insert("default/win11-001".to_string(), win_d);
 
@@ -2422,7 +2711,7 @@ pub(crate) fn synthesize_snapshot_from_inputs(
         }
     }
 
-    // 8. `kubernetes-cluster` (2): `cluster-pits-core`, `cluster-pits-lab`
+    // 8. `kubernetes-cluster` (2 baseline + dynamic extra_clusters & pits-agent discovered clusters)
     {
         let c_core = build_cluster_detail(true, bundle, live, now);
         ordered_refs.push("default/cluster-pits-core".to_string());
@@ -2431,6 +2720,34 @@ pub(crate) fn synthesize_snapshot_from_inputs(
         let c_lab = build_cluster_detail(false, bundle, live, now);
         ordered_refs.push("default/cluster-pits-lab".to_string());
         details.insert("default/cluster-pits-lab".to_string(), c_lab);
+
+        for extra in &live.extra_clusters {
+            let slug = sanitize_k8s_slug(&extra.config.name);
+            let k = format!("default/{slug}");
+            if !details.contains_key(&k) {
+                let d = build_extra_cluster_detail(extra, now);
+                ordered_refs.push(k.clone());
+                details.insert(k, d);
+            }
+        }
+
+        for (k, d) in collect_agent_discovered_cluster_details(live, &details, now) {
+            if !details.contains_key(&k) {
+                ordered_refs.push(k.clone());
+                details.insert(k, d);
+            }
+        }
+    }
+
+    // 8b. `cicd-pipeline` (2): `pits-lab-acceleration`, `pits-b1-ci-pipeline`
+    {
+        let devstack_d = build_cicd_devstack_detail(live, now);
+        ordered_refs.push("default/pits-lab-acceleration".to_string());
+        details.insert("default/pits-lab-acceleration".to_string(), devstack_d);
+
+        let pipeline_d = build_cicd_workflow_pipeline_detail(live, now);
+        ordered_refs.push("default/pits-b1-ci-pipeline".to_string());
+        details.insert("default/pits-b1-ci-pipeline".to_string(), pipeline_d);
     }
 
     // 9. Sourcing Governance Units (`vendor-saas`, `commercial-sdk`, `managed-infra`, `outsourced-dev`)
@@ -2478,6 +2795,9 @@ pub(crate) fn synthesize_snapshot_from_inputs(
     // Finalize Sourcing Governance evaluations after symmetric dependencyOf edges are populated!
     finalize_sourcing_details(&ordered_refs, &mut details, sourcing);
 
+    // Populate dual-track (Static Policy × Dynamic Change) summaries across all entities!
+    populate_dual_track_summaries(&mut details, bundle, live, history, now);
+
     let entities: Vec<CatalogEntity> = ordered_refs
         .iter()
         .filter_map(|k| details.get(k).map(|d| d.entity.clone()))
@@ -2501,6 +2821,14 @@ pub(crate) fn synthesize_snapshot_from_inputs(
                 .iter()
                 .filter(|d| d.status_level == "warn" || d.status_level == "error")
                 .count();
+            let drifted_count = matching
+                .iter()
+                .filter(|d| d.summary.drift_detected)
+                .count();
+            let policy_compliant_count = entity_count.saturating_sub(drifted_count);
+            let mode = observation_mode_for_type(meta.resource_type);
+            let highlights =
+                compute_type_highlights(meta.resource_type, &matching, live, history);
             ResourceTypeSummary {
                 resource_type: meta.resource_type.to_string(),
                 category: meta.category.to_string(),
@@ -2510,6 +2838,11 @@ pub(crate) fn synthesize_snapshot_from_inputs(
                 healthy_count,
                 warning_count,
                 action_ids: canonical_action_ids_for_type(meta.resource_type),
+                observation_mode: mode.as_str().to_string(),
+                cadence_tier: mode.cadence_tier().to_string(),
+                policy_compliant_count,
+                drifted_count,
+                highlights,
             }
         })
         .collect();
@@ -2813,6 +3146,7 @@ fn build_sourcing_placeholder_detail(
         status: "Evaluating".to_string(),
         status_level: "info".to_string(),
         summary_line: rec.description.clone(),
+        summary: EntitySummary::default(),
         refreshed_at: now,
         live_connected: live.any_connected,
         attribute_sections: Vec::new(),
@@ -3270,7 +3604,7 @@ fn build_pits_core_host_detail(live: &LiveTelemetry, now: DateTime<Utc>) -> Pits
             "retailModel": "Minisforum MS-01 (Venus Series / AHWSA)",
             "cpuModel": "12th Gen Intel(R) Core(TM) i5-12600H",
             "managementIp": mgmt_ip,
-            "tailscaleIp": "100.74.25.42",
+            "tailscaleIp": "100.95.95.88",
             "protectedMgmtPci": MGMT0_PCI,
             "os": "NixOS + RKE2",
         }),
@@ -3293,7 +3627,7 @@ fn build_pits_core_host_detail(live: &LiveTelemetry, now: DateTime<Utc>) -> Pits
             title: "Network & PCI Isolation Guard".to_string(),
             items: vec![
                 attr("managementIp", "Management Address (mgmt0)", &mgmt_ip, Some("ok"), true),
-                attr("tailscaleAddress", "Tailscale Zero-Trust Endpoint", "100.74.25.42:18443", Some("ok"), true),
+                attr("tailscaleAddress", "Tailscale Zero-Trust Endpoint", "100.95.95.88:18443", Some("ok"), true),
                 attr("mgmt0Guard", "mgmt0 PCI Guard", format!("{mgmt_pci} (Protected Host NIC — Never VFIO)"), Some("ok"), true),
                 attr("routerDpdkPcis", "DPDK WAN / LAN VF0 PCIs", format!("{WAN_ROUTER_PCI} / {LAN_TRUNK_VF_PCI}"), None, true),
             ],
@@ -3315,6 +3649,7 @@ fn build_pits_core_host_detail(live: &LiveTelemetry, now: DateTime<Utc>) -> Pits
         status: status.to_string(),
         status_level: "ok".to_string(),
         summary_line: summary,
+        summary: EntitySummary::default(),
         refreshed_at: now,
         live_connected: live_conn,
         attribute_sections: sections,
@@ -3572,6 +3907,7 @@ fn build_talos_host_detail(
         status: status.to_string(),
         status_level: status_level.to_string(),
         summary_line: summary,
+        summary: EntitySummary::default(),
         refreshed_at: now,
         live_connected: live_conn,
         attribute_sections: sections,
@@ -3765,6 +4101,24 @@ fn build_npu_detail(
     let mut manifests = BTreeMap::new();
     manifests.insert("dra-openvino-validation.yaml".to_string(), claim_yaml);
 
+    let npu_occ = live
+        .lab_cluster
+        .as_ref()
+        .map(|cp| {
+            let dev_cnt = matching_slice
+                .map(|s| s.devices.len().max(1))
+                .unwrap_or(1);
+            compute_npu_node_occupancy(cp, &node.device_id, dev_cnt)
+        })
+        .unwrap_or_else(|| crate::k8s::AcceleratorOccupancy {
+            total: 1,
+            allocated: 0,
+            occupancy_pct: 0.0,
+            consumer_pods: Vec::new(),
+            claim_names: Vec::new(),
+            source: "dra".to_string(),
+        });
+
     let mut drv_items = vec![
         attr("expectedDriver", "Expected Kernel Driver", &npu.expected_kernel_driver, None, true),
         attr(
@@ -3782,6 +4136,23 @@ fn build_npu_detail(
             &slice_display,
             Some(if status == "ReadyDraV1" { "ok" } else { "warn" }),
             true,
+        ),
+        attr(
+            "draOccupancy",
+            "DRA Claim Occupancy",
+            format!(
+                "{}/{} ({:.0}%){}",
+                npu_occ.allocated,
+                npu_occ.total,
+                npu_occ.occupancy_pct,
+                if npu_occ.consumer_pods.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · pods=[{}]", npu_occ.consumer_pods.join(", "))
+                }
+            ),
+            Some(if npu_occ.allocated > 0 { "info" } else { "ok" }),
+            false,
         ),
     ];
     if status == "HardwarePresentDriverPending" {
@@ -3861,6 +4232,11 @@ fn build_npu_detail(
             "draDriver": dra_driver_name,
             "deviceClass": npu.expected_device_class,
             "draPublished": dra_published || (npu.driver_bound && (!lab_reachable || node.accelerator.as_ref().map(|a| a.dra_validated).unwrap_or(false))),
+            "allocatedCount": npu_occ.allocated,
+            "totalCount": npu_occ.total,
+            "occupancyPct": npu_occ.occupancy_pct,
+            "consumerPods": npu_occ.consumer_pods,
+            "draClaims": npu_occ.claim_names,
         }),
         vec![
             rel("partOf", &format!("resource:default/{}", node.device_id)),
@@ -3874,6 +4250,7 @@ fn build_npu_detail(
         status: status.to_string(),
         status_level: status_level.to_string(),
         summary_line: summary,
+        summary: EntitySummary::default(),
         refreshed_at: now,
         live_connected: live_conn,
         attribute_sections: sections,
@@ -3883,16 +4260,19 @@ fn build_npu_detail(
             "detectedHardware": npu,
             "cpuExpectation": cpu_exp,
             "resourceSlice": matching_slice,
+            "draOccupancy": npu_occ,
             "registeredDeviceClasses": live.lab_device_classes,
         }),
     }
 }
 
 fn build_win11_vm_detail(
+    bundle: &WorkspaceBundle,
     live: &LiveTelemetry,
     cached_rdp: Option<&RdpTlsVerification>,
     now: DateTime<Utc>,
 ) -> PitsEntityDetail {
+    const WIN11_CONTRACT_HOST: &str = "netboot-004";
     let vm_probe_ok = live.lab_vms.is_some();
     let live_vm = live
         .lab_vms
@@ -3911,6 +4291,19 @@ fn build_win11_vm_detail(
         None => ("Running", "ok"),
     };
 
+    let actual_host = live_vm
+        .and_then(|v| v.node_name.as_deref())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(WIN11_CONTRACT_HOST);
+    let host_drifted = actual_host != WIN11_CONTRACT_HOST;
+    let rdp_host_ip = bundle
+        .nodes
+        .iter()
+        .find(|n| n.device_id == actual_host)
+        .map(|n| n.node_ip.as_str())
+        .unwrap_or(WIN11_DEFAULT_HOST_IP);
+
     let install_iso_detached = live_vm
         .map(|v| !v.attached_disks.iter().any(|d| d.contains("iso")))
         .unwrap_or(true);
@@ -3918,9 +4311,13 @@ fn build_win11_vm_detail(
         .map(|r| format!("{} (NLA={})", r.cert_sha1_hex, r.nla_hybrid_enforced))
         .unwrap_or_else(|| "Run 'verify-rdp-tls' to inspect live X.509 thumbprint".to_string());
 
+    let host_note = if host_drifted {
+        format!("{actual_host} (migrated from {WIN11_CONTRACT_HOST})")
+    } else {
+        actual_host.to_string()
+    };
     let summary = format!(
-        "Windows 11 24H2 Workstation (pits-vms/win11-001) on netboot-004 · 8 vCPU / 16 GiB · SAN vmstore · RDP {}:{}",
-        WIN11_DEFAULT_HOST_IP, WIN11_DEFAULT_RDP_NODEPORT
+        "Windows 11 24H2 Workstation (pits-vms/win11-001) on {host_note} · 8 vCPU / 16 GiB · SAN vmstore · RDP {rdp_host_ip}:{WIN11_DEFAULT_RDP_NODEPORT}"
     );
 
     let vm_yaml = render_windows11_vm_manifest(false);
@@ -3933,7 +4330,14 @@ fn build_win11_vm_detail(
             title: "KubeVirt Instance & Scheduling".to_string(),
             items: vec![
                 attr("cluster", "Cluster / Namespace", "cluster-pits-lab / pits-vms", Some("ok"), true),
-                attr("hostNode", "Pinned Bare-Metal Host", live_vm.and_then(|v| v.node_name.as_deref()).unwrap_or("netboot-004"), Some("ok"), true),
+                attr(
+                    "hostNode",
+                    "Active Bare-Metal Host",
+                    &host_note,
+                    Some(if host_drifted { "warn" } else { "ok" }),
+                    true,
+                ),
+                attr("contractHostNode", "Contract Pinned Host", WIN11_CONTRACT_HOST, Some("info"), true),
                 attr("runStrategy", "RunStrategy / Printable Status", format!("{} / {}", live_vm.map(|v| v.run_strategy.as_str()).unwrap_or("Always"), status), Some(status_level), false),
                 attr("computeSpec", "vCPU / Memory / Firmware", "8 Cores (host-passthrough) · 16 GiB · q35 UEFI SecureBoot + Persistent vTPM", None, false),
                 attr("backingVolume", "Primary Disk Backing", "san-volume/netboot-004-vmstore (/var/mnt/vmstore/win11-001/system.img)", Some("ok"), true),
@@ -3944,7 +4348,7 @@ fn build_win11_vm_detail(
             id: "rdp-security".to_string(),
             title: "Remote Desktop X.224 + TLS Security".to_string(),
             items: vec![
-                attr("rdpEndpoint", "RDP NodePort Endpoint", format!("{WIN11_DEFAULT_HOST_IP}:{WIN11_DEFAULT_RDP_NODEPORT}"), Some("ok"), true),
+                attr("rdpEndpoint", "RDP NodePort Endpoint", format!("{rdp_host_ip}:{WIN11_DEFAULT_RDP_NODEPORT}"), Some("ok"), true),
                 attr("resolution", "Pinned Display Profile", "3072×1920 @ 32bpp (CredSSP/NLA Level 2)", None, false),
                 attr("certSha1", "Live X.509 SHA-1 Thumbprint", rdp_sha1, Some(if cached_rdp.is_some() { "ok" } else { "info" }), true),
                 attr("selfSessionGuard", "Self-Session Stop Lock", "Enabled (confirmSelfSessionStop == true required)", Some("ok"), false),
@@ -3972,13 +4376,17 @@ fn build_win11_vm_detail(
         json!({
             "cluster": "cluster-pits-lab",
             "vmNamespace": "pits-vms",
-            "hostNode": "netboot-004",
+            "hostNode": actual_host,
+            "contractHostNode": WIN11_CONTRACT_HOST,
+            "hostDrifted": host_drifted,
+            "installIsoDetached": install_iso_detached,
+            "rdpTlsVerified": cached_rdp.is_some(),
             "vcpus": 8,
             "memoryGib": 16,
-            "rdpEndpoint": format!("{WIN11_DEFAULT_HOST_IP}:{WIN11_DEFAULT_RDP_NODEPORT}"),
+            "rdpEndpoint": format!("{rdp_host_ip}:{WIN11_DEFAULT_RDP_NODEPORT}"),
         }),
         vec![
-            rel("dependsOn", "resource:default/netboot-004"),
+            rel("dependsOn", &format!("resource:default/{}", sanitize_k8s_slug(actual_host))),
             rel("dependsOn", "resource:default/netboot-004-vmstore"),
             rel("partOf", "resource:default/cluster-pits-lab"),
         ],
@@ -3990,6 +4398,7 @@ fn build_win11_vm_detail(
         status: status.to_string(),
         status_level: status_level.to_string(),
         summary_line: summary,
+        summary: EntitySummary::default(),
         refreshed_at: now,
         live_connected: lab_conn,
         attribute_sections: sections,
@@ -3998,6 +4407,7 @@ fn build_win11_vm_detail(
         diagnostics: json!({
             "liveVm": live_vm,
             "lastVerifiedRdpTls": cached_rdp,
+            "hostDrifted": host_drifted,
         }),
     }
 }
@@ -4078,6 +4488,7 @@ fn build_access_lab_vm_detail(live: &LiveTelemetry, now: DateTime<Utc>) -> PitsE
         status: status.to_string(),
         status_level: status_level.to_string(),
         summary_line: summary,
+        summary: EntitySummary::default(),
         refreshed_at: now,
         live_connected: core_conn,
         attribute_sections: sections,
@@ -4213,6 +4624,7 @@ fn build_edge_router_detail(
         status: status.to_string(),
         status_level: status_level.to_string(),
         summary_line: summary,
+        summary: EntitySummary::default(),
         refreshed_at: now,
         live_connected: live_conn,
         attribute_sections: sections,
@@ -4359,6 +4771,7 @@ fn build_pxe_profile_detail(
         status: status.to_string(),
         status_level: "ok".to_string(),
         summary_line: summary,
+        summary: EntitySummary::default(),
         refreshed_at: now,
         live_connected: live_conn,
         attribute_sections: sections,
@@ -4489,6 +4902,7 @@ fn build_storage_pool_detail(live: &LiveTelemetry, now: DateTime<Utc>) -> PitsEn
         status: status.to_string(),
         status_level: status_level.to_string(),
         summary_line: summary,
+        summary: EntitySummary::default(),
         refreshed_at: now,
         live_connected: live_conn,
         attribute_sections: sections,
@@ -4661,6 +5075,7 @@ fn build_san_volume_detail(
         status: status.to_string(),
         status_level: status_level.to_string(),
         summary_line: summary,
+        summary: EntitySummary::default(),
         refreshed_at: now,
         live_connected: live_conn,
         attribute_sections: sections,
@@ -4698,7 +5113,7 @@ fn build_cluster_detail(
         .map(|c| c.server_url.as_str())
         .filter(|s| !s.is_empty())
         .unwrap_or(if is_core {
-            "https://100.74.25.42:6443"
+            "https://100.95.95.88:6443"
         } else {
             "https://10.89.20.21:6443"
         });
@@ -4759,6 +5174,13 @@ fn build_cluster_detail(
         vec![rel("dependsOn", "resource:default/pits-core-router")]
     };
 
+    let gpu_occ = cp
+        .map(compute_cluster_gpu_occupancy)
+        .unwrap_or_default();
+    let npu_occ = cp
+        .map(compute_cluster_npu_occupancy)
+        .unwrap_or_default();
+
     let sections = vec![
         AttributeSection {
             id: "control-plane".to_string(),
@@ -4778,6 +5200,21 @@ fn build_cluster_detail(
                 attr("pods", "Pod Health", &pods_str, Some("ok"), false),
                 attr("boundPvs", "Bound PersistentVolumes", bound_pvs.to_string(), None, true),
                 attr("deviceClasses", "DRA v1 DeviceClasses", &dcs, None, true),
+                attr(
+                    "draOccupancy",
+                    "DRA GPU / NPU Occupancy",
+                    format!(
+                        "GPU {}/{} ({:.0}%) · NPU {}/{} ({:.0}%)",
+                        gpu_occ.allocated,
+                        gpu_occ.total,
+                        gpu_occ.occupancy_pct,
+                        npu_occ.allocated,
+                        npu_occ.total,
+                        npu_occ.occupancy_pct
+                    ),
+                    Some("info"),
+                    true,
+                ),
             ],
         },
     ];
@@ -4809,6 +5246,12 @@ fn build_cluster_detail(
             "viaAgentBridge": !is_core,
             "readyNodes": ready_nodes,
             "totalNodes": total_nodes,
+            "gpuCount": gpu_occ.total,
+            "allocatedGpus": gpu_occ.allocated,
+            "gpuOccupancyPct": gpu_occ.occupancy_pct,
+            "npuCount": npu_occ.total,
+            "allocatedNpus": npu_occ.allocated,
+            "npuOccupancyPct": npu_occ.occupancy_pct,
         }),
         relations,
     );
@@ -4819,6 +5262,7 @@ fn build_cluster_detail(
         status: status.to_string(),
         status_level: status_level.to_string(),
         summary_line: summary,
+        summary: EntitySummary::default(),
         refreshed_at: now,
         live_connected: reachable,
         attribute_sections: sections,
@@ -4829,6 +5273,1133 @@ fn build_cluster_detail(
             "registeredDeviceClasses": if is_core { &[][..] } else { live.lab_device_classes.as_slice() },
         }),
     }
+}
+
+fn build_cluster_detail_from_summary(
+    slug: &str,
+    title: &str,
+    role: &str,
+    summary_opt: Option<&ClusterControlPlaneSummary>,
+    now: DateTime<Utc>,
+) -> PitsEntityDetail {
+    let reachable = summary_opt.map(|c| c.reachable).unwrap_or(false);
+    let git_ver = summary_opt
+        .and_then(|c| c.git_version.as_deref())
+        .unwrap_or("unknown");
+    let server_url = summary_opt
+        .map(|c| c.server_url.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("-");
+    let total_nodes = summary_opt.map(|c| c.nodes.len()).unwrap_or(0);
+    let ready_nodes = summary_opt
+        .map(|c| c.nodes.iter().filter(|n| n.ready).count())
+        .unwrap_or(0);
+    let pods_str = match summary_opt.filter(|c| c.reachable) {
+        Some(c) => format!("{}/{} Running", c.running_pods, c.total_pods),
+        None => "Unreachable".to_string(),
+    };
+    let bound_pvs = summary_opt.map(|c| c.bound_pvs).unwrap_or(0);
+    let gpu_occ = summary_opt
+        .map(compute_cluster_gpu_occupancy)
+        .unwrap_or_default();
+    let npu_occ = summary_opt
+        .map(compute_cluster_npu_occupancy)
+        .unwrap_or_default();
+    let gpu_count = gpu_occ.total;
+    let dcs = summary_opt
+        .filter(|c| !c.device_classes.is_empty())
+        .map(|c| c.device_classes.join(", "))
+        .unwrap_or_else(|| "None".to_string());
+    let via_bridge = summary_opt.map(|c| c.via_agent_bridge).unwrap_or(false);
+
+    let (status, status_level) = if reachable {
+        if ready_nodes == total_nodes && total_nodes > 0 {
+            ("Healthy", "ok")
+        } else if total_nodes == 0 {
+            ("Healthy", "ok")
+        } else {
+            ("DegradedNodes", "warn")
+        }
+    } else {
+        ("Unreachable", "warn")
+    };
+
+    let summary = if gpu_count > 0 {
+        format!(
+            "External/Virtual K8s ({git_ver}) · {ready_nodes}/{total_nodes} Ready Nodes · {pods_str} · {gpu_count} GPUs ({}/{} {:.0}%)",
+            gpu_occ.allocated, gpu_count, gpu_occ.occupancy_pct
+        )
+    } else {
+        format!(
+            "External/Virtual K8s ({git_ver}) · {ready_nodes}/{total_nodes} Ready Nodes · {pods_str} · {gpu_count} GPUs"
+        )
+    };
+
+    let mut relations = Vec::new();
+    if let Some(cp) = summary_opt {
+        for n in &cp.nodes {
+            relations.push(rel(
+                "hasPart",
+                &format!("resource:default/{}", sanitize_k8s_slug(&n.name)),
+            ));
+        }
+    }
+
+    let sections = vec![
+        AttributeSection {
+            id: "control-plane".to_string(),
+            title: "Kubernetes API Server & Transport".to_string(),
+            items: vec![
+                attr("apiServer", "API Server Endpoint", server_url, Some(if reachable { "ok" } else { "warn" }), true),
+                attr("transportMode", "Client Transport", if via_bridge { "mTLS HTTP CONNECT Bridge via pits-agent" } else { "Direct TLS via Tailscale / LAN" }, Some("ok"), false),
+                attr("kubernetesVersion", "Kubernetes Version", git_ver, Some("ok"), true),
+                attr("clusterRole", "Cluster Role", role, None, true),
+            ],
+        },
+        AttributeSection {
+            id: "workloads-dra".to_string(),
+            title: "Nodes, Workloads & DRA ResourceSlices".to_string(),
+            items: vec![
+                attr("readyNodes", "Ready Nodes", format!("{ready_nodes}/{total_nodes}"), Some(status_level), true),
+                attr("pods", "Pod Health", &pods_str, Some("ok"), false),
+                attr("boundPvs", "Bound PersistentVolumes", bound_pvs.to_string(), None, true),
+                attr("gpuCount", "Discovered GPUs", gpu_count.to_string(), Some(if gpu_count > 0 { "ok" } else { "info" }), true),
+                attr(
+                    "gpuOccupancy",
+                    "GPU Occupancy (DRA / DevicePlugin)",
+                    format!(
+                        "{}/{} ({:.0}%, source={})",
+                        gpu_occ.allocated, gpu_count, gpu_occ.occupancy_pct, gpu_occ.source
+                    ),
+                    Some(if gpu_occ.occupancy_pct >= 90.0 { "warn" } else { "ok" }),
+                    true,
+                ),
+                attr("deviceClasses", "DRA v1 DeviceClasses", &dcs, None, true),
+            ],
+        },
+    ];
+
+    let entity = make_catalog_entity(
+        "Resource",
+        "default",
+        slug,
+        Some(title),
+        Some(&summary),
+        "kubernetes-cluster",
+        status,
+        status_level,
+        "Control Planes",
+        reachable,
+        vec![
+            "kubernetes".to_string(),
+            "external-k8s".to_string(),
+            if gpu_count > 0 { "dra-v1" } else { "discovered" }.to_string(),
+        ],
+        json!({
+            "clusterRole": role,
+            "apiServer": server_url,
+            "gitVersion": git_ver,
+            "viaAgentBridge": via_bridge,
+            "readyNodes": ready_nodes,
+            "totalNodes": total_nodes,
+            "gpuCount": gpu_count,
+            "allocatedGpus": gpu_occ.allocated,
+            "gpuOccupancyPct": gpu_occ.occupancy_pct,
+            "npuCount": npu_occ.total,
+            "allocatedNpus": npu_occ.allocated,
+            "npuOccupancyPct": npu_occ.occupancy_pct,
+            "deviceClasses": summary_opt.map(|c| c.device_classes.clone()).unwrap_or_default(),
+        }),
+        relations,
+    );
+
+    PitsEntityDetail {
+        entity,
+        resource_type: "kubernetes-cluster".to_string(),
+        status: status.to_string(),
+        status_level: status_level.to_string(),
+        summary_line: summary,
+        summary: EntitySummary::default(),
+        refreshed_at: now,
+        live_connected: reachable,
+        attribute_sections: sections,
+        actions: actions_for_k8s_cluster(),
+        manifests: BTreeMap::new(),
+        diagnostics: json!({
+            "clusterSummary": summary_opt,
+            "registeredDeviceClasses": summary_opt.map(|c| c.device_classes.clone()).unwrap_or_default(),
+        }),
+    }
+}
+
+fn build_extra_cluster_detail(extra: &ExtraClusterTelemetry, now: DateTime<Utc>) -> PitsEntityDetail {
+    let slug = sanitize_k8s_slug(&extra.config.name);
+    let title = extra
+        .config
+        .title
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{} (Kubernetes Cluster)", extra.config.name));
+    let role = extra
+        .config
+        .role
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("external-k8s");
+    build_cluster_detail_from_summary(&slug, &title, role, Some(&extra.summary), now)
+}
+
+fn parse_agent_cluster_summary(raw: &Value) -> Option<(String, String, String, ClusterControlPlaneSummary)> {
+    let name = raw.get("name").and_then(|v| v.as_str())?.trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let slug = sanitize_k8s_slug(&name);
+    let title = raw
+        .get("displayName")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(&name)
+        .to_string();
+    let role = raw
+        .get("role")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("agent-discovered-k8s")
+        .to_string();
+    let reachable = raw.get("reachable").and_then(|v| v.as_bool()).unwrap_or(false);
+    let server_url = raw.get("serverUrl").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let git_version = raw.get("gitVersion").and_then(|v| v.as_str()).map(str::to_string);
+    let running_pods = raw.get("runningPods").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let total_pods = raw.get("totalPods").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let bound_pvs = raw.get("boundPvs").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let device_classes: Vec<String> = raw
+        .get("deviceClasses")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+
+    let mut nodes = Vec::new();
+    if let Some(arr) = raw.get("nodes").and_then(|v| v.as_array()) {
+        for n in arr {
+            let nm = n.get("name").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+            let mut custom_alloc = BTreeMap::new();
+            if let Some(obj) = n.get("gpuAllocatable").and_then(|v| v.as_object()) {
+                for (k, v) in obj {
+                    if let Some(s) = v.as_str() {
+                        custom_alloc.insert(k.clone(), s.to_string());
+                    }
+                }
+            }
+            nodes.push(KubeNodeSummary {
+                name: nm,
+                ready: n.get("ready").and_then(|v| v.as_bool()).unwrap_or(false),
+                kubelet_version: n.get("kubeletVersion").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                internal_ip: n.get("internalIp").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                roles: n.get("roles").and_then(|v| v.as_array()).map(|r| r.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default(),
+                custom_allocatable: custom_alloc,
+                retired_zero_resources: Vec::new(),
+            });
+        }
+    }
+
+    let mut dra_slices = Vec::new();
+    if let Some(arr) = raw.get("draSlices").and_then(|v| v.as_array()) {
+        for sl in arr {
+            let slice_name = sl.get("sliceName").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let node_name = sl.get("nodeName").and_then(|v| v.as_str()).unwrap_or("cluster").to_string();
+            let driver = sl.get("driver").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let device_class = sl.get("deviceClass").and_then(|v| v.as_str()).unwrap_or(&driver).to_string();
+            let mut devices = Vec::new();
+            if let Some(devs) = sl.get("devices").and_then(|v| v.as_array()) {
+                for d in devs {
+                    let mut attrs = BTreeMap::new();
+                    if let Some(obj) = d.get("attributes").and_then(|v| v.as_object()) {
+                        for (k, v) in obj {
+                            if let Some(s) = v.as_str() {
+                                attrs.insert(k.clone(), s.to_string());
+                            }
+                        }
+                    }
+                    devices.push(DraDeviceSummary {
+                        name: d.get("name").and_then(|v| v.as_str()).unwrap_or("gpu").to_string(),
+                        vendor: d.get("vendor").and_then(|v| v.as_str()).map(str::to_string),
+                        model: d.get("model").and_then(|v| v.as_str()).map(str::to_string),
+                        product_name: d.get("productName").and_then(|v| v.as_str()).map(str::to_string),
+                        architecture: d.get("architecture").and_then(|v| v.as_str()).map(str::to_string),
+                        uuid: d.get("uuid").and_then(|v| v.as_str()).map(str::to_string),
+                        pci_address: d.get("pciAddress").and_then(|v| v.as_str()).map(str::to_string),
+                        kernel_driver: d.get("kernelDriver").and_then(|v| v.as_str()).map(str::to_string),
+                        driver_version: d.get("driverVersion").and_then(|v| v.as_str()).map(str::to_string),
+                        memory: d.get("memory").and_then(|v| v.as_str()).map(str::to_string),
+                        attributes: attrs,
+                    });
+                }
+            }
+            dra_slices.push(DraSliceSummary {
+                slice_name,
+                node_name,
+                driver,
+                device_class,
+                devices,
+            });
+        }
+    }
+
+    let mut dra_claims = Vec::new();
+    if let Some(arr) = raw.get("draClaims").and_then(|v| v.as_array()) {
+        for c in arr {
+            let consumer_pods: Vec<String> = c
+                .get("consumerPods")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            let consumer_count = c
+                .get("consumerCount")
+                .and_then(|v| v.as_u64())
+                .map(|u| u as usize)
+                .unwrap_or(consumer_pods.len());
+            dra_claims.push(DraClaimAllocation {
+                namespace: c.get("namespace").and_then(|v| v.as_str()).unwrap_or("default").to_string(),
+                name: c.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                driver: c.get("driver").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                pool: c.get("pool").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                device: c.get("device").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                node_name: c.get("nodeName").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_string),
+                allocated: c.get("allocated").and_then(|v| v.as_bool()).unwrap_or(true),
+                consumer_pods,
+                consumer_count,
+            });
+        }
+    }
+
+    let mut device_plugin_gpu_used = BTreeMap::new();
+    if let Some(obj) = raw.get("devicePluginGpuUsed").and_then(|v| v.as_object()) {
+        for (k, v) in obj {
+            if let Some(cnt) = v.as_u64() {
+                device_plugin_gpu_used.insert(k.clone(), cnt as usize);
+            }
+        }
+    }
+
+    Some((
+        slug,
+        title,
+        role,
+        ClusterControlPlaneSummary {
+            cluster: name,
+            server_url,
+            via_agent_bridge: true,
+            reachable,
+            checked_at: Utc::now(),
+            git_version,
+            nodes,
+            running_pods,
+            total_pods,
+            bound_pvs,
+            npu_slices: Vec::new(),
+            dra_slices,
+            dra_claims,
+            device_plugin_gpu_used,
+            device_classes,
+            error: raw.get("error").and_then(|v| v.as_str()).map(str::to_string),
+        },
+    ))
+}
+
+fn collect_agent_discovered_cluster_details(
+    live: &LiveTelemetry,
+    existing_details: &BTreeMap<String, PitsEntityDetail>,
+    now: DateTime<Utc>,
+) -> Vec<(String, PitsEntityDetail)> {
+    let mut out = Vec::new();
+    let Some(items) = live
+        .agent_clusters
+        .as_ref()
+        .and_then(|v| v.get("clusters"))
+        .and_then(|v| v.as_array())
+    else {
+        return out;
+    };
+    for raw in items {
+        let Some((slug, title, role, cp)) = parse_agent_cluster_summary(raw) else {
+            continue;
+        };
+        let key = format!("default/{slug}");
+        if existing_details.contains_key(&key) {
+            continue;
+        }
+        out.push((key, build_cluster_detail_from_summary(&slug, &title, &role, Some(&cp), now)));
+    }
+    out
+}
+
+fn collect_gpu_accelerator_details(
+    live: &LiveTelemetry,
+    now: DateTime<Utc>,
+) -> Vec<(String, PitsEntityDetail)> {
+    let mut out = Vec::new();
+    let mut seen_keys = BTreeSet::new();
+    let mut seen_nodes_with_dra = BTreeSet::new();
+
+    let mut cluster_summaries: Vec<(String, &ClusterControlPlaneSummary)> = Vec::new();
+    if let Some(ref c) = live.core_cluster {
+        cluster_summaries.push(("cluster-pits-core".to_string(), c));
+    }
+    if let Some(ref c) = live.lab_cluster {
+        cluster_summaries.push(("cluster-pits-lab".to_string(), c));
+    }
+    for extra in &live.extra_clusters {
+        cluster_summaries.push((sanitize_k8s_slug(&extra.config.name), &extra.summary));
+    }
+
+    let mut owned_agent_summaries = Vec::new();
+    if let Some(items) = live
+        .agent_clusters
+        .as_ref()
+        .and_then(|v| v.get("clusters"))
+        .and_then(|v| v.as_array())
+    {
+        for raw in items {
+            if let Some((slug, _, _, cp)) = parse_agent_cluster_summary(raw) {
+                if !cluster_summaries.iter().any(|(s, _)| s == &slug) {
+                    owned_agent_summaries.push((slug, cp));
+                }
+            }
+        }
+    }
+
+    let mut all_refs: Vec<(String, &ClusterControlPlaneSummary)> = cluster_summaries;
+    for (slug, cp) in &owned_agent_summaries {
+        all_refs.push((slug.clone(), cp));
+    }
+
+    for (cluster_slug, cp) in &all_refs {
+        for slice in &cp.dra_slices {
+            let drv_low = slice.driver.to_ascii_lowercase();
+            if !drv_low.contains("gpu") && !drv_low.contains("nvidia") {
+                continue;
+            }
+            let node_slug = sanitize_k8s_slug(&slice.node_name);
+            seen_nodes_with_dra.insert(format!("{cluster_slug}/{node_slug}"));
+            for dev in &slice.devices {
+                let dev_slug = sanitize_k8s_slug(&dev.name);
+                let entity_name = format!("{cluster_slug}-{node_slug}-{dev_slug}");
+                let key = format!("default/{entity_name}");
+                if !seen_keys.insert(key.clone()) {
+                    continue;
+                }
+                let product = dev
+                    .product_name
+                    .as_deref()
+                    .or(dev.model.as_deref())
+                    .unwrap_or("GPU Accelerator");
+                let vendor = dev.vendor.as_deref().unwrap_or("nvidia");
+                let arch = dev.architecture.as_deref().unwrap_or("-");
+                let mem = dev.memory.as_deref().unwrap_or("-");
+                let pci = dev.pci_address.as_deref().unwrap_or("-");
+                let drv_ver = dev.driver_version.as_deref().unwrap_or("-");
+                let uuid = dev.uuid.as_deref().unwrap_or("-");
+                let dc = if cp.device_classes.iter().any(|c| c == &slice.device_class) {
+                    slice.device_class.clone()
+                } else {
+                    slice.device_class.clone()
+                };
+                let gpu_occ = compute_gpu_device_occupancy(cp, &slice.node_name, &slice.driver, &dev.name);
+                let occ_label = if gpu_occ.allocated > 0 {
+                    format!(
+                        "InUse {}/{} ({:.0}%){}",
+                        gpu_occ.allocated,
+                        gpu_occ.total,
+                        gpu_occ.occupancy_pct,
+                        if gpu_occ.consumer_pods.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" · pods=[{}]", gpu_occ.consumer_pods.join(", "))
+                        }
+                    )
+                } else {
+                    "Idle 0/1 (0%)".to_string()
+                };
+                let summary = format!(
+                    "{product} ({arch}, {mem}) @ {pci} on {}/{} · ReadyDraV1 ({dc}) · {occ_label}",
+                    cluster_slug, slice.node_name
+                );
+                let claim_yaml = render_gpu_validation_manifests(
+                    "default",
+                    &format!("gpu-claim-{node_slug}-{dev_slug}"),
+                    &format!("gpu-verify-{node_slug}-{dev_slug}"),
+                    &dc,
+                    Some(&slice.node_name),
+                );
+                let mut manifests = BTreeMap::new();
+                manifests.insert("dra-gpu-validation.yaml".to_string(), claim_yaml);
+
+                let sections = vec![
+                    AttributeSection {
+                        id: "gpu-hardware".to_string(),
+                        title: "Physical GPU Identity (DRA v1 ResourceSlice)".to_string(),
+                        items: vec![
+                            attr("cluster", "Kubernetes Cluster", cluster_slug, Some("ok"), true),
+                            attr("hostNode", "Host Node", &slice.node_name, Some("ok"), true),
+                            attr("productName", "GPU Model", product, Some("ok"), false),
+                            attr("vendor", "Vendor", vendor, None, true),
+                            attr("architecture", "Architecture", arch, None, false),
+                            attr("memory", "VRAM Capacity", mem, Some("ok"), true),
+                            attr("pciAddress", "PCI Bus ID", pci, None, true),
+                            attr("uuid", "GPU UUID", uuid, None, true),
+                        ],
+                    },
+                    AttributeSection {
+                        id: "gpu-dra".to_string(),
+                        title: "Driver & Kubernetes DRA v1 Layer".to_string(),
+                        items: vec![
+                            attr("driverVersion", "Host Driver Version", drv_ver, Some("ok"), true),
+                            attr("draDriver", "DRA Driver", &slice.driver, Some("ok"), true),
+                            attr("deviceClass", "DRA DeviceClass", &dc, Some("ok"), true),
+                            attr("resourceSlice", "Published ResourceSlice", &slice.slice_name, Some("ok"), true),
+                            attr("draOccupancy", "DRA Claim Occupancy", &occ_label, Some(if gpu_occ.allocated > 0 { "info" } else { "ok" }), false),
+                        ],
+                    },
+                ];
+
+                let entity = make_catalog_entity(
+                    "Resource",
+                    "default",
+                    &entity_name,
+                    Some(&format!("{product} ({}) · {cluster_slug}/{}", dev.name, slice.node_name)),
+                    Some(&summary),
+                    "gpu-accelerator",
+                    "ReadyDraV1",
+                    "ok",
+                    "Compute & Accelerators",
+                    true,
+                    vec![
+                        "gpu".to_string(),
+                        "dra-v1".to_string(),
+                        vendor.to_string(),
+                        cluster_slug.clone(),
+                    ],
+                    json!({
+                        "cluster": cluster_slug,
+                        "hostNode": slice.node_name,
+                        "deviceName": dev.name,
+                        "productName": product,
+                        "vendor": vendor,
+                        "architecture": arch,
+                        "memory": mem,
+                        "pciAddress": pci,
+                        "uuid": uuid,
+                        "driverVersion": drv_ver,
+                        "draDriver": slice.driver,
+                        "deviceClass": dc,
+                        "resourceSlice": slice.slice_name,
+                        "draPublished": true,
+                        "allocatedCount": gpu_occ.allocated,
+                        "totalCount": gpu_occ.total,
+                        "occupancyPct": gpu_occ.occupancy_pct,
+                        "consumerPods": gpu_occ.consumer_pods,
+                        "draClaims": gpu_occ.claim_names,
+                        "occupancySource": gpu_occ.source,
+                    }),
+                    vec![
+                        rel("partOf", &format!("resource:default/{node_slug}")),
+                        rel("partOf", &format!("resource:default/{cluster_slug}")),
+                    ],
+                );
+
+                out.push((
+                    key,
+                    PitsEntityDetail {
+                        entity,
+                        resource_type: "gpu-accelerator".to_string(),
+                        status: "ReadyDraV1".to_string(),
+                        status_level: "ok".to_string(),
+                        summary_line: summary,
+                        summary: EntitySummary::default(),
+                        refreshed_at: now,
+                        live_connected: true,
+                        attribute_sections: sections,
+                        actions: actions_for_gpu(&slice.node_name, &dc),
+                        manifests,
+                        diagnostics: json!({
+                            "cluster": cluster_slug,
+                            "slice": slice,
+                            "device": dev,
+                            "draOccupancy": gpu_occ,
+                        }),
+                    },
+                ));
+            }
+        }
+
+        // Fallback if a node exposes `nvidia.com/gpu` / `amd.com/gpu` allocatable without DRA ResourceSlices yet
+        for node in &cp.nodes {
+            let node_slug = sanitize_k8s_slug(&node.name);
+            if seen_nodes_with_dra.contains(&format!("{cluster_slug}/{node_slug}")) {
+                continue;
+            }
+            for (res_key, qty) in &node.custom_allocatable {
+                let kl = res_key.to_ascii_lowercase();
+                if kl != "nvidia.com/gpu" && kl != "amd.com/gpu" && !kl.starts_with("gpu.intel.com/") {
+                    continue;
+                }
+                let count = qty.trim().parse::<usize>().unwrap_or(0);
+                if count == 0 {
+                    continue;
+                }
+                let entity_name = format!("{cluster_slug}-{node_slug}-gpus");
+                let key = format!("default/{entity_name}");
+                if !seen_keys.insert(key.clone()) {
+                    continue;
+                }
+                let dp_occ = compute_gpu_node_device_plugin_occupancy(cp, &node.name, count);
+                let summary = format!(
+                    "{count}× GPU ({res_key}) on {cluster_slug}/{} · DevicePluginOnly ({}/{} {:.0}%)",
+                    node.name, dp_occ.allocated, dp_occ.total, dp_occ.occupancy_pct
+                );
+                let entity = make_catalog_entity(
+                    "Resource",
+                    "default",
+                    &entity_name,
+                    Some(&format!("{count}× GPU · {cluster_slug}/{}", node.name)),
+                    Some(&summary),
+                    "gpu-accelerator",
+                    "DevicePluginOnly",
+                    "warn",
+                    "Compute & Accelerators",
+                    true,
+                    vec!["gpu".to_string(), "device-plugin".to_string(), cluster_slug.clone()],
+                    json!({
+                        "cluster": cluster_slug,
+                        "hostNode": node.name,
+                        "allocatableResource": res_key,
+                        "gpuCount": count,
+                        "draPublished": false,
+                        "allocatedCount": dp_occ.allocated,
+                        "totalCount": dp_occ.total,
+                        "occupancyPct": dp_occ.occupancy_pct,
+                        "occupancySource": "device-plugin",
+                    }),
+                    vec![
+                        rel("partOf", &format!("resource:default/{node_slug}")),
+                        rel("partOf", &format!("resource:default/{cluster_slug}")),
+                    ],
+                );
+                out.push((
+                    key,
+                    PitsEntityDetail {
+                        entity,
+                        resource_type: "gpu-accelerator".to_string(),
+                        status: "DevicePluginOnly".to_string(),
+                        status_level: "warn".to_string(),
+                        summary_line: summary,
+                        summary: EntitySummary::default(),
+                        refreshed_at: now,
+                        live_connected: true,
+                        attribute_sections: vec![AttributeSection {
+                            id: "gpu-allocatable".to_string(),
+                            title: "Kubernetes Node GPU Allocatable".to_string(),
+                            items: vec![
+                                attr("cluster", "Kubernetes Cluster", cluster_slug, Some("ok"), true),
+                                attr("hostNode", "Host Node", &node.name, Some("ok"), true),
+                                attr("resource", "Allocatable Resource", res_key, Some("info"), true),
+                                attr("count", "GPU Count", count.to_string(), Some("ok"), true),
+                                attr(
+                                    "dpOccupancy",
+                                    "DevicePlugin GPU Occupancy",
+                                    format!("{}/{} ({:.0}%)", dp_occ.allocated, dp_occ.total, dp_occ.occupancy_pct),
+                                    Some(if dp_occ.allocated > 0 { "info" } else { "ok" }),
+                                    true,
+                                ),
+                                attr("draSlice", "DRA ResourceSlice", "Missing (install DRA driver / enable DRA sync)", Some("warn"), false),
+                            ],
+                        }],
+                        actions: actions_for_gpu(&node.name, "gpu.nvidia.com"),
+                        manifests: BTreeMap::new(),
+                        diagnostics: json!({
+                            "cluster": cluster_slug,
+                            "node": node,
+                            "devicePluginOccupancy": dp_occ,
+                        }),
+                    },
+                ));
+            }
+        }
+    }
+
+    out
+}
+
+fn build_cicd_devstack_detail(live: &LiveTelemetry, now: DateTime<Utc>) -> PitsEntityDetail {
+    let cicd = live.lab_cicd.as_ref();
+    let lab_reachable = live
+        .lab_cluster
+        .as_ref()
+        .map(|c| c.reachable)
+        .unwrap_or(false);
+
+    let (status, status_level) = if let Some(c) = cicd {
+        if !c.pods_on_netboot_004.is_empty() {
+            ("ExclusionViolation", "error")
+        } else if c.labdevstack_synced
+            && c.labdevstack_ready
+            && c.cnpg_ready_instances >= 2
+            && c.flux_repo_ready
+            && c.flux_kust_ready
+            && c.gitea_ready
+            && c.zot_ready
+            && c.attic_ready
+            && c.runner_cpu_ready >= 1
+        {
+            ("Healthy", "ok")
+        } else {
+            ("Reconciling", "warn")
+        }
+    } else if live.any_connected && lab_reachable {
+        ("NotDetected", "warn")
+    } else {
+        ("BaselineReady", "ok")
+    };
+
+    let runner_total_ready = cicd
+        .map(|c| c.runner_cpu_ready + c.runner_npu_ready + c.runner_gpu_ready)
+        .unwrap_or(5);
+    let runner_total_desired = cicd
+        .map(|c| c.runner_cpu_desired + c.runner_npu_desired + c.runner_gpu_desired)
+        .unwrap_or(5);
+    let pg_str = cicd
+        .map(|c| format!("{}/{} Ready (mayastor-2)", c.cnpg_ready_instances, c.cnpg_instances.max(2)))
+        .unwrap_or_else(|| "2/2 HA (mayastor-2 · 20Gi)".to_string());
+    let flux_str = cicd
+        .map(|c| {
+            format!(
+                "Repo={} Kust={} ({})",
+                c.flux_repo_ready,
+                c.flux_kust_ready,
+                c.flux_revision.as_deref().unwrap_or("main")
+            )
+        })
+        .unwrap_or_else(|| "Flux v2.10.0 (CICD/ & test-pool/manifests/, Base/ excluded)".to_string());
+    let netboot_004_str = cicd
+        .map(|c| {
+            if c.pods_on_netboot_004.is_empty() {
+                "0 pods on netboot-004 (Enforced)".to_string()
+            } else {
+                format!("VIOLATION: {}", c.pods_on_netboot_004.join(", "))
+            }
+        })
+        .unwrap_or_else(|| "kubernetes.io/hostname NotIn [netboot-004] (0 pods)".to_string());
+
+    let summary = format!(
+        "Crossplane LabDevStack (Gitea 1.27.0 + CNPG {pg_str} + Zot :30500 + Attic :30808) · {runner_total_ready}/{runner_total_desired} act_runners · netboot-004 excluded"
+    );
+
+    let sections = vec![
+        AttributeSection {
+            id: "cicd-control-plane".to_string(),
+            title: "Crossplane & Lab Flux CD Control Plane".to_string(),
+            items: vec![
+                attr("claimGvk", "Crossplane Claim", "lab.pits.io/v1alpha1 / LabDevStack (pits-cicd/pits-lab-acceleration)", Some("ok"), true),
+                attr("fluxSync", "Lab Flux CD GitOps", &flux_str, Some(if cicd.map(|c| c.flux_repo_ready && c.flux_kust_ready).unwrap_or(true) { "ok" } else { "warn" }), false),
+                attr("baseIsolation", "Core Hardware Isolation", "Base/ excluded from Lab Flux; pits-core RKE2 independent", Some("ok"), false),
+                attr("nodeExclusion", "win11-001 Host Guard", &netboot_004_str, Some(if cicd.map(|c| c.pods_on_netboot_004.is_empty()).unwrap_or(true) { "ok" } else { "error" }), false),
+            ],
+        },
+        AttributeSection {
+            id: "cicd-services-storage".to_string(),
+            title: "Lab CI/CD Services, Caches & Storage Tiering".to_string(),
+            items: vec![
+                attr("giteaEndpoint", "Gitea Git & Actions", "http://10.89.20.21:30300 (git.lab.pits.home.arpa:3000, SSH :30222, mayastor-2 50Gi)", Some(if cicd.map(|c| c.gitea_ready).unwrap_or(true) { "ok" } else { "warn" }), true),
+                attr("cnpgCluster", "CNPG PostgreSQL (gitea-pg)", &pg_str, Some(if cicd.map(|c| c.cnpg_ready_instances >= 2).unwrap_or(true) { "ok" } else { "warn" }), false),
+                attr("zotRegistry", "Zot OCI Registry & Pull-Through", "http://10.89.20.21:30500 (oci.lab.pits.home.arpa:5000, openebs-single-replica 120Gi)", Some(if cicd.map(|c| c.zot_ready).unwrap_or(true) { "ok" } else { "warn" }), true),
+                attr("atticCache", "Attic Nix Binary Cache", "http://10.89.20.21:30808 (nix-cache.lab.pits.home.arpa:8080, openebs-single-replica 120Gi)", Some(if cicd.map(|c| c.attic_ready).unwrap_or(true) { "ok" } else { "warn" }), true),
+            ],
+        },
+        AttributeSection {
+            id: "cicd-runners".to_string(),
+            title: "DDR5 tmpfs act_runner Pools (pits-test-pool)".to_string(),
+            items: vec![
+                attr(
+                    "cpuPool",
+                    "CPU tmpfs Runners (netboot-001..003)",
+                    cicd.map(|c| format!("{}/{} Ready · labels=[pits-lab-rust, pits-lab-go, pits-lab-e2e, ubuntu-latest]", c.runner_cpu_ready, c.runner_cpu_desired))
+                        .unwrap_or_else(|| "3/3 Baseline · labels=[pits-lab-rust, pits-lab-go, pits-lab-e2e, ubuntu-latest]".to_string()),
+                    Some("ok"),
+                    false,
+                ),
+                attr(
+                    "npuPool",
+                    "Intel NPU DRA Runners (netboot-001/002)",
+                    cicd.map(|c| format!("{}/{} Ready · label=[pits-lab-npu]", c.runner_npu_ready, c.runner_npu_desired))
+                        .unwrap_or_else(|| "1/1 Baseline · label=[pits-lab-npu]".to_string()),
+                    Some("ok"),
+                    false,
+                ),
+                attr(
+                    "gpuPool",
+                    "RTX 5090 GPU DRA Runners (netboot-005)",
+                    cicd.map(|c| format!("{}/{} Ready · label=[pits-lab-gpu]", c.runner_gpu_ready, c.runner_gpu_desired))
+                        .unwrap_or_else(|| "1/1 Baseline · label=[pits-lab-gpu]".to_string()),
+                    Some("ok"),
+                    false,
+                ),
+                attr("runnerImage", "Offline Runner Image", "docker.io/pits/cicd-runner:v1.0 (/ramdisk emptyDir Memory)", None, true),
+            ],
+        },
+    ];
+
+    let mut manifests = BTreeMap::new();
+    manifests.insert(
+        "pits-lab-devstack.yaml".to_string(),
+        r#"apiVersion: lab.pits.io/v1alpha1
+kind: LabDevStack
+metadata:
+  name: pits-lab-acceleration
+  namespace: pits-cicd
+spec:
+  domain: lab.pits.home.arpa
+  excludeNodes:
+    - netboot-004
+  externalIp: "10.89.20.21"
+  storage:
+    stateStorageClass: mayastor-2
+    cacheStorageClass: openebs-single-replica
+  gitea:
+    namespace: pits-cicd
+    repoSize: 50Gi
+    dbSize: 20Gi
+    mirrorRepo: DissectDev/PITS-B1
+    githubRemote: https://github.com/DissectDev/PITS-B1.git
+  caches:
+    zotSize: 120Gi
+    atticSize: 120Gi
+  runners:
+    cpuReplicas: 3
+    npuReplicas: 1
+    gpuReplicas: 1
+"#
+        .to_string(),
+    );
+
+    let entity = make_catalog_entity(
+        "Resource",
+        "default",
+        "pits-lab-acceleration",
+        Some("pits-lab-acceleration (Lab Crossplane CI/CD & DevStack)"),
+        Some(&summary),
+        "cicd-pipeline",
+        status,
+        status_level,
+        "Control Planes",
+        cicd.is_some(),
+        vec![
+            "cicd".to_string(),
+            "crossplane".to_string(),
+            "fluxcd".to_string(),
+            "gitea".to_string(),
+            "act-runner".to_string(),
+        ],
+        json!({
+            "stackKind": "LabDevStack",
+            "namespace": "pits-cicd",
+            "giteaUrl": "http://10.89.20.21:30300",
+            "zotUrl": "http://10.89.20.21:30500",
+            "atticUrl": "http://10.89.20.21:30808",
+            "excludeNodes": ["netboot-004"],
+            "runnerCount": runner_total_desired,
+        }),
+        vec![rel("dependsOn", "resource:default/cluster-pits-lab")],
+    );
+
+    PitsEntityDetail {
+        entity,
+        resource_type: "cicd-pipeline".to_string(),
+        status: status.to_string(),
+        status_level: status_level.to_string(),
+        summary_line: summary,
+        summary: EntitySummary::default(),
+        refreshed_at: now,
+        live_connected: cicd.is_some(),
+        attribute_sections: sections,
+        actions: actions_for_cicd_pipeline(),
+        manifests,
+        diagnostics: json!({
+            "labCicd": cicd,
+            "subprojectDir": "CICD/",
+            "designDoc": "docs/lab-cicd-crossplane-design.md",
+        }),
+    }
+}
+
+fn build_cicd_workflow_pipeline_detail(live: &LiveTelemetry, now: DateTime<Utc>) -> PitsEntityDetail {
+    let cicd = live.lab_cicd.as_ref();
+    let (status, status_level) = if let Some(c) = cicd {
+        if !c.pods_on_netboot_004.is_empty() {
+            ("ExclusionViolation", "error")
+        } else if c.gitea_ready && c.runner_cpu_ready >= 1 {
+            ("RunnersOnline", "ok")
+        } else {
+            ("DegradedRunners", "warn")
+        }
+    } else {
+        ("BaselineReady", "ok")
+    };
+
+    let summary = "DissectDev/PITS-B1 Gitea Actions 6-workflow CI matrix (cicd, client, server, portal, test-pool, base) + Core CD handover (Deploy-CoreArtifacts.ps1)".to_string();
+
+    let sections = vec![
+        AttributeSection {
+            id: "workflow-matrix".to_string(),
+            title: "Independent Subproject CI Workflows (.github/workflows/)".to_string(),
+            items: vec![
+                attr("cicdWorkflow", "CICD Validation & CD Dispatch", ".github/workflows/cicd.yml (runner: pits-lab-rust)", Some("ok"), true),
+                attr("clientWorkflow", "Rust Client (pitsctl)", ".github/workflows/client.yml (runner: pits-lab-rust, cargo nextest)", Some("ok"), true),
+                attr("serverWorkflow", "Go Daemon (pits-agent)", ".github/workflows/server.yml (runner: pits-lab-go, go test -race)", Some("ok"), true),
+                attr("portalWorkflow", "Backstage v1.56 Portal + E2E", ".github/workflows/portal.yml (runner: pits-lab-e2e, Chromium)", Some("ok"), true),
+                attr("testPoolWorkflow", "Warm Pool & Intel NPU DRA Gate", ".github/workflows/test-pool.yml (ubuntu-latest + pits-lab-npu)", Some("ok"), true),
+                attr("baseWorkflow", "Base NixOS & GitOps Eval", ".github/workflows/base.yml (runner: ubuntu-latest)", Some("ok"), true),
+            ],
+        },
+        AttributeSection {
+            id: "handover-scripts".to_string(),
+            title: "Build, Verification & Core Promotion Handover (CICD/scripts/)".to_string(),
+            items: vec![
+                attr("ciEntry", "CI Trigger & Snapshot Push", "CICD/scripts/Invoke-CicdPipeline.ps1 [-Snapshot] [-DeployCore]", Some("info"), true),
+                attr("cdEntry", "Core Artifact Promotion", "CICD/scripts/Deploy-CoreArtifacts.ps1 -Target <all|portal|agent|test-runner|cicd-runner|base>", Some("info"), true),
+                attr("verifyEntry", "8-Gate Stack Health Check", "CICD/scripts/Verify-CicdStack.ps1", Some("info"), true),
+                attr("portalCompat", "Portal Promotion Compatibility", "deploy/nixos/promote-portal.ps1 [-ViaCicd] -> pits-core (100.95.95.88)", Some("ok"), true),
+                attr("githubMirror", "GitHub Push Mirror", "DissectDev/PITS-B1 (main) <- Lab Gitea asynchronous one-way mirror", Some("ok"), false),
+            ],
+        },
+    ];
+
+    let mut manifests = BTreeMap::new();
+    manifests.insert(
+        "handover-entrypoints.yaml".to_string(),
+        r#"subproject: CICD/
+repository: DissectDev/PITS-B1
+labGiteaUrl: http://10.89.20.21:30300/DissectDev/PITS-B1
+workflows:
+  - .github/workflows/cicd.yml
+  - .github/workflows/client.yml
+  - .github/workflows/server.yml
+  - .github/workflows/portal.yml
+  - .github/workflows/test-pool.yml
+  - .github/workflows/base.yml
+handoverScripts:
+  verify: CICD/scripts/Verify-CicdStack.ps1
+  triggerCi: CICD/scripts/Invoke-CicdPipeline.ps1
+  deployCore: CICD/scripts/Deploy-CoreArtifacts.ps1
+  bootstrap: CICD/scripts/Bootstrap-LabCicd.ps1
+"#
+        .to_string(),
+    );
+
+    let entity = make_catalog_entity(
+        "Resource",
+        "default",
+        "pits-b1-ci-pipeline",
+        Some("pits-b1-ci-pipeline (DissectDev/PITS-B1 CI/CD & Core Handover)"),
+        Some(&summary),
+        "cicd-pipeline",
+        status,
+        status_level,
+        "Control Planes",
+        cicd.is_some(),
+        vec![
+            "cicd".to_string(),
+            "gitea-actions".to_string(),
+            "handover".to_string(),
+            "core-cd".to_string(),
+        ],
+        json!({
+            "repo": "DissectDev/PITS-B1",
+            "workflows": ["cicd.yml", "client.yml", "server.yml", "portal.yml", "test-pool.yml", "base.yml"],
+            "handoverScripts": [
+                "CICD/scripts/Invoke-CicdPipeline.ps1",
+                "CICD/scripts/Deploy-CoreArtifacts.ps1",
+                "CICD/scripts/Verify-CicdStack.ps1"
+            ],
+        }),
+        vec![
+            rel("dependsOn", "resource:default/pits-lab-acceleration"),
+            rel("dependsOn", "resource:default/cluster-pits-lab"),
+        ],
+    );
+
+    PitsEntityDetail {
+        entity,
+        resource_type: "cicd-pipeline".to_string(),
+        status: status.to_string(),
+        status_level: status_level.to_string(),
+        summary_line: summary,
+        summary: EntitySummary::default(),
+        refreshed_at: now,
+        live_connected: cicd.is_some(),
+        attribute_sections: sections,
+        actions: actions_for_cicd_pipeline(),
+        manifests,
+        diagnostics: json!({
+            "labCicd": cicd,
+            "workflowsDir": ".github/workflows/",
+        }),
+    }
+}
+
+fn has_ready_condition_true(val: &Value) -> (bool, bool) {
+    let Some(conds) = val.pointer("/status/conditions").and_then(|v| v.as_array()) else {
+        return (false, false);
+    };
+    let synced = conds.iter().any(|c| {
+        c.get("type").and_then(|v| v.as_str()) == Some("Synced")
+            && c.get("status").and_then(|v| v.as_str()) == Some("True")
+    });
+    let ready = conds.iter().any(|c| {
+        c.get("type").and_then(|v| v.as_str()) == Some("Ready")
+            && c.get("status").and_then(|v| v.as_str()) == Some("True")
+    });
+    (synced, ready)
+}
+
+pub(crate) async fn inspect_lab_cicd_fast(
+    kc: &KubeClient,
+    sem: Option<&Semaphore>,
+) -> Option<CicdLiveSummary> {
+    let (lds_res, pg_res, flux_repo_res, flux_kust_res, tp_dep_res, cicd_dep_res, pods004_res) =
+        tokio::join!(
+            kube_get_retry(
+                kc,
+                "/apis/lab.pits.io/v1alpha1/namespaces/pits-cicd/labdevstacks/pits-lab-acceleration",
+                None,
+                sem
+            ),
+            kube_get_retry(
+                kc,
+                "/apis/postgresql.cnpg.io/v1/namespaces/pits-cicd/clusters/gitea-pg",
+                None,
+                sem
+            ),
+            kube_get_retry(
+                kc,
+                "/apis/source.toolkit.fluxcd.io/v1/namespaces/flux-system/gitrepositories/lab-platform-repo",
+                None,
+                sem
+            ),
+            kube_get_retry(
+                kc,
+                "/apis/kustomize.toolkit.fluxcd.io/v1/namespaces/flux-system/kustomizations/lab-cicd-platform",
+                None,
+                sem
+            ),
+            kube_get_retry(kc, "/apis/apps/v1/namespaces/pits-test-pool/deployments", None, sem),
+            kube_get_retry(kc, "/apis/apps/v1/namespaces/pits-cicd/deployments", None, sem),
+            kube_get_retry(
+                kc,
+                "/api/v1/pods?fieldSelector=spec.nodeName%3Dnetboot-004",
+                None,
+                sem
+            ),
+        );
+
+    if lds_res.is_err()
+        && pg_res.is_err()
+        && flux_repo_res.is_err()
+        && flux_kust_res.is_err()
+        && tp_dep_res.is_err()
+        && cicd_dep_res.is_err()
+        && pods004_res.is_err()
+    {
+        return None;
+    }
+
+    let mut out = CicdLiveSummary::default();
+    if let Ok(ref lds) = lds_res {
+        out.labdevstack_present = true;
+        let (synced, ready) = has_ready_condition_true(lds);
+        out.labdevstack_synced = synced;
+        out.labdevstack_ready = ready;
+    }
+    if let Ok(ref pg) = pg_res {
+        out.cnpg_ready_instances = pg
+            .pointer("/status/readyInstances")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        out.cnpg_instances = pg
+            .pointer("/spec/instances")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(2);
+    }
+    if let Ok(ref repo) = flux_repo_res {
+        let (_, ready) = has_ready_condition_true(repo);
+        out.flux_repo_ready = ready;
+        out.flux_revision = repo
+            .pointer("/status/artifact/revision")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+    }
+    if let Ok(ref kust) = flux_kust_res {
+        let (_, ready) = has_ready_condition_true(kust);
+        out.flux_kust_ready = ready;
+    }
+    if let Ok(ref deps) = tp_dep_res {
+        if let Some(items) = deps.get("items").and_then(|v| v.as_array()) {
+            for d in items {
+                let name = d.pointer("/metadata/name").and_then(|v| v.as_str()).unwrap_or("");
+                let desired = d.pointer("/spec/replicas").and_then(|v| v.as_u64()).unwrap_or(0);
+                let ready = d.pointer("/status/readyReplicas").and_then(|v| v.as_u64()).unwrap_or(0);
+                match name {
+                    "runner-cicd-cpu" => {
+                        out.runner_cpu_desired = desired;
+                        out.runner_cpu_ready = ready;
+                    }
+                    "runner-cicd-npu" => {
+                        out.runner_npu_desired = desired;
+                        out.runner_npu_ready = ready;
+                    }
+                    "runner-cicd-gpu" => {
+                        out.runner_gpu_desired = desired;
+                        out.runner_gpu_ready = ready;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    if let Ok(ref deps) = cicd_dep_res {
+        if let Some(items) = deps.get("items").and_then(|v| v.as_array()) {
+            for d in items {
+                let name = d.pointer("/metadata/name").and_then(|v| v.as_str()).unwrap_or("");
+                let ready = d.pointer("/status/readyReplicas").and_then(|v| v.as_u64()).unwrap_or(0);
+                if name == "gitea" || name.starts_with("gitea-") {
+                    if !name.contains("pg") && ready > 0 {
+                        out.gitea_ready = true;
+                    }
+                } else if name == "zot" && ready > 0 {
+                    out.zot_ready = true;
+                } else if name == "attic" && ready > 0 {
+                    out.attic_ready = true;
+                }
+            }
+        }
+    }
+    if let Ok(ref pods) = pods004_res {
+        if let Some(items) = pods.get("items").and_then(|v| v.as_array()) {
+            for p in items {
+                let ns = p.pointer("/metadata/namespace").and_then(|v| v.as_str()).unwrap_or("");
+                if matches!(
+                    ns,
+                    "flux-system" | "crossplane-system" | "cnpg-system" | "pits-cicd" | "pits-test-pool"
+                ) {
+                    let pname = p.pointer("/metadata/name").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    out.pods_on_netboot_004.push(format!("{ns}/{pname}"));
+                }
+            }
+        }
+    }
+
+    Some(out)
 }
 
 /// Evaluates Backstage Catalog filter expressions:
@@ -5133,6 +6704,10 @@ pub(crate) async fn inspect_cluster_fast(
         total_pods: 0,
         bound_pvs: 0,
         npu_slices: Vec::new(),
+        dra_slices: Vec::new(),
+        dra_claims: Vec::new(),
+        device_plugin_gpu_used: BTreeMap::new(),
+        device_classes: Vec::new(),
         error: None,
     };
 
@@ -5141,7 +6716,7 @@ pub(crate) async fn inspect_cluster_fast(
         "application/json;as=Table;v=v1;g=meta.k8s.io,application/json",
     )];
 
-    let (ver_res, nodes_res, pods_res, pvs_res, slices_res) = tokio::join!(
+    let (ver_res, nodes_res, pods_res, pvs_res, slices_res, dcs_res, claims_res) = tokio::join!(
         kube_get_retry(kc, "/version", None, sem),
         kube_get_retry_with_timeout(kc, "/api/v1/nodes", None, sem, NODES_PROBE_TIMEOUT),
         kube_get_retry(
@@ -5152,6 +6727,8 @@ pub(crate) async fn inspect_cluster_fast(
         ),
         kube_get_retry(kc, "/api/v1/persistentvolumes", None, sem),
         kube_get_retry(kc, "/apis/resource.k8s.io/v1/resourceslices", None, sem),
+        kube_get_retry(kc, "/apis/resource.k8s.io/v1/deviceclasses", None, sem),
+        kube_get_retry(kc, "/apis/resource.k8s.io/v1/resourceclaims", None, sem),
     );
 
     let nodes_res = if nodes_res.is_err() && (ver_res.is_ok() || pods_res.is_ok()) {
@@ -5221,6 +6798,8 @@ pub(crate) async fn inspect_cluster_fast(
                             || k.starts_with("hugepages-")
                             || k.contains("intel")
                             || k.contains("amd")
+                            || k.contains("nvidia")
+                            || k.contains("gpu")
                             || k.contains("kubevirt.io/")
                         {
                             if let Some(s) = v.as_str() {
@@ -5313,6 +6892,18 @@ pub(crate) async fn inspect_cluster_fast(
         }
     }
 
+    if let Ok(dcs) = dcs_res {
+        if let Some(items) = dcs.get("items").and_then(|v| v.as_array()) {
+            for item in items {
+                if let Some(name) = item.pointer("/metadata/name").and_then(|v| v.as_str()) {
+                    out.device_classes.push(name.to_string());
+                }
+            }
+            out.device_classes.sort();
+            out.device_classes.dedup();
+        }
+    }
+
     if let Ok(slices) = slices_res {
         if let Some(items) = slices.get("items").and_then(|v| v.as_array()) {
             for item in items {
@@ -5321,6 +6912,8 @@ pub(crate) async fn inspect_cluster_fast(
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
+                out.dra_slices
+                    .push(crate::k8s::parse_dra_slice_item(item, &driver));
                 if driver != PITS_NPU_DRA_DRIVER && !driver.to_lowercase().contains("npu") {
                     continue;
                 }
@@ -5370,10 +6963,25 @@ pub(crate) async fn inspect_cluster_fast(
         }
     }
 
+    if let Ok(claims) = claims_res {
+        out.dra_claims = parse_dra_claims_list(&claims);
+    }
+
+    if cluster_has_gpu_allocatable(&out.nodes) {
+        if let Ok(active_pods) = kube_get_retry(
+            kc,
+            "/api/v1/pods?fieldSelector=status.phase%21%3DSucceeded,status.phase%21%3DFailed",
+            None,
+            sem,
+        )
+        .await
+        {
+            out.device_plugin_gpu_used = parse_pod_device_plugin_gpu_usage(&active_pods);
+        }
+    }
+
     out
 }
-
-/// Concurrent KubeVirt `VirtualMachine` + `VirtualMachineInstance` inspector (`tokio::join!`).
 async fn list_cluster_vms_fast(
     kc: &KubeClient,
     sem: Option<&Semaphore>,
@@ -5534,12 +7142,12 @@ mod tests {
             "cold get_snapshot(false) took {:?}, expected < 50ms",
             elapsed
         );
-        assert_eq!(snap.resource_types.len(), 12);
+        assert_eq!(snap.resource_types.len(), 16);
         let resource_count = snap.entities.iter().filter(|e| e.kind == "Resource").count();
         let system_count = snap.entities.iter().filter(|e| e.kind == "System").count();
         let domain_count = snap.entities.iter().filter(|e| e.kind == "Domain").count();
         let component_count = snap.entities.iter().filter(|e| e.kind == "Component").count();
-        assert_eq!(resource_count, 31);
+        assert_eq!(resource_count, 33);
         assert_eq!(system_count, 3);
         assert_eq!(domain_count, 3);
         assert_eq!(component_count, 7);
@@ -5598,12 +7206,12 @@ mod tests {
             "6-way concurrent cold burst took {:?}, expected < 50ms",
             burst_elapsed
         );
-        assert_eq!(r1.len(), 12);
-        assert_eq!(r2.len(), 44);
+        assert_eq!(r1.len(), 16);
+        assert_eq!(r2.len(), 46);
         assert!(r3.is_ok());
         assert!(r4.is_ok());
         assert_eq!(r5.facets.get("kind").map(|v| v.len()), Some(4));
-        assert_eq!(r6.entities.len(), 44);
+        assert_eq!(r6.entities.len(), 46);
 
         blackhole_task.abort();
     }
@@ -5628,6 +7236,10 @@ mod tests {
             total_pods: 52,
             bound_pvs: 3,
             npu_slices: Vec::new(),
+            dra_slices: Vec::new(),
+            dra_claims: Vec::new(),
+            device_plugin_gpu_used: BTreeMap::new(),
+            device_classes: Vec::new(),
             error: None,
         });
         let detail_ok = build_cluster_detail(false, &bundle, &live_empty_nodes, now);
@@ -5663,6 +7275,10 @@ mod tests {
             total_pods: 52,
             bound_pvs: 3,
             npu_slices: Vec::new(),
+            dra_slices: Vec::new(),
+            dra_claims: Vec::new(),
+            device_plugin_gpu_used: BTreeMap::new(),
+            device_classes: Vec::new(),
             error: None,
         });
         let detail_warn = build_cluster_detail(false, &bundle, &live_degraded, now);
@@ -5674,6 +7290,7 @@ mod tests {
     #[test]
     fn win11_vm_detail_avoids_false_not_found_when_vm_list_probe_failed() {
         let now = Utc::now();
+        let bundle = WorkspaceBundle::builtin_pits_baseline();
         let reachable_lab = ClusterControlPlaneSummary {
             cluster: "pits-lab".to_string(),
             server_url: "https://10.89.20.21:6443".to_string(),
@@ -5686,20 +7303,156 @@ mod tests {
             total_pods: 0,
             bound_pvs: 0,
             npu_slices: vec![],
+            dra_slices: vec![],
+            dra_claims: vec![],
+            device_plugin_gpu_used: BTreeMap::new(),
+            device_classes: vec![],
             error: None,
         };
         let mut live_probe_err = LiveTelemetry::default();
         live_probe_err.lab_cluster = Some(reachable_lab.clone());
         live_probe_err.lab_vms = None;
-        let detail_err = build_win11_vm_detail(&live_probe_err, None, now);
+        let detail_err = build_win11_vm_detail(&bundle, &live_probe_err, None, now);
         assert_eq!(detail_err.status, "Running");
         assert_eq!(detail_err.status_level, "ok");
 
         let mut live_confirmed_empty = LiveTelemetry::default();
         live_confirmed_empty.lab_cluster = Some(reachable_lab);
         live_confirmed_empty.lab_vms = Some(vec![]);
-        let detail_empty = build_win11_vm_detail(&live_confirmed_empty, None, now);
+        let detail_empty = build_win11_vm_detail(&bundle, &live_confirmed_empty, None, now);
         assert_eq!(detail_empty.status, "NotFound");
         assert_eq!(detail_empty.status_level, "warn");
+    }
+
+    #[test]
+    fn cicd_pipeline_reflects_live_health_and_flags_netboot_004_violation() {
+        let now = Utc::now();
+        let mut live = LiveTelemetry::default();
+        live.any_connected = true;
+        live.lab_cicd = Some(CicdLiveSummary {
+            labdevstack_present: true,
+            labdevstack_synced: true,
+            labdevstack_ready: true,
+            cnpg_ready_instances: 2,
+            cnpg_instances: 2,
+            flux_repo_ready: true,
+            flux_kust_ready: true,
+            flux_revision: Some("main@sha1:a9694f8".to_string()),
+            runner_cpu_ready: 3,
+            runner_cpu_desired: 3,
+            runner_npu_ready: 1,
+            runner_npu_desired: 1,
+            runner_gpu_ready: 1,
+            runner_gpu_desired: 1,
+            gitea_ready: true,
+            zot_ready: true,
+            attic_ready: true,
+            pods_on_netboot_004: Vec::new(),
+        });
+
+        let ok_stack = build_cicd_devstack_detail(&live, now);
+        assert_eq!(ok_stack.resource_type, "cicd-pipeline");
+        assert_eq!(ok_stack.status, "Healthy");
+        assert_eq!(ok_stack.status_level, "ok");
+
+        let ok_pipe = build_cicd_workflow_pipeline_detail(&live, now);
+        assert_eq!(ok_pipe.status, "RunnersOnline");
+        assert_eq!(ok_pipe.status_level, "ok");
+
+        live.lab_cicd.as_mut().unwrap().pods_on_netboot_004 = vec!["pits-test-pool/stray-runner".to_string()];
+        let err_stack = build_cicd_devstack_detail(&live, now);
+        assert_eq!(err_stack.status, "ExclusionViolation");
+        assert_eq!(err_stack.status_level, "error");
+    }
+
+    #[test]
+    fn extra_vcluster_and_gpu_dra_resourceslices_synthesize_cluster_and_gpus() {
+        let now = Utc::now();
+        let bundle = WorkspaceBundle::builtin_pits_baseline();
+        let p = std::env::temp_dir().join(format!("pits-vcluster-gpu-{}.yaml", uuid::Uuid::new_v4()));
+        let sourcing = SourcingStore::load_with_options(p, None, None, true);
+
+        let mut live = LiveTelemetry::default();
+        live.any_connected = true;
+        live.extra_clusters.push(ExtraClusterTelemetry {
+            config: ExtraClusterConfig {
+                name: "work82-vcluster".to_string(),
+                title: Some("work82 vcluster-dev (H20 GPU + DRA)".to_string()),
+                role: Some("vcluster-gpu-dra".to_string()),
+                kubeconfig_path: "/tmp/work82-vcluster-dev.yaml".to_string(),
+                context: None,
+                via_agent_bridge: false,
+            },
+            summary: ClusterControlPlaneSummary {
+                cluster: "work82-vcluster".to_string(),
+                server_url: "https://100.83.142.15:18090".to_string(),
+                via_agent_bridge: false,
+                reachable: true,
+                checked_at: now,
+                git_version: Some("v1.36.6".to_string()),
+                nodes: vec![KubeNodeSummary {
+                    name: "cp0".to_string(),
+                    ready: true,
+                    kubelet_version: "v1.34.3".to_string(),
+                    internal_ip: "10.98.35.85".to_string(),
+                    roles: vec!["control-plane".to_string()],
+                    custom_allocatable: BTreeMap::from([(
+                        "nvidia.com/gpu".to_string(),
+                        "8".to_string(),
+                    )]),
+                    retired_zero_resources: Vec::new(),
+                }],
+                running_pods: 2,
+                total_pods: 2,
+                bound_pvs: 0,
+                npu_slices: Vec::new(),
+                dra_slices: vec![DraSliceSummary {
+                    slice_name: "00000-gpu.nvidia.com-cp0-hnm8x".to_string(),
+                    node_name: "cp0".to_string(),
+                    driver: "gpu.nvidia.com".to_string(),
+                    device_class: "gpu.nvidia.com".to_string(),
+                    devices: vec![DraDeviceSummary {
+                        name: "gpu-0".to_string(),
+                        vendor: Some("nvidia".to_string()),
+                        model: Some("NVIDIA H20".to_string()),
+                        product_name: Some("NVIDIA H20".to_string()),
+                        architecture: Some("Hopper".to_string()),
+                        uuid: Some("GPU-a9270ab3".to_string()),
+                        pci_address: Some("0000:18:00.0".to_string()),
+                        kernel_driver: Some("nvidia".to_string()),
+                        driver_version: Some("580.126.20".to_string()),
+                        memory: Some("97871Mi".to_string()),
+                        attributes: BTreeMap::new(),
+                    }],
+                }],
+                dra_claims: Vec::new(),
+                device_plugin_gpu_used: BTreeMap::new(),
+                device_classes: vec!["gpu.nvidia.com".to_string()],
+                error: None,
+            },
+        });
+
+        let snap = synthesize_snapshot_from_inputs(&bundle, None, &live, &sourcing, now);
+        let cluster = snap
+            .details
+            .get("default/work82-vcluster")
+            .expect("work82-vcluster synthesized as kubernetes-cluster");
+        assert_eq!(cluster.resource_type, "kubernetes-cluster");
+        assert_eq!(cluster.status, "Healthy");
+        assert!(cluster.summary_line.contains("1 GPUs"));
+
+        let gpu = snap
+            .details
+            .get("default/work82-vcluster-cp0-gpu-0")
+            .expect("NVIDIA H20 GPU synthesized via DRA ResourceSlice");
+        assert_eq!(gpu.resource_type, "gpu-accelerator");
+        assert_eq!(gpu.status, "ReadyDraV1");
+        assert!(gpu.summary_line.contains("NVIDIA H20"));
+        assert!(gpu.summary_line.contains("gpu.nvidia.com"));
+        assert!(gpu
+            .entity
+            .relations
+            .iter()
+            .any(|r| r.relation_type == "partOf" && r.target_ref == "resource:default/work82-vcluster"));
     }
 }

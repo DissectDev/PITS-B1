@@ -1,0 +1,93 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xlabdevstacks.lab.pits.io
+spec:
+  group: lab.pits.io
+  names:
+    kind: XLabDevStack
+    plural: xlabdevstacks
+  claimNames:
+    kind: LabDevStack
+    plural: labdevstacks
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [domain, gitea, caches, runners]
+              properties:
+                domain:
+                  type: string
+                  default: lab.pits.home.arpa
+                excludeNodes:
+                  type: array
+                  items:
+                    type: string
+                  default: ["netboot-004"]
+                externalIp:
+                  type: string
+                  default: "10.89.20.21"
+                storage:
+                  type: object
+                  properties:
+                    stateStorageClass:
+                      type: string
+                      default: mayastor-2
+                    cacheStorageClass:
+                      type: string
+                      default: openebs-single-replica
+                gitea:
+                  type: object
+                  properties:
+                    namespace:
+                      type: string
+                      default: pits-cicd
+                    repoSize:
+                      type: string
+                      default: 50Gi
+                    dbSize:
+                      type: string
+                      default: 20Gi
+                    mirrorRepo:
+                      type: string
+                      default: DissectDev/PITS-B1
+                    githubRemote:
+                      type: string
+                      default: https://github.com/DissectDev/PITS-B1.git
+                    mirrorBranches:
+                      type: array
+                      items:
+                        type: string
+                      default: ["main"]
+                caches:
+                  type: object
+                  properties:
+                    zotSize:
+                      type: string
+                      default: 120Gi
+                    atticSize:
+                      type: string
+                      default: 120Gi
+                    upstreamMirrors:
+                      type: array
+                      items:
+                        type: string
+                      default: ["docker.io", "ghcr.io", "quay.io"]
+                runners:
+                  type: object
+                  properties:
+                    cpuReplicas:
+                      type: integer
+                      default: 3
+                    npuReplicas:
+                      type: integer
+                      default: 1
+                    gpuReplicas:
+                      type: integer
+                      default: 1

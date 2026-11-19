@@ -15,14 +15,30 @@ on:
 jobs:
   go-test:
     name: Go Vet & Race Tests (server)
-    runs-on: ubuntu-latest
+    runs-on: pits-lab-go
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: server/go.mod
+      - name: Verify preinstalled Go toolchain & link offline vendor cache
+        run: |
+          set -euo pipefail
+          if ! command -v go >/dev/null 2>&1; then
+            echo "Missing required toolchain binary: go" >&2
+            exit 1
+          fi
+          go version
+          if [ -d /ramdisk ]; then
+            mkdir -p /ramdisk/go-cache
+            echo "GOCACHE=/ramdisk/go-cache" >> "$GITHUB_ENV"
+          fi
+          echo "CGO_ENABLED=1" >> "$GITHUB_ENV"
+          echo "GOPROXY=off" >> "$GITHUB_ENV"
+          echo "GOSUMDB=off" >> "$GITHUB_ENV"
+          if [ ! -d server/vendor ] && [ -d /opt/pits-cache/go-vendor ]; then
+            ln -sfn /opt/pits-cache/go-vendor server/vendor
+          fi
       - name: Run go vet and go test -race (vendored)
         working-directory: server
         run: |
+          set -euo pipefail
           go vet -mod=vendor ./...
-          go test -mod=vendor -race ./...
+          go test -mod=vendor -race -count=1 ./...

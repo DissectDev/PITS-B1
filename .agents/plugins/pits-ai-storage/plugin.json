@@ -1,0 +1,8 @@
+{
+  "name": "pits-ai-storage",
+  "version": "0.1.0",
+  "description": "Thin Consumer plugin for the 5-layer OpenDAL AI Storage MCP Producer (ws://, mem://, kb://, data://, models://, artifacts://, traces://, state://, shared://). No sidecar.json dependency.",
+  "mcpServers": "./mcp_config.json",
+  "skills": "./skills",
+  "rules": "./rules"
+}

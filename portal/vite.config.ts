@@ -68,7 +68,7 @@ export default defineConfig(({ mode }) => {
   const apiProxyTarget =
     env.VITE_API_PROXY_TARGET ||
     process.env.VITE_API_PROXY_TARGET ||
-    (mode === 'local' ? 'http://127.0.0.1:18090' : 'http://100.74.25.42:18090');
+    (mode === 'local' ? 'http://127.0.0.1:18090' : 'http://100.95.95.88:18090');
 
   return {
     root: portalRoot,

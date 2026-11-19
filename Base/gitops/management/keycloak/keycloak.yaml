@@ -1,0 +1,48 @@
+apiVersion: k8s.keycloak.org/v2beta1
+kind: Keycloak
+metadata:
+  name: keycloak
+  namespace: keycloak
+spec:
+  instances: 1
+  db:
+    vendor: postgres
+    host: keycloak-pg-rw.keycloak.svc.cluster.local
+    database: keycloak
+    usernameSecret:
+      name: keycloak-pg-app
+      key: username
+    passwordSecret:
+      name: keycloak-pg-app
+      key: password
+  http:
+    tlsSecret: keycloak-tls
+    httpsPort: 8443
+  hostname:
+    hostname: https://sso.martensite.dev
+    backchannelDynamic: true
+  proxy:
+    headers: xforwarded
+  ingress:
+    enabled: true
+    className: nginx
+    tlsSecret: keycloak-tls
+    annotations:
+      nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+      nginx.ingress.kubernetes.io/proxy-buffer-size: "128k"
+  bootstrapAdmin:
+    service:
+      secret: keycloak-bootstrap-sa
+  resources:
+    requests:
+      cpu: 500m
+      memory: 768Mi
+    limits:
+      cpu: "2"
+      memory: 1536Mi
+  unsupported:
+    podTemplate:
+      spec:
+        containers:
+          - name: keycloak
+            imagePullPolicy: IfNotPresent

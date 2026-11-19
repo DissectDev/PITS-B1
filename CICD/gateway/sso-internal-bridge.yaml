@@ -1,0 +1,51 @@
+# Intra-LAN Keycloak bridge & public CA bundle for cluster-pits-lab pods.
+# Allows Gitea (pits-cicd) and OAuth2 clients to reach https://sso.martensite.dev
+# via pits-core (10.89.20.30:8443) over VLAN 20 (<1ms) instead of hairpinning
+# out through public Cloudflare (1.6s - 4.8s).
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sso-martensite-local
+  namespace: pits-cicd
+  labels:
+    app.kubernetes.io/part-of: pits-cicd
+spec:
+  type: ClusterIP
+  clusterIP: 10.96.250.30
+  ports:
+    - name: https
+      port: 443
+      targetPort: 8443
+      protocol: TCP
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: sso-martensite-local
+  namespace: pits-cicd
+subsets:
+  - addresses:
+      - ip: 10.89.20.30
+    ports:
+      - name: https
+        port: 8443
+        protocol: TCP
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pits-ca-cert
+  namespace: pits-cicd
+data:
+  ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    MIIBcTCCARigAwIBAgIUdHfcXKVmivEheYcDUQs7ccY+8IAwCgYIKoZIzj0EAwIw
+    FzEVMBMGA1UEAxMMUElUUyBDb3JlIENBMB4XDTI2MTEwNTEwMjIwOVoXDTM2MTEw
+    MjEwMjIwOVowFzEVMBMGA1UEAxMMUElUUyBDb3JlIENBMFkwEwYHKoZIzj0CAQYI
+    KoZIzj0DAQcDQgAE/F3KayZRrwJgz+elLpT+Cv/vQgGuL0FFaQ6KehIkVfKRzEty
+    V+NoPqfqlmDZrB5VdeqIeyfGizMYv1efSlOWgqNCMEAwDgYDVR0PAQH/BAQDAgKk
+    MA8GA1UdEwEB/wQFMAMBAf8wHQYDVR0OBBYEFIxSkDKB4jACh/MzZ66pHhW+UCZO
+    MAoGCCqGSM49BAMCA0cAMEQCICVs8eljmnsTF9W2G4TSs/Abb+WlA00XW870qYeM
+    XjN+AiAkYD3ns+qWGuYnKPd2BUS8ZZ+e8/32tBSJswOP9y7Urw==
+    -----END CERTIFICATE-----

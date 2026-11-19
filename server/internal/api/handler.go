@@ -49,6 +49,18 @@ type ConnectTunnelProvider interface {
 	ServeConnect(w http.ResponseWriter, r *http.Request)
 }
 
+// RoutingStatusProvider exposes live EdgeRouter semantic routing-table subscription telemetry.
+type RoutingStatusProvider interface {
+	RoutingStatusJSON() any
+}
+
+// ClusterProvider manages registered Kubernetes clusters and DRA accelerator discovery.
+type ClusterProvider interface {
+	DiscoverAll(ctx context.Context) ClusterDiscoveryReport
+	Register(req ClusterRegisterRequest) (*ClusterRegistration, error)
+	Unregister(name string) error
+}
+
 // Handler wires all pits-agent domain controllers onto one authenticated HTTP/mTLS mux.
 type Handler struct {
 	Version     string
@@ -59,6 +71,8 @@ type Handler struct {
 	VPP         VPPProvider
 	PXE         PXEProvider
 	Bridge      ConnectTunnelProvider
+	Routing     RoutingStatusProvider
+	Clusters    ClusterProvider
 	mux         *http.ServeMux
 }
 
@@ -81,6 +95,11 @@ func NewHandler(h *Handler) http.Handler {
 	mux.HandleFunc("GET /v1/pxe/inventory", h.handlePXEInventoryList)
 	mux.HandleFunc("POST /v1/pxe/inventory/{device}", h.handlePXEInventorySave)
 	mux.HandleFunc("POST /v1/pxe/assets/verify", h.handlePXEVerifyAssets)
+	mux.HandleFunc("GET /v1/routing/table", h.handleRoutingTable)
+	mux.HandleFunc("GET /v1/clusters", h.handleClustersList)
+	mux.HandleFunc("GET /v1/crossplane", h.handleCrossplaneList)
+	mux.HandleFunc("POST /v1/clusters/register", h.handleClustersRegister)
+	mux.HandleFunc("DELETE /v1/clusters/{name}", h.handleClustersDelete)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !h.authorize(r) {
@@ -128,8 +147,89 @@ func (h *Handler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 			"san.nvmet-gpt4k",
 			"pxe.inventory-assets",
 			"lab.http-connect-bridge",
+			"edge-router.routing-watch",
+			"k8s.cluster-discovery",
+			"dra.accelerator-inspect",
+			"crossplane.resource-discover",
 		},
 	})
+}
+
+func (h *Handler) handleClustersList(w http.ResponseWriter, r *http.Request) {
+	if h.Clusters == nil {
+		writeError(w, http.StatusNotImplemented, "cluster discovery is disabled")
+		return
+	}
+	writeJSON(w, http.StatusOK, h.Clusters.DiscoverAll(r.Context()))
+}
+
+func (h *Handler) handleCrossplaneList(w http.ResponseWriter, r *http.Request) {
+	if h.Clusters == nil {
+		writeError(w, http.StatusNotImplemented, "cluster discovery is disabled")
+		return
+	}
+	report := h.Clusters.DiscoverAll(r.Context())
+	type clusterCrossplaneSummary struct {
+		Cluster     string                   `json:"cluster"`
+		DisplayName string                   `json:"displayName,omitempty"`
+		Reachable   bool                     `json:"reachable"`
+		Crossplane  *CrossplaneInventory     `json:"crossplane,omitempty"`
+	}
+	clusters := make([]clusterCrossplaneSummary, 0, len(report.Clusters))
+	for _, cl := range report.Clusters {
+		if cl.Crossplane != nil {
+			clusters = append(clusters, clusterCrossplaneSummary{
+				Cluster:     cl.Name,
+				DisplayName: cl.DisplayName,
+				Reachable:   cl.Reachable,
+				Crossplane:  cl.Crossplane,
+			})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"collectedAt":              report.CollectedAt,
+		"totalCrossplaneResources": report.TotalCrossplaneResources,
+		"clusters":                 clusters,
+	})
+}
+
+func (h *Handler) handleClustersRegister(w http.ResponseWriter, r *http.Request) {
+	if h.Clusters == nil {
+		writeError(w, http.StatusNotImplemented, "cluster discovery is disabled")
+		return
+	}
+	var req ClusterRegisterRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	reg, err := h.Clusters.Register(req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, reg)
+}
+
+func (h *Handler) handleClustersDelete(w http.ResponseWriter, r *http.Request) {
+	if h.Clusters == nil {
+		writeError(w, http.StatusNotImplemented, "cluster discovery is disabled")
+		return
+	}
+	name := r.PathValue("name")
+	if err := h.Clusters.Unregister(name); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "name": name})
+}
+
+func (h *Handler) handleRoutingTable(w http.ResponseWriter, _ *http.Request) {
+	if h.Routing == nil {
+		writeError(w, http.StatusNotImplemented, "routing subscription telemetry is unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, h.Routing.RoutingStatusJSON())
 }
 
 func (h *Handler) handleHostAudit(w http.ResponseWriter, _ *http.Request) {

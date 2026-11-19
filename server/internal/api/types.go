@@ -87,18 +87,30 @@ type RouterRecoveryResult struct {
 	Message              string             `json:"message"`
 }
 
+// VPPAggregateCounters captures summed packet, byte, drop, and error counters across VPP interfaces.
+type VPPAggregateCounters struct {
+	SampledAt      time.Time `json:"sampledAt"`
+	TotalRxPackets uint64    `json:"totalRxPackets"`
+	TotalRxBytes   uint64    `json:"totalRxBytes"`
+	TotalTxPackets uint64    `json:"totalTxPackets"`
+	TotalTxBytes   uint64    `json:"totalTxBytes"`
+	TotalDrops     uint64    `json:"totalDrops"`
+	TotalErrors    uint64    `json:"totalErrors"`
+}
+
 // VPPInspectReport captures live VPP binary API configuration state.
 type VPPInspectReport struct {
-	CollectedAt time.Time       `json:"collectedAt"`
-	SocketPath  string          `json:"socketPath"`
-	Version     string          `json:"version,omitempty"`
-	Interfaces  []VPPInterface  `json:"interfaces"`
-	ACLs        []VPPACL        `json:"acls"`
-	Bindings    []VPPACLBinding `json:"bindings"`
-	NATOutputs  []string        `json:"natOutputs"`
-	NATStatic   []string        `json:"natStatic"`
-	Routes      []string        `json:"routes"`
-	RawSections map[string]int  `json:"rawSections,omitempty"`
+	CollectedAt time.Time             `json:"collectedAt"`
+	SocketPath  string                `json:"socketPath"`
+	Version     string                `json:"version,omitempty"`
+	Interfaces  []VPPInterface        `json:"interfaces"`
+	Counters    *VPPAggregateCounters `json:"counters,omitempty"`
+	ACLs        []VPPACL              `json:"acls"`
+	Bindings    []VPPACLBinding       `json:"bindings"`
+	NATOutputs  []string              `json:"natOutputs"`
+	NATStatic   []string              `json:"natStatic"`
+	Routes      []string              `json:"routes"`
+	RawSections map[string]int        `json:"rawSections,omitempty"`
 }
 
 type VPPInterface struct {
@@ -110,6 +122,13 @@ type VPPInterface struct {
 	MTU       uint32   `json:"mtu,omitempty"`
 	Addresses []string `json:"addresses,omitempty"`
 	VRFID     uint32   `json:"vrfId"`
+	RxPackets uint64   `json:"rxPackets,omitempty"`
+	RxBytes   uint64   `json:"rxBytes,omitempty"`
+	TxPackets uint64   `json:"txPackets,omitempty"`
+	TxBytes   uint64   `json:"txBytes,omitempty"`
+	Drops     uint64   `json:"drops,omitempty"`
+	RxErrors  uint64   `json:"rxErrors,omitempty"`
+	TxErrors  uint64   `json:"txErrors,omitempty"`
 }
 
 type VPPACL struct {
@@ -264,4 +283,152 @@ type PXEVerifyAssetsResult struct {
 	Verified bool              `json:"verified"`
 	Assets   []PXEAssetInfo    `json:"assets"`
 	Mismatch map[string]string `json:"mismatch,omitempty"`
+}
+
+// ClusterRegistration describes a Kubernetes cluster registered in pits-agent's discovery scope.
+type ClusterRegistration struct {
+	Name           string `json:"name"`
+	DisplayName    string `json:"displayName,omitempty"`
+	Role           string `json:"role,omitempty"`
+	KubeconfigPath string `json:"kubeconfigPath"`
+	ServerURL      string `json:"serverUrl,omitempty"`
+}
+
+// ClusterRegisterRequest adds or updates a Kubernetes cluster in pits-agent's discovery scope.
+type ClusterRegisterRequest struct {
+	Name           string `json:"name"`
+	DisplayName    string `json:"displayName,omitempty"`
+	Role           string `json:"role,omitempty"`
+	KubeconfigPath string `json:"kubeconfigPath,omitempty"`
+	KubeconfigYAML string `json:"kubeconfigYaml,omitempty"`
+}
+
+// ClusterNodeInfo summarizes one Kubernetes node and its GPU/NPU allocatable resources.
+type ClusterNodeInfo struct {
+	Name           string            `json:"name"`
+	Ready          bool              `json:"ready"`
+	KubeletVersion string            `json:"kubeletVersion,omitempty"`
+	InternalIP     string            `json:"internalIp,omitempty"`
+	Roles          []string          `json:"roles,omitempty"`
+	GPUAllocatable map[string]string `json:"gpuAllocatable,omitempty"`
+}
+
+// DRADeviceInfo captures one device published in a Kubernetes DRA v1 ResourceSlice.
+type DRADeviceInfo struct {
+	Name          string            `json:"name"`
+	Vendor        string            `json:"vendor,omitempty"`
+	Model         string            `json:"model,omitempty"`
+	ProductName   string            `json:"productName,omitempty"`
+	Architecture  string            `json:"architecture,omitempty"`
+	UUID          string            `json:"uuid,omitempty"`
+	PCIAddress    string            `json:"pciAddress,omitempty"`
+	KernelDriver  string            `json:"kernelDriver,omitempty"`
+	DriverVersion string            `json:"driverVersion,omitempty"`
+	Memory        string            `json:"memory,omitempty"`
+	Attributes    map[string]string `json:"attributes,omitempty"`
+}
+
+// DRASliceInfo captures a resource.k8s.io/v1 ResourceSlice and its advertised devices.
+type DRASliceInfo struct {
+	SliceName   string          `json:"sliceName"`
+	NodeName    string          `json:"nodeName"`
+	Driver      string          `json:"driver"`
+	DeviceClass string          `json:"deviceClass,omitempty"`
+	Devices     []DRADeviceInfo `json:"devices"`
+}
+
+// DRAClaimInfo captures one allocated device entry from a resource.k8s.io/v1 ResourceClaim.
+type DRAClaimInfo struct {
+	Namespace     string   `json:"namespace"`
+	Name          string   `json:"name"`
+	Driver        string   `json:"driver"`
+	Pool          string   `json:"pool,omitempty"`
+	Device        string   `json:"device"`
+	NodeName      string   `json:"nodeName,omitempty"`
+	Allocated     bool     `json:"allocated"`
+	ConsumerPods  []string `json:"consumerPods,omitempty"`
+	ConsumerCount int      `json:"consumerCount"`
+}
+
+// CrossplaneXRDInfo summarizes a Crossplane CompositeResourceDefinition discovered on a cluster.
+type CrossplaneXRDInfo struct {
+	Name        string `json:"name"`
+	Group       string `json:"group"`
+	Version     string `json:"version"`
+	Kind        string `json:"kind"`
+	Plural      string `json:"plural"`
+	ClaimKind   string `json:"claimKind,omitempty"`
+	ClaimPlural string `json:"claimPlural,omitempty"`
+	Established bool   `json:"established"`
+	Offered     bool   `json:"offered"`
+}
+
+// CrossplanePackageInfo summarizes an installed Crossplane Provider or Function package.
+type CrossplanePackageInfo struct {
+	Kind      string `json:"kind"` // "Provider" or "Function"
+	Name      string `json:"name"`
+	Package   string `json:"package"`
+	Installed bool   `json:"installed"`
+	Healthy   bool   `json:"healthy"`
+}
+
+// CrossplaneResourceInfo summarizes a discovered Crossplane Composition, Claim, or Composite (XR),
+// including custom PITS XRDs such as AIStorageWorkspace, AuthFlowBundle, and LabDevStack.
+type CrossplaneResourceInfo struct {
+	APIVersion  string            `json:"apiVersion"`
+	Kind        string            `json:"kind"`
+	Namespace   string            `json:"namespace,omitempty"`
+	Name        string            `json:"name"`
+	Role        string            `json:"role"` // "claim", "composite", "composition"
+	Composition string            `json:"composition,omitempty"`
+	ResourceRef string            `json:"resourceRef,omitempty"`
+	Synced      bool              `json:"synced"`
+	Ready       bool              `json:"ready"`
+	ReadyReason string            `json:"readyReason,omitempty"`
+	Highlights  map[string]string `json:"highlights,omitempty"`
+}
+
+// CrossplaneInventory captures Crossplane control-plane packages, XRDs, Compositions, Claims, and XRs.
+type CrossplaneInventory struct {
+	Installed bool                     `json:"installed"`
+	XRDs      []CrossplaneXRDInfo      `json:"xrds,omitempty"`
+	Packages  []CrossplanePackageInfo  `json:"packages,omitempty"`
+	Resources []CrossplaneResourceInfo `json:"resources,omitempty"`
+}
+
+// DiscoveredClusterReport describes one Kubernetes cluster probed by pits-agent.
+type DiscoveredClusterReport struct {
+	Name          string               `json:"name"`
+	DisplayName   string               `json:"displayName,omitempty"`
+	Kind          string               `json:"kind"`
+	Role          string               `json:"role,omitempty"`
+	ServerURL     string               `json:"serverUrl"`
+	Reachable     bool                 `json:"reachable"`
+	GitVersion    string               `json:"gitVersion,omitempty"`
+	NodeCount     int                  `json:"nodeCount"`
+	ReadyNodes    int                  `json:"readyNodes"`
+	RunningPods   int                  `json:"runningPods"`
+	TotalPods     int                  `json:"totalPods"`
+	BoundPVs      int                  `json:"boundPvs"`
+	Nodes               []ClusterNodeInfo    `json:"nodes,omitempty"`
+	DeviceClasses       []string             `json:"deviceClasses,omitempty"`
+	DRASlices           []DRASliceInfo       `json:"draSlices,omitempty"`
+	DRAClaims           []DRAClaimInfo       `json:"draClaims,omitempty"`
+	DevicePluginGPUUsed map[string]int       `json:"devicePluginGpuUsed,omitempty"`
+	Crossplane          *CrossplaneInventory `json:"crossplane,omitempty"`
+	GPUCount            int                  `json:"gpuCount"`
+	AllocatedGPUs       int                  `json:"allocatedGpus"`
+	GPUOccupancyPct     float64              `json:"gpuOccupancyPct,omitempty"`
+	Error               string               `json:"error,omitempty"`
+}
+
+// ClusterDiscoveryReport aggregates all Kubernetes clusters and DRA accelerators in pits-agent's scope.
+type ClusterDiscoveryReport struct {
+	CollectedAt              time.Time                 `json:"collectedAt"`
+	TotalClusters            int                       `json:"totalClusters"`
+	ReachableClusters        int                       `json:"reachableClusters"`
+	TotalGPUs                int                       `json:"totalGpus"`
+	AllocatedGPUs            int                       `json:"allocatedGpus"`
+	TotalCrossplaneResources int                       `json:"totalCrossplaneResources,omitempty"`
+	Clusters                 []DiscoveredClusterReport `json:"clusters"`
 }

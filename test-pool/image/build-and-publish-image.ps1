@@ -1,12 +1,12 @@
 <#
 .SYNOPSIS
   Builds the reproducible offline `docker.io/pits/test-runner:v1` OCI image natively via Nix
-  on `pits-core` (`100.74.25.42`), mirrors `registry.k8s.io/agent-sandbox/agent-sandbox-controller:v1.0.11`,
+  on `pits-core` (`100.95.95.88`), mirrors `registry.k8s.io/agent-sandbox/agent-sandbox-controller:v1.0.11`,
   and publishes both into `talos-image-cache` (`http://10.89.20.14:3172`) for `cluster-pits-lab`.
 #>
 [CmdletBinding()]
 param(
-    [string]$SshTarget = "root@100.74.25.42",
+    [string]$SshTarget = "root@100.95.95.88",
     [string]$FlakeDir = "/home/libraskywalker/PITS-B1/Base",
     [string]$FlakeAttr = "core",
     [string]$ImageTag = "v1.2",

@@ -2,6 +2,41 @@ import type { Entity } from '@backstage/catalog-model';
 
 export type StatusLevel = 'ok' | 'warn' | 'error' | 'info' | string;
 
+export type ObservationMode =
+  | 'policy-first'
+  | 'hybrid'
+  | 'dynamic-first'
+  | 'governance-event'
+  | string;
+
+export interface SummaryPill {
+  key: string;
+  label: string;
+  value: string;
+  status?: StatusLevel;
+}
+
+export interface DynamicSignal {
+  key: string;
+  label: string;
+  value: string;
+  delta?: string;
+  trend?: 'up' | 'down' | 'flat' | 'changed' | 'alert' | string;
+  observedAgeSecs?: number;
+  status?: StatusLevel;
+}
+
+export interface EntitySummary {
+  observationMode: ObservationMode;
+  cadenceTier: string;
+  headline: string;
+  staticPolicy: SummaryPill[];
+  dynamicSignals: DynamicSignal[];
+  driftDetected: boolean;
+  driftSummary?: string;
+  lastChangedAt?: string;
+}
+
 export interface ResourceTypeSummary {
   resourceType: string;
   category: string;
@@ -11,6 +46,11 @@ export interface ResourceTypeSummary {
   healthyCount: number;
   warningCount: number;
   actionIds: string[];
+  observationMode?: ObservationMode;
+  cadenceTier?: string;
+  policyCompliantCount?: number;
+  driftedCount?: number;
+  highlights?: SummaryPill[];
 }
 
 export interface AttributeItem {
@@ -55,6 +95,7 @@ export interface PitsEntityDetail {
   status: string;
   statusLevel: StatusLevel;
   summaryLine: string;
+  summary?: EntitySummary;
   refreshedAt: string;
   liveConnected: boolean;
   attributeSections: AttributeSection[];
@@ -80,6 +121,15 @@ export interface ActionExecutionResult {
   renderedArtifact?: string;
 }
 
+export interface ExtraClusterConfig {
+  name: string;
+  title?: string;
+  role?: string;
+  kubeconfigPath: string;
+  context?: string;
+  viaAgentBridge: boolean;
+}
+
 export interface OperatorProfileState {
   activeWorkspaceSource: string;
   sourcingDbConfigured?: boolean;
@@ -95,6 +145,7 @@ export interface OperatorProfileState {
   talosconfigPath: string;
   talosContext: string;
   talosViaAgentBridge: boolean;
+  extraClusters: ExtraClusterConfig[];
   stateDir?: string;
   profilePath?: string;
 }
@@ -111,6 +162,7 @@ export interface OperatorProfilePatch {
   talosconfigPath?: string;
   talosContext?: string;
   talosViaAgentBridge?: boolean;
+  extraClusters?: ExtraClusterConfig[];
 }
 
 export interface GeneratedPkiResult {
@@ -399,6 +451,14 @@ export const RESOURCE_TYPE_DIRECTORY_META: Record<string, ResourceTypeMeta> = {
     description:
       'Physical Intel AI Boost (8086:7d1d) and AMD XDNA Ryzen AI (1022:1502) accelerators with Kubernetes DRA v1 ResourceSlice readiness and driver binding gates.',
   },
+  'gpu-accelerator': {
+    type: 'gpu-accelerator',
+    domain: 'Compute & Accelerators',
+    shortTitle: 'AI GPU Accelerators',
+    fullTitle: 'AI GPU Accelerators (gpu-accelerator)',
+    description:
+      'Physical GPUs (NVIDIA H20 / Blackwell / AMD / Intel) discovered via Kubernetes DRA v1 (resource.k8s.io/v1) ResourceSlices and node allocatables.',
+  },
   'virtual-machine': {
     type: 'virtual-machine',
     domain: 'Compute & Accelerators',
@@ -439,6 +499,14 @@ export const RESOURCE_TYPE_DIRECTORY_META: Record<string, ResourceTypeMeta> = {
     description:
       'Deterministic UUIDv5 NVMe/TCP namespaces (system, userdata, vmstore) with 4KiB alignment, FS_NOCOW_FL (+C), configfs export, and GPT partition health.',
   },
+  'ai-storage-workspace': {
+    type: 'ai-storage-workspace',
+    domain: 'Storage Fabric',
+    shortTitle: 'AI Storage Workspaces',
+    fullTitle: 'OpenDAL AI Storage Workspaces (ai-storage-workspace)',
+    description:
+      'Crossplane AIStorageWorkspace stacks (OpenDAL 8-Archetype MCP Producer, RustFS S3, CloudNativePG pgvector/pg_trgm, Valkey) with Zero-Trust Istio/Keycloak endpoints.',
+  },
   'kubernetes-cluster': {
     type: 'kubernetes-cluster',
     domain: 'Control Planes',
@@ -446,6 +514,22 @@ export const RESOURCE_TYPE_DIRECTORY_META: Record<string, ResourceTypeMeta> = {
     fullTitle: 'Kubernetes Control Planes (kubernetes-cluster)',
     description:
       'RKE2 management cluster (cluster-pits-core) and Sidero Talos workload cluster (cluster-pits-lab) via direct mTLS or pits-agent HTTP CONNECT tunnel.',
+  },
+  'cicd-pipeline': {
+    type: 'cicd-pipeline',
+    domain: 'Control Planes',
+    shortTitle: 'CI/CD Pipelines',
+    fullTitle: 'CI/CD Pipelines & Lab DevStack (cicd-pipeline)',
+    description:
+      'Crossplane LabDevStack (Gitea, CNPG, Zot OCI, Attic Nix Cache, Flux CD) and DDR5 tmpfs act_runner pipelines on cluster-pits-lab with Core CD handover.',
+  },
+  'auth-flow-bundle': {
+    type: 'auth-flow-bundle',
+    domain: 'Control Planes',
+    shortTitle: 'IAM Auth Flows',
+    fullTitle: 'Keycloak IAM Auth Flow Bundles (auth-flow-bundle)',
+    description:
+      'Declarative Crossplane AuthFlowBundle workflows (Keycloak FIDO2 / WebAuthn LoA-2 step-up, realm browser bindings, and Tailscale Mode-A PEP enforcement).',
   },
   'vendor-saas': {
     type: 'vendor-saas',

@@ -1,0 +1,46 @@
+apiVersion: iam.corp.io/v1alpha1
+kind: AuthFlowBundle
+metadata:
+  name: corp-fido2-browser
+  namespace: iam-system
+spec:
+  realm: corp
+  flowAlias: corp-fido2-browser
+  description: "Tailscale & Mode-A Gateway mandatory FIDO2 browser flow"
+  bindAsRealmBrowserFlow: true
+  cleanupUnusedVersions: true
+  steps:
+    - type: execution
+      provider: auth-cookie
+      requirement: ALTERNATIVE
+    - type: subflow
+      alias: corp-fido2-stepup-loa2
+      flowType: basic-flow
+      requirement: CONDITIONAL
+      description: "Enforce Username+Password+WebAuthn and stamp LoA 2 (acr=fido2)"
+      steps:
+        - type: execution
+          provider: conditional-level-of-authentication
+          requirement: REQUIRED
+          configAlias: corp-fido2-loa2
+          config:
+            loa-condition-level: "2"
+            loa-max-age: "36000"
+        - type: execution
+          provider: auth-username-password-form
+          requirement: REQUIRED
+        - type: execution
+          provider: webauthn-authenticator
+          requirement: REQUIRED
+    - type: subflow
+      alias: corp-fido2-password-and-key
+      flowType: basic-flow
+      requirement: ALTERNATIVE
+      description: "Fallback mandatory FIDO2 flow when client does not request ACR"
+      steps:
+        - type: execution
+          provider: auth-username-password-form
+          requirement: REQUIRED
+        - type: execution
+          provider: webauthn-authenticator
+          requirement: REQUIRED

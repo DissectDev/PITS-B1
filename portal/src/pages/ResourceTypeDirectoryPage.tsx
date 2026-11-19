@@ -20,6 +20,7 @@ import {
   TableHead,
   TableRow,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import DnsOutlinedIcon from '@mui/icons-material/DnsOutlined';
@@ -30,6 +31,9 @@ import SystemUpdateAltOutlinedIcon from '@mui/icons-material/SystemUpdateAltOutl
 import StorageOutlinedIcon from '@mui/icons-material/StorageOutlined';
 import ViewInArOutlinedIcon from '@mui/icons-material/ViewInArOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
+import RocketLaunchOutlinedIcon from '@mui/icons-material/RocketLaunchOutlined';
+import CloudSyncOutlinedIcon from '@mui/icons-material/CloudSyncOutlined';
+import VerifiedUserOutlinedIcon from '@mui/icons-material/VerifiedUserOutlined';
 import AssessmentOutlinedIcon from '@mui/icons-material/AssessmentOutlined';
 import CloudOutlinedIcon from '@mui/icons-material/CloudOutlined';
 import CodeOutlinedIcon from '@mui/icons-material/CodeOutlined';
@@ -50,16 +54,116 @@ import {
   RESOURCE_DOMAIN_ORDER,
   RESOURCE_TYPE_DIRECTORY_META,
   SOURCING_RESOURCE_TYPE_SET,
+  type ObservationMode,
   type ResourceDomainGroup,
   type ResourceTypeSummary,
+  type SummaryPill,
 } from '../types';
-import { StatusPill } from '../components/StatusPill';
+import { inferStatusLevel, StatusPill } from '../components/StatusPill';
+
+function observationModeBadgeStyle(mode?: ObservationMode): {
+  label: string;
+  bg: string;
+  color: string;
+  border: string;
+} {
+  switch (mode) {
+    case 'policy-first':
+      return {
+        label: 'policy-first',
+        bg: 'rgba(103, 58, 183, 0.12)',
+        color: '#5e35b1',
+        border: 'rgba(103, 58, 183, 0.35)',
+      };
+    case 'dynamic-first':
+      return {
+        label: 'dynamic-first',
+        bg: 'rgba(2, 136, 209, 0.12)',
+        color: '#0277bd',
+        border: 'rgba(2, 136, 209, 0.35)',
+      };
+    case 'governance-event':
+      return {
+        label: 'governance-event',
+        bg: 'rgba(237, 108, 2, 0.12)',
+        color: '#e65100',
+        border: 'rgba(237, 108, 2, 0.35)',
+      };
+    default:
+      return {
+        label: mode || 'hybrid',
+        bg: 'rgba(0, 121, 107, 0.12)',
+        color: '#00695c',
+        border: 'rgba(0, 121, 107, 0.35)',
+      };
+  }
+}
+
+function pillColorStyle(status?: string): { bg: string; color: string; border: string } {
+  const lvl = inferStatusLevel(status, status);
+  if (lvl === 'error') {
+    return {
+      bg: 'rgba(211, 47, 47, 0.10)',
+      color: '#c62828',
+      border: 'rgba(211, 47, 47, 0.32)',
+    };
+  }
+  if (lvl === 'warn') {
+    return {
+      bg: 'rgba(237, 108, 2, 0.10)',
+      color: '#e65100',
+      border: 'rgba(237, 108, 2, 0.32)',
+    };
+  }
+  if (lvl === 'ok') {
+    return {
+      bg: 'rgba(46, 125, 50, 0.10)',
+      color: '#2e7d32',
+      border: 'rgba(46, 125, 50, 0.30)',
+    };
+  }
+  return {
+    bg: 'rgba(2, 136, 209, 0.08)',
+    color: '#0277bd',
+    border: 'rgba(2, 136, 209, 0.28)',
+  };
+}
+
+const HighlightPillStrip: React.FC<{ highlights?: SummaryPill[] }> = ({ highlights }) => {
+  if (!highlights || highlights.length === 0) {
+    return null;
+  }
+  return (
+    <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mt: 1.5 }}>
+      {highlights.map(h => {
+        const st = pillColorStyle(h.status);
+        return (
+          <Chip
+            key={h.key}
+            size="small"
+            label={`${h.label}: ${h.value}`}
+            sx={{
+              fontFamily: 'monospace',
+              fontSize: '0.72rem',
+              fontWeight: 600,
+              height: 22,
+              bgcolor: st.bg,
+              color: st.color,
+              border: `1px solid ${st.border}`,
+            }}
+          />
+        );
+      })}
+    </Stack>
+  );
+};
 
 export function getResourceTypeIcon(resourceType: string): React.ReactElement {
   switch (resourceType) {
     case 'baremetal-host':
       return <DnsOutlinedIcon color="primary" />;
     case 'npu-accelerator':
+    case 'gpu-accelerator':
       return <MemoryOutlinedIcon color="primary" />;
     case 'virtual-machine':
       return <DesktopWindowsOutlinedIcon color="primary" />;
@@ -71,8 +175,14 @@ export function getResourceTypeIcon(resourceType: string): React.ReactElement {
       return <StorageOutlinedIcon color="primary" />;
     case 'san-volume':
       return <ViewInArOutlinedIcon color="primary" />;
+    case 'ai-storage-workspace':
+      return <CloudSyncOutlinedIcon color="primary" />;
     case 'kubernetes-cluster':
       return <HubOutlinedIcon color="primary" />;
+    case 'cicd-pipeline':
+      return <RocketLaunchOutlinedIcon color="primary" />;
+    case 'auth-flow-bundle':
+      return <VerifiedUserOutlinedIcon color="primary" />;
     case 'vendor-saas':
       return <CloudOutlinedIcon color="primary" />;
     case 'commercial-sdk':
@@ -204,10 +314,11 @@ export const ResourceTypeDirectoryPage: React.FC = () => {
     }
 
     for (const extra of summaryMap.values()) {
-      const targetGroup: ResourceDomainGroup =
-        extra.category === 'Sourcing Governance'
-          ? 'Sourcing Governance'
-          : 'Compute & Accelerators';
+      const targetGroup: ResourceDomainGroup = RESOURCE_DOMAIN_ORDER.includes(
+        extra.category as ResourceDomainGroup,
+      )
+        ? (extra.category as ResourceDomainGroup)
+        : 'Control Planes';
       groups.get(targetGroup)?.push(extra);
     }
 
@@ -218,16 +329,19 @@ export const ResourceTypeDirectoryPage: React.FC = () => {
     let entities = 0;
     let healthy = 0;
     let warnings = 0;
+    let drifted = 0;
     for (const s of summaries) {
       entities += s.entityCount;
       healthy += s.healthyCount;
       warnings += s.warningCount;
+      drifted += s.driftedCount ?? 0;
     }
     return {
-      types: Object.keys(RESOURCE_TYPE_DIRECTORY_META).length,
+      types: Math.max(Object.keys(RESOURCE_TYPE_DIRECTORY_META).length, summaries.length),
       entities,
       healthy,
       warnings,
+      drifted,
     };
   }, [summaries]);
 
@@ -239,7 +353,7 @@ export const ResourceTypeDirectoryPage: React.FC = () => {
       >
         <HeaderLabel label="System" value="pits-infrastructure · 3 Domains" />
         <HeaderLabel label="Resource Types" value={String(totals.types)} />
-        <HeaderLabel label="Catalog Entities" value={String(totals.entities || 31)} />
+        <HeaderLabel label="Catalog Entities" value={String(totals.entities || 33)} />
       </Header>
 
       <Content>
@@ -295,6 +409,21 @@ export const ResourceTypeDirectoryPage: React.FC = () => {
                   }}
                 >
                   {loading ? '…' : totals.warnings}
+                </Typography>
+              </Box>
+              <Divider orientation="vertical" flexItem />
+              <Box>
+                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
+                  DRIFTED
+                </Typography>
+                <Typography
+                  variant="h5"
+                  sx={{
+                    fontWeight: 800,
+                    color: totals.drifted > 0 ? 'error.main' : 'text.primary',
+                  }}
+                >
+                  {loading ? '…' : totals.drifted}
                 </Typography>
               </Box>
             </Stack>
@@ -429,6 +558,29 @@ export const ResourceTypeDirectoryPage: React.FC = () => {
                               useFlexGap
                               sx={{ mt: 1.75 }}
                             >
+                              {item.observationMode && (() => {
+                                const badge = observationModeBadgeStyle(item.observationMode);
+                                return (
+                                  <Tooltip title={`Refresh cadence: ${item.cadenceTier || 'standard-60s'}`}>
+                                    <Chip
+                                      size="small"
+                                      label={
+                                        item.cadenceTier
+                                          ? `${badge.label} · ${item.cadenceTier}`
+                                          : badge.label
+                                      }
+                                      sx={{
+                                        fontFamily: 'monospace',
+                                        fontWeight: 700,
+                                        fontSize: '0.7rem',
+                                        bgcolor: badge.bg,
+                                        color: badge.color,
+                                        border: `1px solid ${badge.border}`,
+                                      }}
+                                    />
+                                  </Tooltip>
+                                );
+                              })()}
                               <StatusPill
                                 label={`${item.healthyCount} Healthy`}
                                 level="ok"
@@ -439,7 +591,15 @@ export const ResourceTypeDirectoryPage: React.FC = () => {
                                   level="warn"
                                 />
                               )}
+                              {(item.driftedCount ?? 0) > 0 && (
+                                <StatusPill
+                                  label={`${item.driftedCount} Drifted`}
+                                  level="error"
+                                />
+                              )}
                             </Stack>
+
+                            <HighlightPillStrip highlights={item.highlights} />
 
                             {item.actionIds.length > 0 && (
                               <Box sx={{ mt: 1.75 }}>
@@ -701,11 +861,38 @@ export const ResourceTypeEntitiesPage: React.FC<{ fixedResourceType?: string }> 
             <Stack direction="row" spacing={1.25} alignItems="center" flexWrap="wrap" useFlexGap>
               {typeSummary && (
                 <>
+                  {typeSummary.observationMode && (() => {
+                    const badge = observationModeBadgeStyle(typeSummary.observationMode);
+                    return (
+                      <Chip
+                        size="small"
+                        label={
+                          typeSummary.cadenceTier
+                            ? `${badge.label} · ${typeSummary.cadenceTier}`
+                            : badge.label
+                        }
+                        sx={{
+                          fontFamily: 'monospace',
+                          fontWeight: 700,
+                          fontSize: '0.72rem',
+                          bgcolor: badge.bg,
+                          color: badge.color,
+                          border: `1px solid ${badge.border}`,
+                        }}
+                      />
+                    );
+                  })()}
                   <StatusPill label={`${typeSummary.healthyCount} Healthy`} level="ok" />
                   {typeSummary.warningCount > 0 && (
                     <StatusPill
                       label={`${typeSummary.warningCount} Warning / Gated`}
                       level="warn"
+                    />
+                  )}
+                  {(typeSummary.driftedCount ?? 0) > 0 && (
+                    <StatusPill
+                      label={`${typeSummary.driftedCount} Drifted`}
+                      level="error"
                     />
                   )}
                 </>

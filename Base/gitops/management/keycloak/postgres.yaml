@@ -1,0 +1,20 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: keycloak-pg
+  namespace: keycloak
+spec:
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.6
+  imagePullPolicy: IfNotPresent
+  storage:
+    storageClass: local-path
+    size: 10Gi
+  bootstrap:
+    initdb:
+      database: keycloak
+      owner: keycloak
+  postgresql:
+    parameters:
+      max_connections: "200"
+      shared_buffers: "256MB"

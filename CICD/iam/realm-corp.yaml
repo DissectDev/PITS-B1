@@ -1,0 +1,26 @@
+apiVersion: realm.keycloak.crossplane.io/v1alpha1
+kind: Realm
+metadata:
+  name: corp-realm
+spec:
+  managementPolicies:
+    - Create
+    - Observe
+    - Update
+    - Delete
+  forProvider:
+    realm: corp
+    enabled: true
+    displayName: "PITS Zero-Trust IAM"
+    accessTokenLifespan: "1h0m0s"
+    # Note: browserFlow is intentionally omitted so XAuthFlowBundle/sync_flow.py
+    # manages the active blue-green <flowAlias>-<hash> browserFlow without conflict.
+    attributes:
+      acr.loa.map: '{"fido2":2}'
+    webAuthnPolicy:
+      - relyingPartyEntityName: "PITS Zero-Trust SSO"
+        relyingPartyId: "sso.martensite.dev"
+        userVerificationRequirement: "required"
+        authenticatorAttachment: "cross-platform"
+  providerConfigRef:
+    name: keycloak-provider-config

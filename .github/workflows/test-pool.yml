@@ -18,22 +18,80 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-      - name: Syntax check shell & node scripts and YAML manifests
+      - name: Syntax check shell, node, python scripts and YAML manifests
         run: |
+          set -euo pipefail
+          for bin in bash node python3; do
+            if ! command -v "$bin" >/dev/null 2>&1; then
+              echo "Missing required toolchain binary: $bin" >&2
+              exit 1
+            fi
+          done
           bash -n test-pool/scripts/runner-verify-shard.sh
           node --check test-pool/scripts/portal-headless-e2e.mjs
           python3 -m py_compile test-pool/image/import-to-talos-cache.py
           python3 -c '
-          import glob, sys
-          try:
-              import yaml
-          except ImportError:
-              sys.exit(0)
-          for path in ["test-pool/devspace.yaml"] + glob.glob("test-pool/manifests/*.yaml"):
+          import glob, sys, yaml
+          paths = ["test-pool/devspace.yaml"] + sorted(glob.glob("test-pool/manifests/*.yaml"))
+          for path in paths:
               with open(path, "r", encoding="utf-8") as fh:
-                  list(yaml.safe_load_all(fh))
-          print("Validated test-pool YAML files.")
+                  docs = [d for d in yaml.safe_load_all(fh) if d is not None]
+              for doc in docs:
+                  if doc.get("kind") == "Deployment":
+                      terms = (((doc.get("spec") or {}).get("template") or {}).get("spec") or {}).get("affinity", {}).get("nodeAffinity", {}).get("requiredDuringSchedulingIgnoredDuringExecution", {}).get("nodeSelectorTerms", [])
+                      excluded = any(
+                          expr.get("key") == "kubernetes.io/hostname"
+                          and expr.get("operator") == "NotIn"
+                          and "netboot-004" in (expr.get("values") or [])
+                          for term in terms
+                          for expr in term.get("matchExpressions", [])
+                      )
+                      if not excluded:
+                          dep_name = (doc.get("metadata") or {}).get("name", "<unnamed>")
+                          raise SystemExit(f"Deployment {dep_name} in {path} missing netboot-004 NotIn guard")
+          print(f"Validated {len(paths)} test-pool YAML files.")
           '
+
+  npu-dra-gate:
+    name: Intel NPU DRA v1 Hardware Gate (test-pool)
+    runs-on: pits-lab-npu
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify NPU runner placement & DRA v1 hardware manifest
+        run: |
+          set -euo pipefail
+          for bin in kubectl jq python3; do
+            if ! command -v "$bin" >/dev/null 2>&1; then
+              echo "Missing required toolchain binary: $bin" >&2
+              exit 1
+            fi
+          done
+          if [ "$(uname -n)" = "netboot-004" ]; then
+            echo "ERROR: pits-lab-npu runner scheduled on forbidden node netboot-004" >&2
+            exit 1
+          fi
+          python3 -c '
+          import yaml
+          with open("test-pool/manifests/30-shard4-npu-dra-job.yaml", "r", encoding="utf-8") as fh:
+              docs = list(yaml.safe_load_all(fh))
+          assert len(docs) == 2, f"Expected ResourceClaim + Job, got {len(docs)}"
+          claim, job = docs
+          assert claim["kind"] == "ResourceClaim"
+          assert job["kind"] == "Job"
+          terms = job["spec"]["template"]["spec"]["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"]
+          allowed = [v for t in terms for e in t.get("matchExpressions", []) if e.get("operator") == "In" for v in e.get("values", [])]
+          assert "netboot-004" not in allowed, "netboot-004 must never be in NPU job affinity"
+          print("Validated 30-shard4-npu-dra-job.yaml DRA v1 contract.")
+          '
+          if kubectl -n pits-test-pool get pods -l app.kubernetes.io/name=pits-test-runner -o name 2>/dev/null | grep -q .; then
+            cleanup() {
+              kubectl -n pits-test-pool delete -f test-pool/manifests/30-shard4-npu-dra-job.yaml --ignore-not-found >/dev/null 2>&1 || true
+            }
+            trap cleanup EXIT
+            cleanup
+            kubectl -n pits-test-pool apply -f test-pool/manifests/30-shard4-npu-dra-job.yaml
+            kubectl -n pits-test-pool wait --for=condition=complete job/shard4-npu-dra-verify --timeout=45s
+            kubectl -n pits-test-pool logs job/shard4-npu-dra-verify
+          else
+            echo "Static test-runner warm pool not present; skipped live shard4-npu-dra-verify job execution."
+          fi

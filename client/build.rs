@@ -4,6 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=CARGO_MANIFEST_DIR");
     println!("cargo:rerun-if-changed=../portal/dist");
     println!("cargo:rerun-if-changed=src/webui/index.html");
 

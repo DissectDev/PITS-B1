@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -29,17 +30,80 @@ var (
 	}
 )
 
-// Tunnel handles HTTP CONNECT requests strictly restricted to Lab VLAN 20 control endpoints.
+// Tunnel handles HTTP CONNECT requests strictly restricted to Lab VLAN 20 control endpoints
+// and dynamically guided by EdgeRouter's semantic routing table subscription, plus optional
+// explicitly registered external cluster endpoints.
 type Tunnel struct {
-	LabNetnsPath string
-	DialTimeout  time.Duration
+	LabNetnsPath       string
+	DialTimeout        time.Duration
+	ExtraTargetChecker func(hostPort string) bool
+
+	mu       sync.RWMutex
+	table    *SemanticRoutingTable
+	excluded map[netip.Addr]bool
+	subState RoutingSubscriptionStatus
 }
 
 func NewTunnel(labNetnsPath string) *Tunnel {
 	return &Tunnel{
 		LabNetnsPath: labNetnsPath,
 		DialTimeout:  10 * time.Second,
+		subState: RoutingSubscriptionStatus{
+			Source: "static-allowlist-fallback",
+		},
 	}
+}
+
+func (t *Tunnel) applyRoutingSnapshot(source, rv, hash string, table *SemanticRoutingTable) {
+	if table == nil {
+		return
+	}
+	now := time.Now().UTC()
+	excluded := table.PolicyHostOnlyIPs()
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.table = table
+	t.excluded = excluded
+	t.subState.Subscribed = true
+	t.subState.Source = source
+	if rv != "" {
+		t.subState.ResourceVersion = rv
+	}
+	if hash != "" {
+		t.subState.Hash = hash
+	}
+	t.subState.Generation = table.Generation
+	t.subState.SyncCount++
+	t.subState.LastSyncAt = &now
+	t.subState.LastError = ""
+	t.subState.RoutingTable = table
+}
+
+func (t *Tunnel) recordSyncError(msg string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.subState.LastError = msg
+}
+
+// SetRoutingTable injects a semantic routing snapshot (for tests or out-of-band updates).
+func (t *Tunnel) SetRoutingTable(source string, table *SemanticRoutingTable) {
+	if table == nil {
+		return
+	}
+	t.applyRoutingSnapshot(source, "", table.Hash, table)
+}
+
+// Status returns a snapshot of the EdgeRouter routing-table subscription state.
+func (t *Tunnel) Status() RoutingSubscriptionStatus {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.subState
+}
+
+// RoutingStatusJSON implements api.RoutingStatusProvider.
+func (t *Tunnel) RoutingStatusJSON() any {
+	return t.Status()
 }
 
 // ValidateTarget enforces strict CIDR + port allowlisting so the bridge cannot be abused as an open proxy.
@@ -59,9 +123,59 @@ func ValidateTarget(hostPort string) (string, error) {
 	return net.JoinHostPort(ip.String(), strconv.Itoa(port)), nil
 }
 
+// ResolveTarget validates hostPort against the subscribed EdgeRouter SemanticRoutingTable
+// (falling back to static Lab VLAN 20 allowlisting before the first K8s Watch sync).
+func (t *Tunnel) ResolveTarget(hostPort string) (RoutePlan, error) {
+	host, portStr, err := net.SplitHostPort(hostPort)
+	if err != nil {
+		return RoutePlan{}, fmt.Errorf("invalid CONNECT target %q", hostPort)
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return RoutePlan{}, fmt.Errorf("invalid CONNECT target IP %q", host)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port <= 0 || port > 65535 {
+		return RoutePlan{}, fmt.Errorf("invalid CONNECT target port %q", portStr)
+	}
+
+	t.mu.RLock()
+	table := t.table
+	excluded := t.excluded
+	t.mu.RUnlock()
+
+	if table != nil && len(table.Entries) > 0 {
+		entry, merr := table.MatchControlPlaneTarget(ip, port)
+		if merr != nil {
+			return RoutePlan{}, merr
+		}
+		requireMultus := strings.EqualFold(entry.ExecutionContext.Mode, "multus-netns") ||
+			strings.EqualFold(entry.Reachability, "multus-vlan20")
+		return RoutePlan{
+			Entry:           &entry,
+			CanonicalTarget: net.JoinHostPort(ip.String(), strconv.Itoa(port)),
+			RequireMultusNS: requireMultus,
+			ExcludedHostIPs: excluded,
+		}, nil
+	}
+
+	canonical, verr := ValidateTarget(hostPort)
+	if verr != nil {
+		if t.ExtraTargetChecker != nil && t.ExtraTargetChecker(hostPort) {
+			return RoutePlan{
+				CanonicalTarget: net.JoinHostPort(ip.String(), strconv.Itoa(port)),
+			}, nil
+		}
+		return RoutePlan{}, verr
+	}
+	return RoutePlan{
+		CanonicalTarget: canonical,
+	}, nil
+}
+
 // ServeConnect upgrades an HTTP CONNECT request into a bidirectional TCP stream.
 func (t *Tunnel) ServeConnect(w http.ResponseWriter, r *http.Request) {
-	canonical, err := ValidateTarget(r.Host)
+	plan, err := t.ResolveTarget(r.Host)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
@@ -69,9 +183,9 @@ func (t *Tunnel) ServeConnect(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), t.DialTimeout)
 	defer cancel()
 
-	upstream, err := dialInNetns(ctx, t.LabNetnsPath, canonical)
+	upstream, err := dialInNetns(ctx, t.LabNetnsPath, plan.CanonicalTarget, plan)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("dial lab endpoint %s: %v", canonical, err), http.StatusBadGateway)
+		http.Error(w, fmt.Sprintf("dial lab endpoint %s: %v", plan.CanonicalTarget, err), http.StatusBadGateway)
 		return
 	}
 

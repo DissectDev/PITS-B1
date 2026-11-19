@@ -20,7 +20,9 @@ import (
 	"pits.io/server/internal/api"
 	"pits.io/server/internal/bridge"
 	"pits.io/server/internal/btrfs"
+	"pits.io/server/internal/clusters"
 	"pits.io/server/internal/host"
+	"pits.io/server/internal/kube"
 	"pits.io/server/internal/pxe"
 	"pits.io/server/internal/san"
 	"pits.io/server/internal/vpp"
@@ -51,6 +53,7 @@ func run() error {
 	pxeReports := flag.String("pxe-reports", "/var/lib/pits/tinkerbell-20261108/reports", "Hook hardware inventory JSON directory")
 	pxeAssets := flag.String("pxe-assets", "/var/lib/pits/tinkerbell-20261108/public/talos", "Staged Talos netboot vmlinuz/initramfs directory")
 	labNetns := flag.String("lab-netns", "auto", "Lab VLAN 20 netns path ('auto' dynamically discovers Multus Lab Pod under /proc)")
+	clustersConfig := flag.String("clusters-config", "/var/lib/pits/agent/clusters.json", "Registered external Kubernetes clusters JSON registry")
 	printSystemd := flag.Bool("print-systemd-unit", false, "Print hardened systemd service unit and exit")
 	flag.Parse()
 
@@ -59,6 +62,9 @@ func run() error {
 		return nil
 	}
 
+	tun := bridge.NewTunnel(*labNetns)
+	clusterMgr := clusters.NewManager(*kubeconfig, *clustersConfig, nil)
+	tun.ExtraTargetChecker = clusterMgr.AllowedTunnelTarget
 	handler := api.NewHandler(&api.Handler{
 		Version:     version,
 		BearerToken: *bearerToken,
@@ -67,7 +73,9 @@ func run() error {
 		SAN:         san.NewManager(*sanRoot, *configfsRoot, !*insecureHTTP),
 		VPP:         vpp.NewInspector(*vppSocket),
 		PXE:         pxe.NewStore(*pxeReports, *pxeAssets),
-		Bridge:      bridge.NewTunnel(*labNetns),
+		Bridge:      tun,
+		Routing:     tun,
+		Clusters:    clusterMgr,
 	})
 
 	srv := &http.Server{
@@ -78,6 +86,12 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if kc, kerr := kube.NewFromKubeconfig(*kubeconfig); kerr != nil {
+		log.Printf("pits-agent: EdgeRouter routing-table watch disabled (kubeconfig %s: %v)", *kubeconfig, kerr)
+	} else {
+		tun.StartSubscriber(ctx, kc)
+	}
 
 	errCh := make(chan error, 1)
 	go func() {

@@ -1,0 +1,88 @@
+apiVersion: openidclient.keycloak.crossplane.io/v1alpha2
+kind: Client
+metadata:
+  name: tailscale-custom-oidc
+spec:
+  forProvider:
+    realmIdRef:
+      name: corp-realm
+    clientId: "tailscale-control-plane"
+    name: "Tailscale Custom OIDC"
+    enabled: true
+    accessType: "CONFIDENTIAL"
+    standardFlowEnabled: true
+    validRedirectUris:
+      - "https://login.tailscale.com/a/oauth_response"
+    extraConfig:
+      default.acr.values: "fido2"
+      minimum.acr.value: "fido2"
+  writeConnectionSecretToRef:
+    name: tailscale-oidc-secret
+    namespace: iam-system
+  providerConfigRef:
+    name: keycloak-provider-config
+---
+apiVersion: openidclient.keycloak.crossplane.io/v1alpha2
+kind: Client
+metadata:
+  name: mode-a-gateway
+spec:
+  forProvider:
+    realmIdRef:
+      name: corp-realm
+    clientId: "pits-mode-a-gateway"
+    name: "PITS Mode-A PEP Gateway"
+    enabled: true
+    accessType: "CONFIDENTIAL"
+    standardFlowEnabled: true
+    accessTokenLifespan: "3600"
+    validRedirectUris:
+      - "https://portal.pits.home.arpa/oauth2/callback"
+      - "https://100.95.95.88:18444/oauth2/callback"
+      - "https://100.95.95.88:8444/oauth2/callback"
+      - "https://portal.lab.martensite.dev/oauth2/callback"
+      - "https://git.lab.martensite.dev/oauth2/callback"
+      - "https://echo.lab.martensite.dev/oauth2/callback"
+      - "https://*.lab.martensite.dev/oauth2/callback"
+    webOrigins:
+      - "https://portal.pits.home.arpa"
+      - "https://100.95.95.88:18444"
+      - "https://portal.lab.martensite.dev"
+      - "https://git.lab.martensite.dev"
+      - "https://echo.lab.martensite.dev"
+      - "https://*.lab.martensite.dev"
+    extraConfig:
+      default.acr.values: "fido2"
+      minimum.acr.value: "fido2"
+  writeConnectionSecretToRef:
+    name: mode-a-gateway-oidc-secret
+    namespace: iam-system
+  providerConfigRef:
+    name: keycloak-provider-config
+---
+apiVersion: openidclient.keycloak.crossplane.io/v1alpha2
+kind: Client
+metadata:
+  name: gitea-oidc
+spec:
+  forProvider:
+    realmIdRef:
+      name: corp-realm
+    clientId: "pits-gitea-oidc"
+    name: "PITS Lab Gitea"
+    enabled: true
+    accessType: "CONFIDENTIAL"
+    standardFlowEnabled: true
+    accessTokenLifespan: "3600"
+    validRedirectUris:
+      - "https://git.lab.martensite.dev/user/oauth2/Keycloak/callback"
+    webOrigins:
+      - "https://git.lab.martensite.dev"
+    extraConfig:
+      default.acr.values: "fido2"
+      minimum.acr.value: "fido2"
+  writeConnectionSecretToRef:
+    name: gitea-oidc-secret
+    namespace: pits-cicd
+  providerConfigRef:
+    name: keycloak-provider-config

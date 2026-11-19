@@ -1,0 +1,64 @@
+# Lab Flux CD GitOps sync configuration for cluster-pits-lab.
+# Strictly watches CICD/ and test-pool/manifests/ from the in-cluster Gitea mirror,
+# explicitly excluding Base/ (which remains governed exclusively by pits-core Flux CD).
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: lab-platform-repo
+  namespace: flux-system
+spec:
+  interval: 5m
+  url: http://gitea-http.pits-cicd.svc.cluster.local:3000/DissectDev/PITS-B1.git
+  ref:
+    branch: main
+  ignore: |
+    /*
+    !/CICD/
+    !/test-pool/manifests/
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: lab-cicd-platform
+  namespace: flux-system
+spec:
+  interval: 10m
+  retryInterval: 1m
+  timeout: 10m
+  sourceRef:
+    kind: GitRepository
+    name: lab-platform-repo
+  path: ./CICD/platform
+  prune: true
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: lab-test-pool
+  namespace: flux-system
+spec:
+  interval: 10m
+  retryInterval: 1m
+  timeout: 5m
+  sourceRef:
+    kind: GitRepository
+    name: lab-platform-repo
+  path: ./test-pool/manifests
+  prune: false
+---
+apiVersion: notification.toolkit.fluxcd.io/v1
+kind: Receiver
+metadata:
+  name: gitea-lab-webhook
+  namespace: flux-system
+spec:
+  type: generic
+  events:
+    - push
+  secretRef:
+    name: gitea-webhook-token
+  resources:
+    - kind: GitRepository
+      name: lab-platform-repo

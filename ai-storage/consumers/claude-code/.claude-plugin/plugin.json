@@ -1,0 +1,7 @@
+{
+  "name": "pits-ai-storage",
+  "version": "0.1.0",
+  "description": "Thin Claude Code consumer for the OpenDAL AI Storage MCP Producer.",
+  "mcpServers": "./.mcp.json",
+  "skills": "../../../../.agents/plugins/pits-ai-storage/skills"
+}

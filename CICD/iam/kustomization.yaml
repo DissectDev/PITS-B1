@@ -1,0 +1,8 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - sync-script-configmap.yaml
+  - realm-corp.yaml
+  - authflow-fido2.yaml
+  - clients.yaml

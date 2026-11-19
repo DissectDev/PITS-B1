@@ -1,0 +1,49 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xauthflowbundles.iam.corp.io
+spec:
+  group: iam.corp.io
+  names:
+    kind: XAuthFlowBundle
+    plural: xauthflowbundles
+  claimNames:
+    kind: AuthFlowBundle
+    plural: authflowbundles
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - realm
+                - flowAlias
+                - steps
+              properties:
+                realm:
+                  type: string
+                flowAlias:
+                  type: string
+                description:
+                  type: string
+                bindAsRealmBrowserFlow:
+                  type: boolean
+                  default: false
+                cleanupUnusedVersions:
+                  type: boolean
+                  default: true
+                steps:
+                  type: array
+                  items:
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              properties:
+                activeFlowAlias:
+                  type: string

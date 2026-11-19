@@ -1,0 +1,103 @@
+apiVersion: storage.ai.pits.io/v1alpha1
+kind: ProjectProfile
+metadata:
+  name: pits-local-dev
+  namespace: default
+spec:
+  backends:
+    local_fs:
+      scheme: fs
+      root: ./.ai-store/objects
+    mem_scratch:
+      scheme: memory
+      root: /
+  archetypes:
+    workspace:
+      uri: ws://
+      backend: local_fs
+      prefix: workspace
+      index: sqlite://./.ai-store/ai-store-meta.sqlite3
+      archiveBackend: local_fs
+      archivePrefix: snapshots
+    memory:
+      uri: mem://
+      backend: local_fs
+      prefix: memory
+      index: sqlite://./.ai-store/ai-store-meta.sqlite3
+      ttlDays: 90
+    knowledge:
+      uri: kb://
+      backend: local_fs
+      prefix: knowledge
+      index: sqlite://./.ai-store/ai-store-meta.sqlite3
+      enableTrigram: true
+      enableVector: true
+    datasets:
+      uri: data://
+      backend: local_fs
+      prefix: datasets
+      cacheDir: ./.ai-store/nvme-cache
+      cacheMaxBytes: 5368709120
+    models:
+      uri: models://
+      backend: local_fs
+      prefix: models
+      cacheDir: ./.ai-store/nvme-cache
+      cacheMaxBytes: 10737418240
+    artifacts:
+      uri: artifacts://
+      backend: local_fs
+      prefix: artifacts
+      index: sqlite://./.ai-store/ai-store-meta.sqlite3
+      contentAddressed: true
+    traces:
+      uri: traces://
+      backend: local_fs
+      prefix: traces
+      flushIntervalSec: 15
+      format: jsonl
+    state:
+      uri: state://
+      backend: local_fs
+      prefix: state
+      coordinator: sqlite://./.ai-store/ai-store-meta.sqlite3
+    sharedDrive:
+      uri: shared://
+      backend: local_fs
+      prefix: shared
+      lockBackend: sqlite://./.ai-store/ai-store-meta.sqlite3
+  policies:
+    kb://:
+      mode: read-only
+      maxFileSizeMB: 128
+    data://:
+      mode: read-only
+      maxFileSizeMB: 4096
+    models://:
+      mode: read-only
+      maxFileSizeMB: 16384
+    artifacts://:
+      mode: append-only
+      maxFileSizeMB: 512
+    traces://:
+      mode: append-only
+      maxFileSizeMB: 256
+    ws://:
+      mode: read-write
+      maxFileSizeMB: 64
+    mem://:
+      mode: read-write
+      maxFileSizeMB: 16
+      requireScope: true
+    state://:
+      mode: read-write
+      maxFileSizeMB: 32
+    shared://:
+      mode: read-write
+      maxFileSizeMB: 1024
+  exposure:
+    transport: streamable-http
+    host: 127.0.0.1
+    port: 8787
+    path: /mcp
+    toolsPreset: full

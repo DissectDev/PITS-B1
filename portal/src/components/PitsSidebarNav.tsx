@@ -11,6 +11,9 @@ import SystemUpdateAltOutlinedIcon from '@mui/icons-material/SystemUpdateAltOutl
 import StorageOutlinedIcon from '@mui/icons-material/StorageOutlined';
 import ViewInArOutlinedIcon from '@mui/icons-material/ViewInArOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
+import RocketLaunchOutlinedIcon from '@mui/icons-material/RocketLaunchOutlined';
+import CloudSyncOutlinedIcon from '@mui/icons-material/CloudSyncOutlined';
+import VerifiedUserOutlinedIcon from '@mui/icons-material/VerifiedUserOutlined';
 import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined';
 import AssessmentOutlinedIcon from '@mui/icons-material/AssessmentOutlined';
 import CloudOutlinedIcon from '@mui/icons-material/CloudOutlined';
@@ -167,6 +170,11 @@ export const PitsSidebarNav: NavContentComponent = () => {
             text="AI NPU Accelerators"
           />
           <SidebarItem
+            icon={MemoryOutlinedIcon}
+            to="/resource-types/gpu-accelerator"
+            text="AI GPU Accelerators"
+          />
+          <SidebarItem
             icon={DesktopWindowsOutlinedIcon}
             to="/resource-types/virtual-machine"
             text="Virtual Machines"
@@ -195,12 +203,27 @@ export const PitsSidebarNav: NavContentComponent = () => {
             to="/resource-types/san-volume"
             text="SAN Volumes"
           />
+          <SidebarItem
+            icon={CloudSyncOutlinedIcon}
+            to="/resource-types/ai-storage-workspace"
+            text="AI Storage"
+          />
 
           <DomainSectionLabel label="Infrastructure · Control" />
           <SidebarItem
             icon={HubOutlinedIcon}
             to="/resource-types/kubernetes-cluster"
             text="K8s Clusters"
+          />
+          <SidebarItem
+            icon={RocketLaunchOutlinedIcon}
+            to="/resource-types/cicd-pipeline"
+            text="CI/CD Pipelines"
+          />
+          <SidebarItem
+            icon={VerifiedUserOutlinedIcon}
+            to="/resource-types/auth-flow-bundle"
+            text="IAM Auth Flows"
           />
 
           <DomainSectionLabel label="Sourcing Governance" />
@@ -332,6 +355,7 @@ export const AutoGuestSignInPage: React.FC<SignInPageProps> = ({ onSignInSuccess
       const session = await fetchGuestSession();
       if (cancelled) return;
       let cachedToken = session.token;
+      const cookieAuthMode = !session.token;
 
       const identityApi: IdentityApi & {
         getUserId: () => string;
@@ -355,7 +379,7 @@ export const AutoGuestSignInPage: React.FC<SignInPageProps> = ({ onSignInSuccess
           ownershipEntityRefs: session.ownershipEntityRefs,
         }),
         getCredentials: async () => {
-          if (!cachedToken) {
+          if (!cachedToken && !cookieAuthMode) {
             const refreshed = await fetchGuestSession();
             cachedToken = refreshed.token;
           }

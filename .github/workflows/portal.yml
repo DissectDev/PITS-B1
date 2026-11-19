@@ -14,18 +14,81 @@ on:
 
 jobs:
   portal-build:
-    name: TypeScript & Vite Build (portal)
-    runs-on: ubuntu-latest
+    name: TypeScript, Vite Build & Headless Chromium E2E (portal)
+    runs-on: pits-lab-e2e
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: portal/package-lock.json
-      - name: Install dependencies, typecheck, and build
+      - name: Verify preinstalled toolchain & hydrate portal node_modules
+        run: |
+          set -euo pipefail
+          for bin in node cargo rustc cargo-nextest chromium curl; do
+            if ! command -v "$bin" >/dev/null 2>&1; then
+              echo "Missing required toolchain binary: $bin" >&2
+              exit 1
+            fi
+          done
+          node --version
+          chromium --version || true
+          if [ -d /ramdisk ]; then
+            mkdir -p /ramdisk/cargo-home /ramdisk/cargo-target /ramdisk/npm-cache
+            echo "CARGO_HOME=/ramdisk/cargo-home" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_DIR=/ramdisk/cargo-target" >> "$GITHUB_ENV"
+            echo "npm_config_cache=/ramdisk/npm-cache" >> "$GITHUB_ENV"
+            if [ -f /opt/pits-cache/cargo-config.toml ]; then
+              cp -f /opt/pits-cache/cargo-config.toml /ramdisk/cargo-home/config.toml
+            fi
+          fi
+          cd portal
+          if [ -L node_modules ] || [ ! -d node_modules/.bin ]; then
+            rm -rf node_modules
+            if [ -d /ramdisk/portal-node-modules/.bin ]; then
+              cp -a /ramdisk/portal-node-modules node_modules
+              chmod -R u+w node_modules
+            elif [ -e /opt/pits-cache/portal-node-modules/vite/package.json ]; then
+              STORE_NM="$(dirname "$(dirname "$(readlink -f /opt/pits-cache/portal-node-modules/vite/package.json)")")"
+              cp -a "$STORE_NM" node_modules
+              chmod -R u+w node_modules
+            else
+              npm ci --legacy-peer-deps
+            fi
+          fi
+      - name: Typecheck and build Portal SPA (tsc + vite)
         working-directory: portal
         run: |
-          npm ci --legacy-peer-deps
-          npx tsc --noEmit
-          npm run build
+          set -euo pipefail
+          ./node_modules/.bin/tsc --noEmit
+          ./node_modules/.bin/vite build
+      - name: Run embedded portal server tests & Headless Chromium E2E
+        run: |
+          set -euo pipefail
+          CARGO_CFG="${CARGO_HOME:-$HOME/.cargo}/config.toml"
+          OFFLINE_FLAGS="--frozen"
+          if [ -f "$CARGO_CFG" ] && grep -q 'offline = true' "$CARGO_CFG"; then
+            OFFLINE_FLAGS="--offline --frozen"
+          fi
+          cd client
+          cargo nextest run ${OFFLINE_FLAGS} server::tests
+          cargo build ${OFFLINE_FLAGS}
+          E2E_SCRIPT="../test-pool/scripts/portal-headless-e2e.mjs"
+          if [ ! -f "$E2E_SCRIPT" ] && [ -f /usr/local/bin/portal-headless-e2e.mjs ]; then
+            E2E_SCRIPT="/usr/local/bin/portal-headless-e2e.mjs"
+          fi
+          PORTAL_PORT=$((18091 + (RANDOM % 500)))
+          CDP_PORT=$((9223 + (RANDOM % 500)))
+          PITSCTL_BIN="${CARGO_TARGET_DIR:-target}/debug/pitsctl"
+          "$PITSCTL_BIN" serve --listen "127.0.0.1:${PORTAL_PORT}" >/tmp/pitsctl-portal-e2e.log 2>&1 &
+          SERVE_PID=$!
+          trap 'kill -9 "$SERVE_PID" >/dev/null 2>&1 || true' EXIT
+          READY=0
+          for _ in $(seq 1 80); do
+            if curl -sf "http://127.0.0.1:${PORTAL_PORT}/api/pits/v1/resource-types" >/dev/null 2>&1; then
+              READY=1
+              break
+            fi
+            sleep 0.1
+          done
+          if [ "$READY" -ne 1 ]; then
+            cat /tmp/pitsctl-portal-e2e.log >&2 || true
+            exit 1
+          fi
+          PITS_PORTAL_URL="http://127.0.0.1:${PORTAL_PORT}" CDP_PORT="${CDP_PORT}" node "$E2E_SCRIPT"

@@ -1,11 +1,18 @@
 //! Contextual Entity Action specifications, parameter schemas, safety precondition guards,
-//! and execution dispatcher across all 8 PITS Resource Types.
+//! and execution dispatcher across all PITS Resource Types.
 
 use anyhow::{anyhow, bail, Context, Result};
+use base64::Engine;
 use chrono::Utc;
+use http::Request as HttpRequest;
+use http_body_util::{BodyExt, Empty};
+use hyper::client::conn::http1;
+use hyper_util::rt::TokioIo;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::Duration;
+use tokio::net::TcpStream;
 
 use crate::catalog::model::{
     ActionExecutionResult, ActionInvokeRequest, ActionParamSpec, EntityActionSpec,
@@ -16,12 +23,12 @@ use crate::catalog::sourcing::{
     SourcingEvaluation, SourcingResourceRecord, PERCEIVED_STATUSES, WALLET_SHARE_TIERS,
 };
 use crate::catalog::sourcing_db::AssessWindmillRequest;
-use crate::catalog::synthesizer::{inspect_cluster_fast, CatalogRegistry};
+use crate::catalog::synthesizer::{inspect_cluster_fast, inspect_lab_cicd_fast, CatalogRegistry};
 use crate::config::{local_state_dir, EnrolledNodeContract};
 use crate::deploy::{deploy_to_nixos_pits_core, NixosDeployMode, NixosDeployOptions};
 use crate::k8s::{
     apply_san_local_pv_pvc, audit_fleet_npus, launch_npu_validation_job,
-    render_npu_validation_manifests, render_san_local_pv_pvc,
+    render_gpu_validation_manifests, render_npu_validation_manifests, render_san_local_pv_pvc,
 };
 use crate::pxe::{
     apply_tinkerbell_hardware, pxe_verify_assets, render_ipxe_script,
@@ -60,6 +67,7 @@ pub(crate) fn canonical_action_ids_for_type(resource_type: &str) -> Vec<String> 
             "sync-nixos-agent",
         ],
         "npu-accelerator" => &["launch-openvino-verify", "preview-claim-yaml"],
+        "gpu-accelerator" => &["preview-gpu-claim-yaml"],
         "virtual-machine" => &[
             "start",
             "restart",
@@ -88,6 +96,11 @@ pub(crate) fn canonical_action_ids_for_type(resource_type: &str) -> Vec<String> 
             "bind-static-pv",
         ],
         "kubernetes-cluster" => &["audit-fleet-npus", "refresh-cluster-state"],
+        "cicd-pipeline" => &[
+            "verify-cicd-stack",
+            "inspect-workflow-runs",
+            "preview-cicd-handover",
+        ],
         "vendor-saas" | "commercial-sdk" | "managed-infra" | "outsourced-dev" => &[
             "calibrate-sourcing-scores",
             "calibrate-supplier-windmill",
@@ -508,6 +521,41 @@ pub(crate) fn actions_for_npu(
             ],
         },
     ]
+}
+
+pub(crate) fn actions_for_gpu(host_node: &str, default_device_class: &str) -> Vec<EntityActionSpec> {
+    vec![EntityActionSpec {
+        id: "preview-gpu-claim-yaml".to_string(),
+        title: "Preview GPU DRA v1 ResourceClaim & Job YAML".to_string(),
+        description: format!(
+            "Render resource.k8s.io/v1 ResourceClaim (deviceClass={default_device_class}) and nvidia-smi verification Job pinned to {host_node}."
+        ),
+        category: "Manifests".to_string(),
+        dangerous: false,
+        supports_dry_run: true,
+        enabled: true,
+        disabled_reason: None,
+        parameters: vec![
+            ActionParamSpec {
+                name: "deviceClass".to_string(),
+                label: "DRA DeviceClass".to_string(),
+                param_type: "string".to_string(),
+                required: false,
+                default_value: Some(json!(default_device_class)),
+                options: vec![],
+                description: None,
+            },
+            ActionParamSpec {
+                name: "namespace".to_string(),
+                label: "Target Namespace".to_string(),
+                param_type: "string".to_string(),
+                required: false,
+                default_value: Some(json!("default")),
+                options: vec![],
+                description: None,
+            },
+        ],
+    }]
 }
 
 pub(crate) fn actions_for_vm(vm_name: &str) -> Vec<EntityActionSpec> {
@@ -1149,6 +1197,115 @@ pub(crate) fn actions_for_k8s_cluster() -> Vec<EntityActionSpec> {
     ]
 }
 
+pub(crate) fn actions_for_cicd_pipeline() -> Vec<EntityActionSpec> {
+    vec![
+        EntityActionSpec {
+            id: "verify-cicd-stack".to_string(),
+            title: "Verify Lab CI/CD Stack & netboot-004 Exclusion".to_string(),
+            description: "Audit Crossplane LabDevStack, CNPG gitea-pg (2/2), Flux CD (Base/ excluded), act_runner warm pool (5 pods), Gitea/Zot/Attic endpoints, and zero-pod exclusion on netboot-004.".to_string(),
+            category: "Verification".to_string(),
+            dangerous: false,
+            supports_dry_run: true,
+            enabled: true,
+            disabled_reason: None,
+            parameters: vec![ActionParamSpec {
+                name: "labIp".to_string(),
+                label: "Lab VLAN 20 Endpoint IP".to_string(),
+                param_type: "string".to_string(),
+                required: false,
+                default_value: Some(json!("10.89.20.21")),
+                options: vec![],
+                description: Some("VLAN 20 NodePort/externalIP host for Gitea (:30300), Zot (:30500), and Attic (:30808)".to_string()),
+            }],
+        },
+        EntityActionSpec {
+            id: "inspect-workflow-runs".to_string(),
+            title: "Inspect Gitea Actions Workflow Runs".to_string(),
+            description: "Fetch recent DissectDev/PITS-B1 workflow runs (cicd.yml, client.yml, server.yml, portal.yml, test-pool.yml, base.yml) from Lab Gitea API.".to_string(),
+            category: "Diagnostics".to_string(),
+            dangerous: false,
+            supports_dry_run: true,
+            enabled: true,
+            disabled_reason: None,
+            parameters: vec![
+                ActionParamSpec {
+                    name: "labIp".to_string(),
+                    label: "Gitea Endpoint IP".to_string(),
+                    param_type: "string".to_string(),
+                    required: false,
+                    default_value: Some(json!("10.89.20.21")),
+                    options: vec![],
+                    description: Some("Lab Gitea HTTP endpoint IP (default 10.89.20.21)".to_string()),
+                },
+                ActionParamSpec {
+                    name: "limit".to_string(),
+                    label: "Max Workflow Runs".to_string(),
+                    param_type: "integer".to_string(),
+                    required: false,
+                    default_value: Some(json!(10)),
+                    options: vec![],
+                    description: Some("Number of recent Gitea Actions runs to query (1-50)".to_string()),
+                },
+            ],
+        },
+        EntityActionSpec {
+            id: "preview-cicd-handover".to_string(),
+            title: "Preview CI/CD Pipeline & Core CD Handover".to_string(),
+            description: "Render guarded Invoke-CicdPipeline.ps1 and Deploy-CoreArtifacts.ps1 handover plan with Base/ & netboot-004 isolation checks.".to_string(),
+            category: "Deployment".to_string(),
+            dangerous: false,
+            supports_dry_run: true,
+            enabled: true,
+            disabled_reason: None,
+            parameters: vec![
+                ActionParamSpec {
+                    name: "target".to_string(),
+                    label: "Core CD Target".to_string(),
+                    param_type: "select".to_string(),
+                    required: false,
+                    default_value: Some(json!("all")),
+                    options: vec![
+                        "all".to_string(),
+                        "portal".to_string(),
+                        "agent".to_string(),
+                        "test-runner".to_string(),
+                        "cicd-runner".to_string(),
+                        "base".to_string(),
+                    ],
+                    description: Some("Artifact target passed to CICD/scripts/Deploy-CoreArtifacts.ps1".to_string()),
+                },
+                ActionParamSpec {
+                    name: "snapshot".to_string(),
+                    label: "Use Working-Tree Snapshot (-Snapshot)".to_string(),
+                    param_type: "boolean".to_string(),
+                    required: false,
+                    default_value: Some(json!(true)),
+                    options: vec![],
+                    description: Some("Push a temporary tree snapshot to Lab Gitea without mutating local HEAD or index".to_string()),
+                },
+                ActionParamSpec {
+                    name: "deployCore".to_string(),
+                    label: "Handover to Core CD (-DeployCore)".to_string(),
+                    param_type: "boolean".to_string(),
+                    required: false,
+                    default_value: Some(json!(false)),
+                    options: vec![],
+                    description: Some("Include Deploy-CoreArtifacts.ps1 promotion to pits-core (100.95.95.88) after CI passes".to_string()),
+                },
+                ActionParamSpec {
+                    name: "confirmHandover".to_string(),
+                    label: "Confirm Non-Dry-Run Handover Plan".to_string(),
+                    param_type: "boolean".to_string(),
+                    required: false,
+                    default_value: Some(json!(false)),
+                    options: vec![],
+                    description: Some("Required safety confirmation when executing non-dry-run handover plan".to_string()),
+                },
+            ],
+        },
+    ]
+}
+
 pub(crate) fn actions_for_sourcing_resource(
     rec: &SourcingResourceRecord,
     eval: &SourcingEvaluation,
@@ -1412,6 +1569,10 @@ impl CatalogRegistry {
                 self.exec_npu_action(&detail.status, &entity_ref, &entity_name, action_id, &req)
                     .await?
             }
+            "gpu-accelerator" => {
+                self.exec_gpu_action(&entity_ref, &entity_name, action_id, &req, &detail.diagnostics)
+                    .await?
+            }
             "virtual-machine" => {
                 self.exec_vm_action(&entity_ref, &entity_name, action_id, &req)
                     .await?
@@ -1434,6 +1595,10 @@ impl CatalogRegistry {
             }
             "kubernetes-cluster" | "system" => {
                 self.exec_cluster_action(&entity_ref, &entity_name, action_id, &req)
+                    .await?
+            }
+            "cicd-pipeline" => {
+                self.exec_cicd_action(&entity_ref, &entity_name, action_id, &req)
                     .await?
             }
             "vendor-saas" | "commercial-sdk" | "managed-infra" | "outsourced-dev" => {
@@ -1530,7 +1695,7 @@ impl CatalogRegistry {
 
                     let opts = NixosDeployOptions {
                         ssh_target,
-                        agent_host: "100.74.25.42".to_string(),
+                        agent_host: "100.95.95.88".to_string(),
                         agent_port: 18443,
                         flake_dir: "/home/libraskywalker/PITS-B1/Base".to_string(),
                         flake_attr: "core".to_string(),
@@ -2085,6 +2250,61 @@ impl CatalogRegistry {
                 })
             }
             other => bail!("unsupported action {other:?} on npu-accelerator/{entity_name}"),
+        }
+    }
+
+    async fn exec_gpu_action(
+        &self,
+        entity_ref: &str,
+        entity_name: &str,
+        action_id: &str,
+        req: &ActionInvokeRequest,
+        diagnostics: &serde_json::Value,
+    ) -> Result<ActionExecutionResult> {
+        let host_node = diagnostics
+            .pointer("/slice/nodeName")
+            .or_else(|| diagnostics.pointer("/node/name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("cp0");
+        let default_dc = diagnostics
+            .pointer("/slice/deviceClass")
+            .and_then(|v| v.as_str())
+            .unwrap_or("gpu.nvidia.com");
+        let device_class =
+            param_str(&req.parameters, "deviceClass").unwrap_or_else(|| default_dc.to_string());
+        let k8s_ns =
+            param_str(&req.parameters, "namespace").unwrap_or_else(|| "default".to_string());
+        let slug = crate::catalog::discovery::sanitize_k8s_slug(entity_name);
+        let claim_name = format!("gpu-claim-{slug}");
+        let job_name = format!("gpu-verify-{slug}");
+        let rendered = render_gpu_validation_manifests(
+            &k8s_ns,
+            &claim_name,
+            &job_name,
+            &device_class,
+            Some(host_node),
+        );
+        match action_id {
+            "preview-gpu-claim-yaml" => Ok(ActionExecutionResult {
+                success: true,
+                entity_ref: entity_ref.to_string(),
+                action_id: action_id.to_string(),
+                dry_run: req.dry_run,
+                executed_at: Utc::now(),
+                summary: format!(
+                    "Rendered GPU DRA v1 ResourceClaim ({claim_name}) & Job ({job_name}) for {host_node}"
+                ),
+                changes_or_warnings: vec![],
+                output: json!({
+                    "hostNode": host_node,
+                    "namespace": k8s_ns,
+                    "deviceClass": device_class,
+                    "claimName": claim_name,
+                    "jobName": job_name,
+                }),
+                rendered_artifact: Some(rendered),
+            }),
+            other => bail!("unsupported action {other:?} on gpu-accelerator/{entity_name}"),
         }
     }
 
@@ -2783,6 +3003,11 @@ impl CatalogRegistry {
         action_id: &str,
         req: &ActionInvokeRequest,
     ) -> Result<ActionExecutionResult> {
+        if !entity_name.eq_ignore_ascii_case("pits-data") {
+            bail!(
+                "storage-pool/{entity_name} uses an external backend (OpenEBS Mayastor DiskPool); Btrfs trim/scrub operations only apply to default/pits-data"
+            );
+        }
         let op = match action_id {
             "trim-pool" => "trim",
             "scrub-verify" => "scrub",
@@ -3170,10 +3395,26 @@ impl CatalogRegistry {
                         Ok(kc) => serde_json::to_value(inspect_cluster_fast(&kc, None).await)?,
                         Err(e) => json!({ "cluster": "pits-core", "reachable": false, "note": e.to_string() }),
                     }
-                } else {
+                } else if entity_name == "cluster-pits-lab" {
                     match self.build_lab_k8s_req().await {
                         Ok(kc) => serde_json::to_value(inspect_cluster_fast(&kc, None).await)?,
                         Err(e) => json!({ "cluster": "pits-lab", "reachable": false, "note": e.to_string() }),
+                    }
+                } else {
+                    let extra_opt = {
+                        let prof = self.profile.read().await;
+                        prof.extra_clusters
+                            .iter()
+                            .find(|c| crate::catalog::discovery::sanitize_k8s_slug(&c.name) == entity_name)
+                            .cloned()
+                    };
+                    if let Some(cfg) = extra_opt {
+                        match self.build_extra_k8s_req(&cfg).await {
+                            Ok(kc) => serde_json::to_value(inspect_cluster_fast(&kc, None).await)?,
+                            Err(e) => json!({ "cluster": cfg.name, "reachable": false, "note": e.to_string() }),
+                        }
+                    } else {
+                        json!({ "cluster": entity_name, "refreshed": true })
                     }
                 };
                 Ok(ActionExecutionResult {
@@ -3190,6 +3431,314 @@ impl CatalogRegistry {
             }
             other => bail!("unsupported action {other:?} on {entity_name}"),
         }
+    }
+
+    async fn exec_cicd_action(
+        &self,
+        entity_ref: &str,
+        entity_name: &str,
+        action_id: &str,
+        req: &ActionInvokeRequest,
+    ) -> Result<ActionExecutionResult> {
+        let lab_ip = param_str(&req.parameters, "labIp")
+            .unwrap_or_else(|| "10.89.20.21".to_string());
+        match action_id {
+            "verify-cicd-stack" => {
+                if req.dry_run {
+                    let script_cmd = format!(
+                        "powershell -NoProfile -ExecutionPolicy Bypass -File c:\\Project\\PITS\\Infra\\CICD\\scripts\\Verify-CicdStack.ps1 -LabIp {lab_ip}"
+                    );
+                    return Ok(ActionExecutionResult {
+                        success: true,
+                        entity_ref: entity_ref.to_string(),
+                        action_id: action_id.to_string(),
+                        dry_run: true,
+                        executed_at: Utc::now(),
+                        summary: format!(
+                            "Dry-run: would run 8-gate Lab CI/CD health & netboot-004 exclusion verification against {lab_ip} and cluster-pits-lab"
+                        ),
+                        changes_or_warnings: vec![],
+                        output: json!({
+                            "labIp": lab_ip,
+                            "checks": [
+                                "netboot-004-exclusion",
+                                "crossplane-labdevstack",
+                                "cnpg-postgres",
+                                "zot-registry",
+                                "attic-nix-cache",
+                                "gitea-api-and-repo",
+                                "gitea-act-runners",
+                                "flux-gitops",
+                            ],
+                            "endpoints": {
+                                "gitea": format!("http://{lab_ip}:30300/api/v1/version"),
+                                "zot": format!("http://{lab_ip}:30500/v2/"),
+                                "attic": format!("http://{lab_ip}:30808/"),
+                            }
+                        }),
+                        rendered_artifact: Some(script_cmd),
+                    });
+                }
+
+                let configured = self.is_profile_configured().await;
+                let lab_kc = if configured {
+                    self.build_lab_k8s_req().await.ok()
+                } else {
+                    None
+                };
+                let k8s_cicd = match lab_kc.as_ref() {
+                    Some(kc) => inspect_lab_cicd_fast(kc, None).await,
+                    None => None,
+                };
+                let gitea_host = format!("{lab_ip}:30300");
+                let zot_host = format!("{lab_ip}:30500");
+                let attic_host = format!("{lab_ip}:30808");
+                let (gitea_probe, zot_probe, attic_probe) = tokio::join!(
+                    http_get_plain_json(&gitea_host, "/api/v1/version", None),
+                    http_get_plain_status(&zot_host, "/v2/", None),
+                    http_get_plain_status(&attic_host, "/", None),
+                );
+                let pods_004 = k8s_cicd
+                    .as_ref()
+                    .map(|c| c.pods_on_netboot_004.clone())
+                    .unwrap_or_default();
+                let exclusion_ok = pods_004.is_empty();
+                let mut warnings = Vec::new();
+                if !exclusion_ok {
+                    warnings.push(format!(
+                        "SAFETY VIOLATION: CI/CD pods scheduled on netboot-004: {}",
+                        pods_004.join(", ")
+                    ));
+                }
+                if k8s_cicd.is_none() {
+                    warnings.push("Lab Kubernetes API not reachable; HTTP endpoint probes only".to_string());
+                }
+
+                let gitea_ver = gitea_probe
+                    .as_ref()
+                    .ok()
+                    .and_then(|v| v.get("version").and_then(|s| s.as_str()))
+                    .map(str::to_string);
+                let report = json!({
+                    "entity": entity_name,
+                    "labIp": lab_ip,
+                    "netboot004ExclusionOk": exclusion_ok,
+                    "podsOnNetboot004": pods_004,
+                    "k8sSummary": k8s_cicd,
+                    "endpoints": {
+                        "gitea": {
+                            "url": format!("http://{lab_ip}:30300/api/v1/version"),
+                            "ok": gitea_probe.is_ok(),
+                            "version": gitea_ver,
+                            "error": gitea_probe.err().map(|e| e.to_string()),
+                        },
+                        "zot": {
+                            "url": format!("http://{lab_ip}:30500/v2/"),
+                            "status": zot_probe.as_ref().ok().copied(),
+                            "ok": matches!(zot_probe, Ok(200)),
+                            "error": zot_probe.err().map(|e| e.to_string()),
+                        },
+                        "attic": {
+                            "url": format!("http://{lab_ip}:30808/"),
+                            "status": attic_probe.as_ref().ok().copied(),
+                            "ok": matches!(attic_probe, Ok(200)),
+                            "error": attic_probe.err().map(|e| e.to_string()),
+                        },
+                    }
+                });
+                Ok(ActionExecutionResult {
+                    success: exclusion_ok,
+                    entity_ref: entity_ref.to_string(),
+                    action_id: action_id.to_string(),
+                    dry_run: false,
+                    executed_at: Utc::now(),
+                    summary: format!(
+                        "Verified Lab CI/CD stack ({entity_name}): netboot-004 pods={}, gitea={}, k8s={}",
+                        pods_004.len(),
+                        gitea_ver.as_deref().unwrap_or("unreachable"),
+                        if k8s_cicd.is_some() { "connected" } else { "offline" },
+                    ),
+                    changes_or_warnings: warnings,
+                    output: report.clone(),
+                    rendered_artifact: serde_yaml::to_string(&report).ok(),
+                })
+            }
+            "inspect-workflow-runs" => {
+                let limit = param_i64(&req.parameters, "limit")
+                    .unwrap_or(10)
+                    .clamp(1, 50);
+                let runs_path = format!("/api/v1/repos/DissectDev/PITS-B1/actions/runs?limit={limit}");
+                let workflows = [
+                    "cicd.yml",
+                    "client.yml",
+                    "server.yml",
+                    "portal.yml",
+                    "test-pool.yml",
+                    "base.yml",
+                ];
+                if req.dry_run {
+                    return Ok(ActionExecutionResult {
+                        success: true,
+                        entity_ref: entity_ref.to_string(),
+                        action_id: action_id.to_string(),
+                        dry_run: true,
+                        executed_at: Utc::now(),
+                        summary: format!(
+                            "Dry-run: would query http://{lab_ip}:30300{runs_path} for 6 self-hosted Gitea Actions workflows"
+                        ),
+                        changes_or_warnings: vec![],
+                        output: json!({
+                            "endpoint": format!("http://{lab_ip}:30300{runs_path}"),
+                            "workflows": workflows,
+                            "limit": limit,
+                        }),
+                        rendered_artifact: Some(format!(
+                            "GET http://{lab_ip}:30300{runs_path}\nManaged workflows: {}",
+                            workflows.join(", ")
+                        )),
+                    });
+                }
+
+                let basic_auth = self.read_gitea_basic_auth_from_lab().await;
+                let auth_pair = basic_auth
+                    .as_ref()
+                    .map(|(u, p)| (u.as_str(), p.as_str()));
+                let runs_val = http_get_plain_json(&format!("{lab_ip}:30300"), &runs_path, auth_pair).await?;
+                let runs_arr = runs_val
+                    .get("workflow_runs")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                let summarized: Vec<serde_json::Value> = runs_arr
+                    .iter()
+                    .map(|r| {
+                        json!({
+                            "id": r.get("id"),
+                            "name": r.get("name"),
+                            "status": r.get("status"),
+                            "conclusion": r.get("conclusion"),
+                            "headSha": r.get("head_sha"),
+                            "event": r.get("event"),
+                        })
+                    })
+                    .collect();
+                Ok(ActionExecutionResult {
+                    success: true,
+                    entity_ref: entity_ref.to_string(),
+                    action_id: action_id.to_string(),
+                    dry_run: false,
+                    executed_at: Utc::now(),
+                    summary: format!(
+                        "Fetched {} recent Gitea Actions runs for DissectDev/PITS-B1 from {lab_ip}:30300",
+                        summarized.len()
+                    ),
+                    changes_or_warnings: vec![],
+                    output: json!({
+                        "totalCount": runs_val.get("total_count"),
+                        "runs": summarized,
+                    }),
+                    rendered_artifact: serde_yaml::to_string(&summarized).ok(),
+                })
+            }
+            "preview-cicd-handover" => {
+                let target = param_str(&req.parameters, "target")
+                    .unwrap_or_else(|| "all".to_string());
+                let valid_targets = ["all", "portal", "agent", "test-runner", "cicd-runner", "base"];
+                if !valid_targets.contains(&target.as_str()) {
+                    bail!(
+                        "invalid CICD handover target {target:?}; must be one of [{}]",
+                        valid_targets.join(", ")
+                    );
+                }
+                let snapshot = param_bool(&req.parameters, "snapshot", true);
+                let deploy_core = param_bool(&req.parameters, "deployCore", false);
+                let confirm_handover = param_bool(&req.parameters, "confirmHandover", false);
+
+                if !req.dry_run && !confirm_handover {
+                    bail!(
+                        "safety guard blocked non-dry-run preview-cicd-handover on {entity_name}: set confirmHandover=true to record/dispatch handover plan"
+                    );
+                }
+
+                let mut invoke_cmd = String::from(
+                    "powershell -NoProfile -ExecutionPolicy Bypass -File c:\\Project\\PITS\\Infra\\CICD\\scripts\\Invoke-CicdPipeline.ps1",
+                );
+                if snapshot {
+                    invoke_cmd.push_str(" -Snapshot");
+                }
+                if deploy_core {
+                    invoke_cmd.push_str(&format!(" -DeployCore -DeployTarget {target}"));
+                }
+                let deploy_cmd = format!(
+                    "powershell -NoProfile -ExecutionPolicy Bypass -File c:\\Project\\PITS\\Infra\\CICD\\scripts\\Deploy-CoreArtifacts.ps1 -Target {target}"
+                );
+                let verify_cmd = format!(
+                    "powershell -NoProfile -ExecutionPolicy Bypass -File c:\\Project\\PITS\\Infra\\CICD\\scripts\\Verify-CicdStack.ps1 -LabIp {lab_ip}"
+                );
+                let plan_yaml = format!(
+                    "# PITS Lab CI/CD -> Core CD Handover Plan ({entity_name})\n\
+                     # Guardrails:\n\
+                     #   - Lab Flux CD excludes Base/ (gotk-sync.yaml)\n\
+                     #   - All CI/CD pods enforce kubernetes.io/hostname NotIn [netboot-004]\n\
+                     #   - Pre-promotion gate runs Invoke-PitsTestPool.ps1 on cluster-pits-lab tmpfs pool\n\
+                     verifyCommand: {verify_cmd:?}\n\
+                     ciPipelineCommand: {invoke_cmd:?}\n\
+                     coreDeployCommand: {deploy_cmd:?}\n\
+                     target: {target}\n\
+                     snapshot: {snapshot}\n\
+                     deployCore: {deploy_core}\n"
+                );
+                Ok(ActionExecutionResult {
+                    success: true,
+                    entity_ref: entity_ref.to_string(),
+                    action_id: action_id.to_string(),
+                    dry_run: req.dry_run,
+                    executed_at: Utc::now(),
+                    summary: format!(
+                        "{}CI/CD handover plan for target={target} (snapshot={snapshot}, deployCore={deploy_core})",
+                        if req.dry_run { "Dry-run: " } else { "Confirmed " }
+                    ),
+                    changes_or_warnings: vec![
+                        "Base/ remains decoupled from Lab Flux CD; pits-core receives only verified artifacts via Deploy-CoreArtifacts.ps1.".to_string(),
+                        "netboot-004 (win11-001 host) remains strictly excluded from all CI/CD workloads.".to_string(),
+                    ],
+                    output: json!({
+                        "entity": entity_name,
+                        "target": target,
+                        "snapshot": snapshot,
+                        "deployCore": deploy_core,
+                        "verifyCommand": verify_cmd,
+                        "ciPipelineCommand": invoke_cmd,
+                        "coreDeployCommand": deploy_cmd,
+                    }),
+                    rendered_artifact: Some(plan_yaml),
+                })
+            }
+            other => bail!("unsupported action {other:?} on cicd-pipeline/{entity_name}"),
+        }
+    }
+
+    async fn read_gitea_basic_auth_from_lab(&self) -> Option<(String, String)> {
+        let kc = self.build_lab_k8s_req().await.ok()?;
+        let sec: serde_json::Value = kc
+            .get_json("/api/v1/namespaces/pits-cicd/secrets/lab-devstack-secrets")
+            .await
+            .ok()?;
+        let b64_user = sec.pointer("/data/GITEA_ADMIN_USER").and_then(|v| v.as_str())?;
+        let b64_pass = sec.pointer("/data/GITEA_ADMIN_PASS").and_then(|v| v.as_str())?;
+        let user = String::from_utf8(
+            base64::engine::general_purpose::STANDARD
+                .decode(b64_user.trim())
+                .ok()?,
+        )
+        .ok()?;
+        let pass = String::from_utf8(
+            base64::engine::general_purpose::STANDARD
+                .decode(b64_pass.trim())
+                .ok()?,
+        )
+        .ok()?;
+        Some((user, pass))
     }
 
     async fn exec_sourcing_action(
@@ -3427,4 +3976,62 @@ impl CatalogRegistry {
             rendered_artifact: Some(format!("{generated_yaml}\n# --- Unified Diff ---\n{diff}")),
         })
     }
+}
+
+async fn http_get_plain_raw(
+    host_port: &str,
+    path: &str,
+    basic_auth: Option<(&str, &str)>,
+) -> Result<(u16, Vec<u8>)> {
+    let stream = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(host_port))
+        .await
+        .context("TCP connect timeout")?
+        .with_context(|| format!("TCP connect to {host_port} failed"))?;
+    let io = TokioIo::new(stream);
+    let (mut sender, conn) = http1::handshake(io)
+        .await
+        .with_context(|| format!("HTTP/1.1 handshake with {host_port} failed"))?;
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    let mut builder = HttpRequest::builder()
+        .method("GET")
+        .uri(path)
+        .header("Host", host_port)
+        .header("Accept", "application/json");
+    if let Some((u, p)) = basic_auth {
+        let token = base64::engine::general_purpose::STANDARD.encode(format!("{u}:{p}"));
+        builder = builder.header("Authorization", format!("Basic {token}"));
+    }
+    let req = builder.body(Empty::<bytes::Bytes>::new())?;
+    let resp = tokio::time::timeout(Duration::from_secs(5), sender.send_request(req))
+        .await
+        .context("HTTP request timeout")??;
+    let status = resp.status().as_u16();
+    let body = resp.into_body().collect().await?.to_bytes().to_vec();
+    Ok((status, body))
+}
+
+async fn http_get_plain_status(
+    host_port: &str,
+    path: &str,
+    basic_auth: Option<(&str, &str)>,
+) -> Result<u16> {
+    let (status, _) = http_get_plain_raw(host_port, path, basic_auth).await?;
+    Ok(status)
+}
+
+async fn http_get_plain_json(
+    host_port: &str,
+    path: &str,
+    basic_auth: Option<(&str, &str)>,
+) -> Result<serde_json::Value> {
+    let (status, body) = http_get_plain_raw(host_port, path, basic_auth).await?;
+    if status >= 400 {
+        bail!(
+            "HTTP {status} from http://{host_port}{path}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+    Ok(serde_json::from_slice(&body)?)
 }

@@ -26,6 +26,22 @@ use x509_cert::time::Validity;
 
 use crate::san::{SANDeviceSpec, SANNamespaceSpec};
 
+/// Additional external/virtual Kubernetes cluster registered in operator profile.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtraClusterConfig {
+    pub name: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub role: Option<String>,
+    pub kubeconfig_path: String,
+    #[serde(default)]
+    pub context: Option<String>,
+    #[serde(default)]
+    pub via_agent_bridge: bool,
+}
+
 /// Local operator profile stored in `%LOCALAPPDATA%\PITS\Client\profile.yaml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +60,9 @@ pub struct ClientProfile {
     pub talosconfig_path: Option<String>,
     pub talos_context: Option<String>,
     pub talos_via_agent_bridge: bool,
+    /// Optional additional Kubernetes / vCluster endpoints discovered alongside core & lab
+    #[serde(default)]
+    pub extra_clusters: Vec<ExtraClusterConfig>,
     /// Optional PostgreSQL sync URL (`postgres://user:pass@host:5432/db?sslmode=prefer`)
     #[serde(default)]
     pub sourcing_db_url: Option<String>,
@@ -54,7 +73,7 @@ impl Default for ClientProfile {
         #[cfg(windows)]
         let (workspace, agent_ep) = (
             Some(r"c:\Users\pitsadmin\edge-router".to_string()),
-            "https://100.74.25.42:18443".to_string(),
+            "https://100.95.95.88:18443".to_string(),
         );
         #[cfg(not(windows))]
         let (workspace, agent_ep) = (None, "https://127.0.0.1:18443".to_string());
@@ -74,6 +93,7 @@ impl Default for ClientProfile {
             talosconfig_path: None,
             talos_context: None,
             talos_via_agent_bridge: true,
+            extra_clusters: Vec::new(),
             sourcing_db_url: None,
         }
     }
@@ -490,10 +510,10 @@ pub fn generate_agent_mtls_pki(server_ip_or_dns: &str) -> Result<GeneratedAgentP
 
     let mut dns_entries = vec![
         "pits-core".to_string(),
-        "pits-core.bun-humboldt.ts.net".to_string(),
+        "pits-core.baiji-company.ts.net".to_string(),
     ];
     let mut ip_entries: Vec<std::net::IpAddr> = vec![
-        "100.74.25.42".parse().unwrap(),
+        "100.95.95.88".parse().unwrap(),
         "192.168.71.35".parse().unwrap(),
         "127.0.0.1".parse().unwrap(),
     ];

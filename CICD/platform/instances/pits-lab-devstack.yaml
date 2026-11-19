@@ -1,0 +1,32 @@
+apiVersion: lab.pits.io/v1alpha1
+kind: LabDevStack
+metadata:
+  name: pits-lab-acceleration
+  namespace: pits-cicd
+spec:
+  domain: lab.pits.home.arpa
+  excludeNodes:
+    - netboot-004
+  externalIp: "10.89.20.21"
+  storage:
+    stateStorageClass: mayastor-2
+    cacheStorageClass: openebs-single-replica
+  gitea:
+    namespace: pits-cicd
+    repoSize: 50Gi
+    dbSize: 20Gi
+    mirrorRepo: DissectDev/PITS-B1
+    githubRemote: https://github.com/DissectDev/PITS-B1.git
+    mirrorBranches:
+      - main
+  caches:
+    zotSize: 120Gi
+    atticSize: 120Gi
+    upstreamMirrors:
+      - docker.io
+      - ghcr.io
+      - quay.io
+  runners:
+    cpuReplicas: 3
+    npuReplicas: 1
+    gpuReplicas: 1

@@ -57,7 +57,7 @@ CN = $HOST
 basicConstraints = CA:FALSE
 keyUsage = digitalSignature, keyEncipherment
 extendedKeyUsage = serverAuth
-subjectAltName = IP:$HOST,IP:100.74.25.42,DNS:pits-core.bun-humboldt.ts.net,DNS:pits-derp.home.arpa
+subjectAltName = IP:$HOST,IP:100.95.95.88,DNS:pits-core.baiji-company.ts.net,DNS:pits-derp.home.arpa
 EOF
       ${pkgs.openssl}/bin/openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
         -nodes -days 3650 -keyout "$KEY" -out "$CRT" -config "$CNF"

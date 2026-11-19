@@ -1,0 +1,89 @@
+# cert-manager v1.21.3 deployed via Lab Zot OCI HelmRepository and talos-image-cache.
+# All components strictly exclude netboot-004 (win11-001 host).
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: cert-manager-charts
+  namespace: cert-manager
+spec:
+  type: oci
+  interval: 10m
+  url: oci://zot.pits-cicd.svc.cluster.local:5000/cert-manager-charts
+  insecure: true
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: cert-manager
+  namespace: cert-manager
+spec:
+  interval: 10m
+  chart:
+    spec:
+      chart: cert-manager
+      version: v1.21.3
+      sourceRef:
+        kind: HelmRepository
+        name: cert-manager-charts
+        namespace: cert-manager
+  install:
+    crds: CreateReplace
+  upgrade:
+    crds: CreateReplace
+  values:
+    crds:
+      enabled: true
+    dns01RecursiveNameservers: "1.1.1.1:53,223.5.5.5:53"
+    dns01RecursiveNameserversOnly: true
+    image:
+      repository: ghcr.io/jetstack/cert-manager-controller
+      pullPolicy: IfNotPresent
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/hostname
+                  operator: NotIn
+                  values:
+                    - netboot-004
+    webhook:
+      image:
+        repository: ghcr.io/jetstack/cert-manager-webhook
+        pullPolicy: IfNotPresent
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      - netboot-004
+    cainjector:
+      image:
+        repository: ghcr.io/jetstack/cert-manager-cainjector
+        pullPolicy: IfNotPresent
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      - netboot-004
+    startupapicheck:
+      image:
+        repository: ghcr.io/jetstack/cert-manager-startupapicheck
+        pullPolicy: IfNotPresent
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      - netboot-004

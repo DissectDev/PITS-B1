@@ -184,7 +184,7 @@ export async function fetchOperatorProfile(): Promise<OperatorProfileState> {
 
   return {
     activeWorkspaceSource: str('activeWorkspaceSource'),
-    agentEndpoint: str('agentEndpoint', 'https://100.74.25.42:18443'),
+    agentEndpoint: str('agentEndpoint', 'https://100.95.95.88:18443'),
     hasClientPki:
       bool('hasClientPki') ||
       Boolean(inner.agentClientCertPem || raw.hasClientPki),
@@ -198,6 +198,11 @@ export async function fetchOperatorProfile(): Promise<OperatorProfileState> {
     talosconfigPath: str('talosconfigPath'),
     talosContext: str('talosContext'),
     talosViaAgentBridge: bool('talosViaAgentBridge', true),
+    extraClusters: Array.isArray(inner.extraClusters)
+      ? (inner.extraClusters as OperatorProfileState['extraClusters'])
+      : Array.isArray(raw.extraClusters)
+        ? (raw.extraClusters as OperatorProfileState['extraClusters'])
+        : [],
     stateDir: str('stateDir') || undefined,
     profilePath: str('profilePath') || str('path') || undefined,
   };

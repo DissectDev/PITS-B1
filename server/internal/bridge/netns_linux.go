@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"runtime"
 	"strings"
@@ -13,17 +14,25 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// resolveLabNetnsPath resolves "auto" (or "") on NixOS pits-core:
-//  1. If the host netns itself owns an IP in 10.89.20.0/24, returns "" (direct dial).
-//  2. Otherwise scans /proc/[0-9]*/ns/net (deduped by inode, skipping vpp_main) to
-//     locate a live Multus macvlan container on Lab VLAN 20 (e.g. tinkerbell,
-//     inventory-collector, workstation-sync-relay, or nvmet-*), replacing crictl+nsenter.
-func resolveLabNetnsPath(configured string) (string, error) {
+// resolveLabNetnsPath resolves "auto" (or "") on NixOS pits-core guided by EdgeRouter's RoutePlan:
+//  1. If EdgeRouter's semantic plan requires a Multus VLAN 20 NetNS (`executionContext.mode=multus-netns`),
+//     we never let a restricted host policy interface (e.g. tb-lab-gw 10.89.20.9/32) hijack traffic.
+//  2. Otherwise, if the host netns itself owns a connected (non-excluded) 10.89.20.0/24 subnet, returns "" (direct dial).
+//  3. Scans /proc/[0-9]*/ns/net (deduped by inode, skipping vpp_main) to locate a live Multus Lab VLAN 20 pod netns.
+func resolveLabNetnsPath(configured string, plan RoutePlan) (string, error) {
 	if configured != "" && configured != "auto" {
 		return configured, nil
 	}
-	if selfTrie, err := os.ReadFile("/proc/self/net/fib_trie"); err == nil && HasLocalLabIPv4(string(selfTrie)) {
-		return "", nil
+	var excluded map[netip.Addr]bool
+	if len(plan.ExcludedHostIPs) > 0 {
+		excluded = plan.ExcludedHostIPs
+	}
+
+	if !plan.RequireMultusNS {
+		if selfTrie, err := os.ReadFile("/proc/self/net/fib_trie"); err == nil &&
+			HasLocalLabIPv4WithOptions(string(selfTrie), excluded, true) {
+			return "", nil
+		}
 	}
 
 	entries, err := os.ReadDir("/proc")
@@ -55,8 +64,14 @@ func resolveLabNetnsPath(configured string) (string, error) {
 		if terr != nil {
 			continue
 		}
-		if HasLocalLabIPv4(string(trie)) {
+		if HasLocalLabIPv4WithOptions(string(trie), excluded, true) {
 			return nsPath, nil
+		}
+	}
+	if plan.RequireMultusNS {
+		if selfTrie, err := os.ReadFile("/proc/self/net/fib_trie"); err == nil &&
+			HasLocalLabIPv4WithOptions(string(selfTrie), excluded, true) {
+			return "", nil
 		}
 	}
 	if configured == "" {
@@ -66,8 +81,8 @@ func resolveLabNetnsPath(configured string) (string, error) {
 	return "", fmt.Errorf("no active Lab VLAN 20 (10.89.20.0/24) container netns found under /proc")
 }
 
-func dialInNetns(ctx context.Context, netnsPath, addr string) (net.Conn, error) {
-	resolvedNS, err := resolveLabNetnsPath(netnsPath)
+func dialInNetns(ctx context.Context, netnsPath, addr string, plan RoutePlan) (net.Conn, error) {
+	resolvedNS, err := resolveLabNetnsPath(netnsPath, plan)
 	if err != nil {
 		return nil, err
 	}

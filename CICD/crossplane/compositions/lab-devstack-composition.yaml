@@ -1,0 +1,1233 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: lab-devstack-composition
+  labels:
+    pits.io/stack: lab-devstack
+spec:
+  compositeTypeRef:
+    apiVersion: lab.pits.io/v1alpha1
+    kind: XLabDevStack
+  mode: Pipeline
+  pipeline:
+    - step: render-lab-devstack
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- define "isReady" -}}
+            {{- $obs := index . 0 -}}
+            {{- $name := index . 1 -}}
+            {{- $ready := "False" -}}
+            {{- if $obs -}}
+              {{- with (index $obs $name) -}}
+                {{- if and .resource .resource.status .resource.status.conditions -}}
+                  {{- range .resource.status.conditions -}}
+                    {{- if and (eq .type "Ready") (eq .status "True") -}}
+                      {{- $ready = "True" -}}
+                    {{- end -}}
+                  {{- end -}}
+                {{- end -}}
+              {{- end -}}
+            {{- end -}}
+            {{- $ready -}}
+            {{- end -}}
+            {{- $obs := .observed.resources }}
+            {{- $xr := .observed.composite.resource }}
+            {{- $spec := $xr.spec }}
+            {{- $domain := $spec.domain | default "lab.pits.home.arpa" }}
+            {{- $webDomain := $spec.webDomain | default "lab.martensite.dev" }}
+            {{- $externalIp := $spec.externalIp | default "10.89.20.21" }}
+            {{- $excludeNodes := $spec.excludeNodes | default (list "netboot-004") }}
+            {{- $stateSC := "mayastor-2" }}
+            {{- $cacheSC := "openebs-single-replica" }}
+            {{- if $spec.storage }}
+              {{- $stateSC = $spec.storage.stateStorageClass | default "mayastor-2" }}
+              {{- $cacheSC = $spec.storage.cacheStorageClass | default "openebs-single-replica" }}
+            {{- end }}
+            {{- $ns := $spec.gitea.namespace | default "pits-cicd" }}
+            {{- $repoSize := $spec.gitea.repoSize | default "50Gi" }}
+            {{- $dbSize := $spec.gitea.dbSize | default "20Gi" }}
+            {{- $mirrorRepo := $spec.gitea.mirrorRepo | default "DissectDev/PITS-B1" }}
+            {{- $githubRemote := $spec.gitea.githubRemote | default "https://github.com/DissectDev/PITS-B1.git" }}
+            {{- $zotSize := $spec.caches.zotSize | default "120Gi" }}
+            {{- $atticSize := $spec.caches.atticSize | default "120Gi" }}
+            {{- $cpuReplicas := $spec.runners.cpuReplicas | default 3 }}
+            {{- $npuReplicas := $spec.runners.npuReplicas | default 1 }}
+            {{- $gpuReplicas := $spec.runners.gpuReplicas | default 1 }}
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-ns-cicd
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: ns-cicd
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "ns-cicd") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: v1
+                  kind: Namespace
+                  metadata:
+                    name: {{ $ns }}
+                    labels:
+                      app.kubernetes.io/part-of: pits-cicd
+                      pod-security.kubernetes.io/enforce: baseline
+                      pod-security.kubernetes.io/warn: baseline
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-ns-test-pool
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: ns-test-pool
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "ns-test-pool") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: v1
+                  kind: Namespace
+                  metadata:
+                    name: pits-test-pool
+                    labels:
+                      app.kubernetes.io/part-of: pits-infrastructure
+                      pits.io/tier: test-pool
+                      pod-security.kubernetes.io/enforce: baseline
+                      pod-security.kubernetes.io/warn: baseline
+            ---
+            apiVersion: helm.crossplane.io/v1beta1
+            kind: Release
+            metadata:
+              name: {{ $xr.metadata.name }}-cnpg-operator
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: cnpg-operator
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "cnpg-operator") }}"
+            spec:
+              forProvider:
+                chart:
+                  name: cloudnative-pg
+                  repository: https://cloudnative-pg.github.io/charts
+                  version: "0.29.1"
+                namespace: cnpg-system
+                values:
+                  image:
+                    repository: ghcr.io/cloudnative-pg/cloudnative-pg
+                    pullPolicy: IfNotPresent
+                  affinity:
+                    nodeAffinity:
+                      requiredDuringSchedulingIgnoredDuringExecution:
+                        nodeSelectorTerms:
+                          - matchExpressions:
+                              - key: kubernetes.io/hostname
+                                operator: NotIn
+                                values: {{ $excludeNodes | toJson }}
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-gitea-pg
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: gitea-pg
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "gitea-pg") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: postgresql.cnpg.io/v1
+                  kind: Cluster
+                  metadata:
+                    name: gitea-pg
+                    namespace: {{ $ns }}
+                  spec:
+                    instances: 2
+                    enableSuperuserAccess: true
+                    imageName: ghcr.io/cloudnative-pg/postgresql:17.6
+                    imagePullPolicy: IfNotPresent
+                    storage:
+                      storageClass: {{ $stateSC }}
+                      size: {{ $dbSize }}
+                    bootstrap:
+                      initdb:
+                        database: gitea
+                        owner: gitea
+                    affinity:
+                      enablePodAntiAffinity: true
+                      topologyKey: kubernetes.io/hostname
+                      nodeAffinity:
+                        requiredDuringSchedulingIgnoredDuringExecution:
+                          nodeSelectorTerms:
+                            - matchExpressions:
+                                - key: kubernetes.io/hostname
+                                  operator: In
+                                  values: ["netboot-001", "netboot-002", "netboot-003"]
+                                - key: kubernetes.io/hostname
+                                  operator: NotIn
+                                  values: {{ $excludeNodes | toJson }}
+            ---
+            apiVersion: helm.crossplane.io/v1beta1
+            kind: Release
+            metadata:
+              name: {{ $xr.metadata.name }}-zot
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: zot-registry
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "zot-registry") }}"
+            spec:
+              forProvider:
+                chart:
+                  name: zot
+                  repository: https://zotregistry.dev/helm-charts
+                  version: "0.1.134"
+                namespace: {{ $ns }}
+                values:
+                  fullnameOverride: zot
+                  replicaCount: 1
+                  strategy:
+                    type: Recreate
+                  image:
+                    repository: ghcr.io/project-zot/zot
+                    tag: v2.1.23
+                    pullPolicy: IfNotPresent
+                  service:
+                    type: NodePort
+                    port: 5000
+                    nodePort: 30500
+                  persistence: true
+                  pvc:
+                    create: true
+                    accessModes: ["ReadWriteOnce"]
+                    storage: {{ $zotSize }}
+                    storageClassName: {{ $cacheSC }}
+                  mountConfig: true
+                  configFiles:
+                    config.json: |
+                      {
+                        "storage": {
+                          "rootDirectory": "/var/lib/registry",
+                          "dedupe": true,
+                          "gc": true
+                        },
+                        "http": {
+                          "address": "0.0.0.0",
+                          "port": "5000",
+                          "readTimeout": "120s",
+                          "writeTimeout": "120s"
+                        },
+                        "log": {
+                          "level": "info"
+                        },
+                        "extensions": {
+                          "search": {
+                            "enable": true
+                          },
+                          "sync": {
+                            "enable": true,
+                            "registries": [
+                              {
+                                "urls": ["https://docker.m.daocloud.io"],
+                                "onDemand": true,
+                                "tlsVerify": true,
+                                "content": [
+                                  {
+                                    "prefix": "**",
+                                    "destination": "/docker.io"
+                                  }
+                                ]
+                              },
+                              {
+                                "urls": ["https://ghcr.io"],
+                                "onDemand": true,
+                                "tlsVerify": true,
+                                "content": [
+                                  {
+                                    "prefix": "**",
+                                    "destination": "/ghcr.io"
+                                  }
+                                ]
+                              },
+                              {
+                                "urls": ["https://quay.io"],
+                                "onDemand": true,
+                                "tlsVerify": true,
+                                "content": [
+                                  {
+                                    "prefix": "**",
+                                    "destination": "/quay.io"
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        }
+                      }
+                  affinity:
+                    nodeAffinity:
+                      requiredDuringSchedulingIgnoredDuringExecution:
+                        nodeSelectorTerms:
+                          - matchExpressions:
+                              - key: kubernetes.io/hostname
+                                operator: In
+                                values: ["netboot-001", "netboot-002", "netboot-003"]
+                              - key: kubernetes.io/hostname
+                                operator: NotIn
+                                values: {{ $excludeNodes | toJson }}
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-zot-external
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: zot-external-svc
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "zot-external-svc") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: v1
+                  kind: Service
+                  metadata:
+                    name: zot-external
+                    namespace: {{ $ns }}
+                  spec:
+                    type: ClusterIP
+                    externalIPs:
+                      - {{ $externalIp | quote }}
+                    ports:
+                      - name: http
+                        port: 5000
+                        targetPort: 5000
+                        protocol: TCP
+                    selector:
+                      app.kubernetes.io/instance: zot
+                      app.kubernetes.io/name: zot
+            ---
+            apiVersion: helm.crossplane.io/v1beta1
+            kind: Release
+            metadata:
+              name: {{ $xr.metadata.name }}-gitea
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: gitea-release
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "gitea-release") }}"
+            spec:
+              forProvider:
+                chart:
+                  name: gitea
+                  repository: https://dl.gitea.com/charts/
+                  version: "12.7.0"
+                namespace: {{ $ns }}
+                values:
+                  fullnameOverride: gitea
+                  replicaCount: 1
+                  strategy:
+                    type: Recreate
+                  global:
+                    hostAliases:
+                      - ip: "10.96.250.30"
+                        hostnames:
+                          - "sso.martensite.dev"
+                  extraVolumes:
+                    - name: pits-ca
+                      configMap:
+                        name: pits-ca-cert
+                        optional: true
+                  image:
+                    fullOverride: docker.io/gitea/gitea:1.27.0-rootless
+                    rootless: true
+                    pullPolicy: IfNotPresent
+                  valkey-cluster:
+                    enabled: false
+                  valkey:
+                    enabled: false
+                  postgresql-ha:
+                    enabled: false
+                  postgresql:
+                    enabled: false
+                  persistence:
+                    enabled: true
+                    create: true
+                    size: {{ $repoSize }}
+                    storageClass: {{ $stateSC }}
+                    accessModes: ["ReadWriteOnce"]
+                  service:
+                    http:
+                      type: NodePort
+                      port: 3000
+                      nodePort: 30300
+                    ssh:
+                      type: NodePort
+                      port: 22
+                      nodePort: 30222
+                  preExtraInitContainers:
+                    - name: wait-for-pg
+                      image: docker.io/library/busybox:1.36.1
+                      imagePullPolicy: IfNotPresent
+                      command:
+                        - /bin/sh
+                        - -c
+                        - |
+                          echo "Waiting for gitea-pg-rw:5432..."
+                          until nc -z -w2 gitea-pg-rw.{{ $ns }}.svc.cluster.local 5432; do sleep 2; done
+                    - name: prepare-oidc-env
+                      image: docker.io/gitea/gitea:1.27.0-rootless
+                      imagePullPolicy: IfNotPresent
+                      securityContext:
+                        runAsUser: 1000
+                      env:
+                        - name: OIDC_KEY
+                          valueFrom:
+                            secretKeyRef:
+                              name: gitea-oidc-secret
+                              key: clientID
+                        - name: OIDC_SECRET
+                          valueFrom:
+                            secretKeyRef:
+                              name: gitea-oidc-secret
+                              key: clientSecret
+                      command:
+                        - /bin/sh
+                        - -c
+                        - |
+                          umask 077
+                          cp /etc/ssl/certs/ca-certificates.crt /tmp/ca-certificates.crt
+                          if [ -f /etc/ssl/pits-ca/ca.crt ]; then
+                            printf '\n' >> /tmp/ca-certificates.crt
+                            cat /etc/ssl/pits-ca/ca.crt >> /tmp/ca-certificates.crt
+                          fi
+                          chmod 644 /tmp/ca-certificates.crt
+                          esc() { printf '%s' "$1" | sed "s/'/'\\\\''/g"; }
+                          printf "export GITEA_OAUTH_KEY_0='%s'\nexport GITEA_OAUTH_SECRET_0='%s'\nexport SSL_CERT_FILE='/tmp/ca-certificates.crt'\n" "$(esc "$OIDC_KEY")" "$(esc "$OIDC_SECRET")" > /tmp/gitea-oauth.env
+                      volumeMounts:
+                        - name: temp
+                          mountPath: /tmp
+                        - name: pits-ca
+                          mountPath: /etc/ssl/pits-ca
+                          readOnly: true
+                  deployment:
+                    env:
+                      - name: SSL_CERT_FILE
+                        value: /tmp/ca-certificates.crt
+                      - name: GITEA__database__USER
+                        valueFrom:
+                          secretKeyRef:
+                            name: gitea-pg-app
+                            key: username
+                      - name: GITEA__database__PASSWD
+                        valueFrom:
+                          secretKeyRef:
+                            name: gitea-pg-app
+                            key: password
+                  gitea:
+                    admin:
+                      existingSecret: gitea-admin-secret
+                      email: "pits-cicd@{{ $domain }}"
+                      passwordMode: keepUpdated
+                    extraEnvSourceFile: /tmp/gitea-oauth.env
+                    oauth:
+                      - name: Keycloak
+                        provider: openidConnect
+                        autoDiscoverUrl: "https://sso.martensite.dev/realms/corp/.well-known/openid-configuration"
+                        scopes: "openid profile email"
+                    config:
+                      server:
+                        DOMAIN: "git.{{ $webDomain }}"
+                        ROOT_URL: "https://git.{{ $webDomain }}/"
+                        HTTP_PORT: 3000
+                        ENABLE_GZIP: true
+                        DISABLE_SSH: false
+                        START_SSH_SERVER: true
+                        SSH_DOMAIN: "git.{{ $domain }}"
+                        SSH_PORT: 30222
+                        SSH_LISTEN_PORT: 2222
+                      service:
+                        DISABLE_REGISTRATION: true
+                        ALLOW_ONLY_EXTERNAL_REGISTRATION: true
+                      oauth2_client:
+                        ENABLE_AUTO_REGISTRATION: true
+                        ACCOUNT_LINKING: auto
+                        USERNAME: email
+                        OPENID_CONNECT_SCOPES: "openid profile email"
+                        REGISTER_EMAIL_CONFIRM: false
+                      database:
+                        DB_TYPE: postgres
+                        HOST: "gitea-pg-rw.{{ $ns }}.svc.cluster.local:5432"
+                        NAME: gitea
+                        SSL_MODE: disable
+                      actions:
+                        ENABLED: true
+                        DEFAULT_ACTIONS_URL: github
+                        ARTIFACT_RETENTION_DAYS: 7
+                      mirror:
+                        ENABLED: true
+                        MIN_INTERVAL: 5m
+                      session:
+                        PROVIDER: memory
+                      cache:
+                        ADAPTER: memory
+                      queue:
+                        TYPE: level
+                      webhook:
+                        ALLOWED_HOST_LIST: "*"
+                    livenessProbe:
+                      initialDelaySeconds: 60
+                  affinity:
+                    nodeAffinity:
+                      requiredDuringSchedulingIgnoredDuringExecution:
+                        nodeSelectorTerms:
+                          - matchExpressions:
+                              - key: kubernetes.io/hostname
+                                operator: In
+                                values: ["netboot-001", "netboot-002", "netboot-003"]
+                              - key: kubernetes.io/hostname
+                                operator: NotIn
+                                values: {{ $excludeNodes | toJson }}
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-gitea-external
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: gitea-external-svc
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "gitea-external-svc") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: v1
+                  kind: Service
+                  metadata:
+                    name: gitea-external
+                    namespace: {{ $ns }}
+                  spec:
+                    type: ClusterIP
+                    externalIPs:
+                      - {{ $externalIp | quote }}
+                    ports:
+                      - name: http
+                        port: 3000
+                        targetPort: 3000
+                        protocol: TCP
+                    selector:
+                      app.kubernetes.io/instance: gitea
+                      app.kubernetes.io/name: gitea
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-attic-pvc
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: attic-pvc
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "attic-pvc") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: v1
+                  kind: PersistentVolumeClaim
+                  metadata:
+                    name: attic-storage
+                    namespace: {{ $ns }}
+                  spec:
+                    accessModes: ["ReadWriteOnce"]
+                    storageClassName: {{ $cacheSC }}
+                    resources:
+                      requests:
+                        storage: {{ $atticSize }}
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-attic-config
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: attic-config
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "attic-config") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: v1
+                  kind: ConfigMap
+                  metadata:
+                    name: attic-config
+                    namespace: {{ $ns }}
+                  data:
+                    server.toml: |
+                      listen = "0.0.0.0:8080"
+                      allowed-hosts = []
+                      api-endpoint = "http://nix-cache.{{ $domain }}:8080/"
+
+                      [storage]
+                      type = "local"
+                      path = "/var/lib/atticd"
+
+                      [compression]
+                      type = "zstd"
+
+                      [chunking]
+                      nar-size-threshold = 65536
+                      min-size = 16384
+                      avg-size = 65536
+                      max-size = 262144
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-attic-deploy
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: attic-deploy
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "attic-deploy") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: apps/v1
+                  kind: Deployment
+                  metadata:
+                    name: attic
+                    namespace: {{ $ns }}
+                    labels:
+                      app.kubernetes.io/name: attic
+                  spec:
+                    replicas: 1
+                    strategy:
+                      type: Recreate
+                    selector:
+                      matchLabels:
+                        app.kubernetes.io/name: attic
+                    template:
+                      metadata:
+                        labels:
+                          app.kubernetes.io/name: attic
+                      spec:
+                        affinity:
+                          nodeAffinity:
+                            requiredDuringSchedulingIgnoredDuringExecution:
+                              nodeSelectorTerms:
+                                - matchExpressions:
+                                    - key: kubernetes.io/hostname
+                                      operator: In
+                                      values: ["netboot-001", "netboot-002", "netboot-003"]
+                                    - key: kubernetes.io/hostname
+                                      operator: NotIn
+                                      values: {{ $excludeNodes | toJson }}
+                        initContainers:
+                          - name: ensure-attic-db
+                            image: ghcr.io/cloudnative-pg/postgresql:17.6
+                            imagePullPolicy: IfNotPresent
+                            env:
+                              - name: PGHOST
+                                value: "gitea-pg-rw.{{ $ns }}.svc.cluster.local"
+                              - name: PGUSER
+                                valueFrom:
+                                  secretKeyRef:
+                                    name: gitea-pg-superuser
+                                    key: username
+                              - name: PGPASSWORD
+                                valueFrom:
+                                  secretKeyRef:
+                                    name: gitea-pg-superuser
+                                    key: password
+                              - name: APP_USER
+                                valueFrom:
+                                  secretKeyRef:
+                                    name: gitea-pg-app
+                                    key: username
+                            command:
+                              - /bin/sh
+                              - -ec
+                              - |
+                                until pg_isready -h "$PGHOST" -U "$PGUSER"; do sleep 2; done
+                                if ! psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='attic'" | grep -q 1; then
+                                  psql -d postgres -c "CREATE DATABASE attic OWNER \"${APP_USER}\";"
+                                fi
+                        containers:
+                          - name: atticd
+                            image: ghcr.io/zhaofengli/attic:latest
+                            imagePullPolicy: IfNotPresent
+                            command:
+                              - /bin/sh
+                              - -ec
+                              - |
+                                mkdir -p /tmp
+                                cp /etc/attic/server.toml /tmp/server.toml
+                                printf '\n[database]\nurl = "%s"\n' "$ATTIC_SERVER_DATABASE_URL" >> /tmp/server.toml
+                                exec /bin/atticd -f /tmp/server.toml --mode monolithic
+                            ports:
+                              - name: http
+                                containerPort: 8080
+                            env:
+                              - name: PGUSER
+                                valueFrom:
+                                  secretKeyRef:
+                                    name: gitea-pg-app
+                                    key: username
+                              - name: PGPASSWORD
+                                valueFrom:
+                                  secretKeyRef:
+                                    name: gitea-pg-app
+                                    key: password
+                              - name: ATTIC_SERVER_DATABASE_URL
+                                value: "postgres://$(PGUSER):$(PGPASSWORD)@gitea-pg-rw.{{ $ns }}.svc.cluster.local:5432/attic"
+                              - name: ATTIC_SERVER_TOKEN_HS256_SECRET_BASE64
+                                valueFrom:
+                                  secretKeyRef:
+                                    name: lab-devstack-secrets
+                                    key: ATTIC_SIGNING_KEY_BASE64
+                            readinessProbe:
+                              tcpSocket:
+                                port: 8080
+                              initialDelaySeconds: 3
+                              periodSeconds: 5
+                            volumeMounts:
+                              - name: config
+                                mountPath: /etc/attic
+                                readOnly: true
+                              - name: data
+                                mountPath: /var/lib/atticd
+                            resources:
+                              requests:
+                                cpu: 100m
+                                memory: 256Mi
+                              limits:
+                                cpu: "4"
+                                memory: 2Gi
+                        volumes:
+                          - name: config
+                            configMap:
+                              name: attic-config
+                          - name: data
+                            persistentVolumeClaim:
+                              claimName: attic-storage
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-attic-svc
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: attic-svc
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "attic-svc") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: v1
+                  kind: Service
+                  metadata:
+                    name: attic
+                    namespace: {{ $ns }}
+                  spec:
+                    type: NodePort
+                    externalIPs:
+                      - {{ $externalIp | quote }}
+                    ports:
+                      - name: http
+                        port: 8080
+                        targetPort: 8080
+                        nodePort: 30808
+                        protocol: TCP
+                    selector:
+                      app.kubernetes.io/name: attic
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-bootstrap-sa
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: bootstrap-sa
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "bootstrap-sa") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: v1
+                  kind: ServiceAccount
+                  metadata:
+                    name: lab-devstack-bootstrap
+                    namespace: {{ $ns }}
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-bootstrap-crb
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: bootstrap-crb
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "bootstrap-crb") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: rbac.authorization.k8s.io/v1
+                  kind: ClusterRoleBinding
+                  metadata:
+                    name: lab-devstack-bootstrap-admin
+                  roleRef:
+                    apiGroup: rbac.authorization.k8s.io
+                    kind: ClusterRole
+                    name: cluster-admin
+                  subjects:
+                    - kind: ServiceAccount
+                      name: lab-devstack-bootstrap
+                      namespace: {{ $ns }}
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-bootstrap-job
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: bootstrap-job
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "bootstrap-job") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: batch/v1
+                  kind: Job
+                  metadata:
+                    name: lab-devstack-bootstrap-v1
+                    namespace: {{ $ns }}
+                  spec:
+                    backoffLimit: 6
+                    template:
+                      spec:
+                        serviceAccountName: lab-devstack-bootstrap
+                        restartPolicy: OnFailure
+                        affinity:
+                          nodeAffinity:
+                            requiredDuringSchedulingIgnoredDuringExecution:
+                              nodeSelectorTerms:
+                                - matchExpressions:
+                                    - key: kubernetes.io/hostname
+                                      operator: NotIn
+                                      values: {{ $excludeNodes | toJson }}
+                        containers:
+                          - name: bootstrap
+                            image: docker.io/pits/cicd-runner:v1.1
+                            imagePullPolicy: IfNotPresent
+                            env:
+                              - name: GITEA_URL
+                                value: "http://gitea-http.{{ $ns }}.svc.cluster.local:3000"
+                              - name: ATTIC_URL
+                                value: "http://attic.{{ $ns }}.svc.cluster.local:8080"
+                              - name: MIRROR_REPO
+                                value: {{ $mirrorRepo | quote }}
+                              - name: GITHUB_REMOTE
+                                value: {{ $githubRemote | quote }}
+                              - name: GITEA_ADMIN_USER
+                                valueFrom:
+                                  secretKeyRef:
+                                    name: lab-devstack-secrets
+                                    key: GITEA_ADMIN_USER
+                              - name: GITEA_ADMIN_PASS
+                                valueFrom:
+                                  secretKeyRef:
+                                    name: lab-devstack-secrets
+                                    key: GITEA_ADMIN_PASS
+                              - name: GITHUB_MIRROR_PAT
+                                valueFrom:
+                                  secretKeyRef:
+                                    name: lab-devstack-secrets
+                                    key: GITHUB_MIRROR_PAT
+                                    optional: true
+                              - name: FLUX_WEBHOOK_SECRET
+                                valueFrom:
+                                  secretKeyRef:
+                                    name: lab-devstack-secrets
+                                    key: FLUX_WEBHOOK_SECRET
+                              - name: ATTIC_TOKEN
+                                valueFrom:
+                                  secretKeyRef:
+                                    name: lab-devstack-secrets
+                                    key: ATTIC_TOKEN
+                                    optional: true
+                            command:
+                              - /bin/bash
+                              - -ec
+                              - |
+                                echo "[1/5] Waiting for Gitea API..."
+                                for _ in $(seq 1 120); do
+                                  if curl -sf "${GITEA_URL}/api/v1/version" >/dev/null 2>&1; then break; fi
+                                  sleep 3
+                                done
+                                curl -sf "${GITEA_URL}/api/v1/version" >/dev/null
+
+                                ORG="${MIRROR_REPO%%/*}"
+                                REPO="${MIRROR_REPO#*/}"
+                                AUTH="-u ${GITEA_ADMIN_USER}:${GITEA_ADMIN_PASS}"
+
+                                echo "[2/5] Ensuring Org ${ORG} and Repo ${MIRROR_REPO}..."
+                                if ! curl -sf ${AUTH} "${GITEA_URL}/api/v1/orgs/${ORG}" >/dev/null 2>&1; then
+                                  curl -sf ${AUTH} -X POST -H "Content-Type: application/json" \
+                                    -d "{\"username\":\"${ORG}\",\"visibility\":\"public\"}" \
+                                    "${GITEA_URL}/api/v1/orgs" >/dev/null
+                                fi
+
+                                if ! curl -sf ${AUTH} "${GITEA_URL}/api/v1/repos/${ORG}/${REPO}" >/dev/null 2>&1; then
+                                  curl -sf ${AUTH} -X POST -H "Content-Type: application/json" \
+                                    -d "{\"name\":\"${REPO}\",\"private\":false,\"default_branch\":\"main\"}" \
+                                    "${GITEA_URL}/api/v1/orgs/${ORG}/repos" >/dev/null
+                                fi
+
+                                if [ -n "${GITHUB_MIRROR_PAT:-}" ]; then
+                                  echo "[3/5] Ensuring Push Mirror -> ${GITHUB_REMOTE}..."
+                                  MIRRORS_JSON="$(curl -sf ${AUTH} "${GITEA_URL}/api/v1/repos/${ORG}/${REPO}/push_mirrors" || echo "[]")"
+                                  if ! echo "$MIRRORS_JSON" | jq -e --arg remote "$GITHUB_REMOTE" '.[] | select(.remote_address == $remote)' >/dev/null 2>&1; then
+                                    curl -sf ${AUTH} -X POST -H "Content-Type: application/json" \
+                                      -d "{\"remote_address\":\"${GITHUB_REMOTE}\",\"remote_username\":\"x-access-token\",\"remote_password\":\"${GITHUB_MIRROR_PAT}\",\"sync_on_commit\":true,\"interval\":\"8h0m0s\"}" \
+                                      "${GITEA_URL}/api/v1/repos/${ORG}/${REPO}/push_mirrors" >/dev/null
+                                  fi
+                                else
+                                  echo "[3/5] GITHUB_MIRROR_PAT empty; skipping GitHub Push Mirror creation."
+                                fi
+
+                                echo "[4/5] Ensuring Flux Gitea Webhook Receiver..."
+                                HOOK_PATH="$(kubectl -n flux-system get receiver gitea-lab-webhook -o jsonpath='{.status.webhookPath}' 2>/dev/null || true)"
+                                if [ -n "$HOOK_PATH" ]; then
+                                  HOOK_URL="http://webhook-receiver.flux-system.svc.cluster.local${HOOK_PATH}"
+                                  HOOKS_JSON="$(curl -sf ${AUTH} "${GITEA_URL}/api/v1/repos/${ORG}/${REPO}/hooks" || echo "[]")"
+                                  if ! echo "$HOOKS_JSON" | jq -e --arg url "$HOOK_URL" '.[] | select(.config.url == $url)' >/dev/null 2>&1; then
+                                    curl -sf ${AUTH} -X POST -H "Content-Type: application/json" \
+                                      -d "{\"type\":\"gitea\",\"active\":true,\"events\":[\"push\"],\"branch_filter\":\"main\",\"config\":{\"url\":\"${HOOK_URL}\",\"content_type\":\"json\",\"secret\":\"${FLUX_WEBHOOK_SECRET}\"}}" \
+                                      "${GITEA_URL}/api/v1/repos/${ORG}/${REPO}/hooks" >/dev/null
+                                  fi
+                                fi
+
+                                echo "[5/5] Generating Gitea Actions runner token & syncing Secret/gitea-runner-token..."
+                                REG_TOKEN="$(curl -sf ${AUTH} -X POST "${GITEA_URL}/api/v1/admin/actions/runners/registration-token" | jq -r '.token')"
+                                if [ -z "$REG_TOKEN" ] || [ "$REG_TOKEN" = "null" ]; then
+                                  echo "Failed to get Gitea runner registration token" >&2
+                                  exit 1
+                                fi
+                                kubectl -n pits-test-pool create secret generic gitea-runner-token \
+                                  --from-literal=GITEA_RUNNER_REGISTRATION_TOKEN="${REG_TOKEN}" \
+                                  --dry-run=client -o yaml | kubectl apply -f -
+                                echo "Bootstrap complete!"
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-runner-sa
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: runner-sa
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "runner-sa") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: v1
+                  kind: ServiceAccount
+                  metadata:
+                    name: pits-cicd-runner
+                    namespace: pits-test-pool
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-runner-role
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: runner-role
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "runner-role") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: rbac.authorization.k8s.io/v1
+                  kind: Role
+                  metadata:
+                    name: pits-cicd-runner
+                    namespace: pits-test-pool
+                  rules:
+                    - apiGroups: [""]
+                      resources: ["pods", "pods/exec", "pods/log", "configmaps", "secrets", "services"]
+                      verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+                    - apiGroups: ["batch"]
+                      resources: ["jobs"]
+                      verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+                    - apiGroups: ["resource.k8s.io"]
+                      resources: ["resourceclaims"]
+                      verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+                    - apiGroups: ["extensions.agents.x-k8s.io", "agents.x-k8s.io"]
+                      resources: ["sandboxclaims", "sandboxes", "sandboxtemplates", "sandboxwarmpools"]
+                      verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-runner-rb
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: runner-rb
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "runner-rb") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: rbac.authorization.k8s.io/v1
+                  kind: RoleBinding
+                  metadata:
+                    name: pits-cicd-runner
+                    namespace: pits-test-pool
+                  roleRef:
+                    apiGroup: rbac.authorization.k8s.io
+                    kind: Role
+                    name: pits-cicd-runner
+                  subjects:
+                    - kind: ServiceAccount
+                      name: pits-cicd-runner
+                      namespace: pits-test-pool
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-runner-cpu
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: runner-cpu
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "runner-cpu") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: apps/v1
+                  kind: Deployment
+                  metadata:
+                    name: runner-cicd-cpu
+                    namespace: pits-test-pool
+                    labels:
+                      app.kubernetes.io/name: pits-cicd-runner
+                      pits.io/runner-pool: cpu
+                  spec:
+                    replicas: {{ $cpuReplicas }}
+                    selector:
+                      matchLabels:
+                        app.kubernetes.io/name: pits-cicd-runner
+                        pits.io/runner-pool: cpu
+                    template:
+                      metadata:
+                        labels:
+                          app.kubernetes.io/name: pits-cicd-runner
+                          pits.io/runner-pool: cpu
+                      spec:
+                        serviceAccountName: pits-cicd-runner
+                        topologySpreadConstraints:
+                          - maxSkew: 1
+                            topologyKey: kubernetes.io/hostname
+                            whenUnsatisfiable: ScheduleAnyway
+                            labelSelector:
+                              matchLabels:
+                                app.kubernetes.io/name: pits-cicd-runner
+                                pits.io/runner-pool: cpu
+                        affinity:
+                          nodeAffinity:
+                            requiredDuringSchedulingIgnoredDuringExecution:
+                              nodeSelectorTerms:
+                                - matchExpressions:
+                                    - key: kubernetes.io/hostname
+                                      operator: In
+                                      values: ["netboot-001", "netboot-002", "netboot-003"]
+                                    - key: kubernetes.io/hostname
+                                      operator: NotIn
+                                      values: {{ $excludeNodes | toJson }}
+                        containers:
+                          - name: act-runner
+                            image: docker.io/pits/cicd-runner:v1.1
+                            imagePullPolicy: IfNotPresent
+                            env:
+                              - name: GITEA_INSTANCE_URL
+                                value: "http://gitea-http.{{ $ns }}.svc.cluster.local:3000"
+                              - name: GITEA_RUNNER_NAME
+                                valueFrom:
+                                  fieldRef:
+                                    fieldPath: metadata.name
+                              - name: GITEA_RUNNER_LABELS
+                                value: "pits-lab-rust:host,pits-lab-windows:host,pits-lab-go:host,pits-lab-e2e:host,ubuntu-latest:host"
+                              - name: GITEA_RUNNER_REGISTRATION_TOKEN
+                                valueFrom:
+                                  secretKeyRef:
+                                    name: gitea-runner-token
+                                    key: GITEA_RUNNER_REGISTRATION_TOKEN
+                              - name: PITS_ZOT_URL
+                                value: "http://zot.{{ $ns }}.svc.cluster.local:5000"
+                              - name: PITS_ATTIC_URL
+                                value: "http://attic.{{ $ns }}.svc.cluster.local:8080"
+                            command: ["/usr/local/bin/cicd-runner-entrypoint"]
+                            volumeMounts:
+                              - name: ramdisk
+                                mountPath: /ramdisk
+                              - name: tmp
+                                mountPath: /tmp
+                            resources:
+                              requests:
+                                cpu: 200m
+                                memory: 512Mi
+                              limits:
+                                cpu: "16"
+                                memory: 12Gi
+                        volumes:
+                          - name: ramdisk
+                            emptyDir:
+                              medium: Memory
+                              sizeLimit: 10Gi
+                          - name: tmp
+                            emptyDir:
+                              medium: Memory
+                              sizeLimit: 2Gi
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-runner-npu
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: runner-npu
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "runner-npu") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: apps/v1
+                  kind: Deployment
+                  metadata:
+                    name: runner-cicd-npu
+                    namespace: pits-test-pool
+                    labels:
+                      app.kubernetes.io/name: pits-cicd-runner
+                      pits.io/runner-pool: npu
+                  spec:
+                    replicas: {{ $npuReplicas }}
+                    selector:
+                      matchLabels:
+                        app.kubernetes.io/name: pits-cicd-runner
+                        pits.io/runner-pool: npu
+                    template:
+                      metadata:
+                        labels:
+                          app.kubernetes.io/name: pits-cicd-runner
+                          pits.io/runner-pool: npu
+                      spec:
+                        serviceAccountName: pits-cicd-runner
+                        affinity:
+                          nodeAffinity:
+                            requiredDuringSchedulingIgnoredDuringExecution:
+                              nodeSelectorTerms:
+                                - matchExpressions:
+                                    - key: kubernetes.io/hostname
+                                      operator: In
+                                      values: ["netboot-001", "netboot-002"]
+                                    - key: kubernetes.io/hostname
+                                      operator: NotIn
+                                      values: {{ $excludeNodes | toJson }}
+                        containers:
+                          - name: act-runner
+                            image: docker.io/pits/cicd-runner:v1.1
+                            imagePullPolicy: IfNotPresent
+                            env:
+                              - name: GITEA_INSTANCE_URL
+                                value: "http://gitea-http.{{ $ns }}.svc.cluster.local:3000"
+                              - name: GITEA_RUNNER_NAME
+                                valueFrom:
+                                  fieldRef:
+                                    fieldPath: metadata.name
+                              - name: GITEA_RUNNER_LABELS
+                                value: "pits-lab-npu:host"
+                              - name: GITEA_RUNNER_REGISTRATION_TOKEN
+                                valueFrom:
+                                  secretKeyRef:
+                                    name: gitea-runner-token
+                                    key: GITEA_RUNNER_REGISTRATION_TOKEN
+                              - name: PITS_ZOT_URL
+                                value: "http://zot.{{ $ns }}.svc.cluster.local:5000"
+                              - name: PITS_ATTIC_URL
+                                value: "http://attic.{{ $ns }}.svc.cluster.local:8080"
+                            command: ["/usr/local/bin/cicd-runner-entrypoint"]
+                            volumeMounts:
+                              - name: ramdisk
+                                mountPath: /ramdisk
+                              - name: tmp
+                                mountPath: /tmp
+                            resources:
+                              requests:
+                                cpu: 100m
+                                memory: 256Mi
+                              limits:
+                                cpu: "8"
+                                memory: 6Gi
+                        volumes:
+                          - name: ramdisk
+                            emptyDir:
+                              medium: Memory
+                              sizeLimit: 6Gi
+                          - name: tmp
+                            emptyDir:
+                              medium: Memory
+                              sizeLimit: 1Gi
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-runner-gpu
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: runner-gpu
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "runner-gpu") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: apps/v1
+                  kind: Deployment
+                  metadata:
+                    name: runner-cicd-gpu
+                    namespace: pits-test-pool
+                    labels:
+                      app.kubernetes.io/name: pits-cicd-runner
+                      pits.io/runner-pool: gpu
+                  spec:
+                    replicas: {{ $gpuReplicas }}
+                    selector:
+                      matchLabels:
+                        app.kubernetes.io/name: pits-cicd-runner
+                        pits.io/runner-pool: gpu
+                    template:
+                      metadata:
+                        labels:
+                          app.kubernetes.io/name: pits-cicd-runner
+                          pits.io/runner-pool: gpu
+                      spec:
+                        serviceAccountName: pits-cicd-runner
+                        affinity:
+                          nodeAffinity:
+                            requiredDuringSchedulingIgnoredDuringExecution:
+                              nodeSelectorTerms:
+                                - matchExpressions:
+                                    - key: kubernetes.io/hostname
+                                      operator: In
+                                      values: ["netboot-005"]
+                                    - key: kubernetes.io/hostname
+                                      operator: NotIn
+                                      values: {{ $excludeNodes | toJson }}
+                        containers:
+                          - name: act-runner
+                            image: docker.io/pits/cicd-runner:v1.1
+                            imagePullPolicy: IfNotPresent
+                            env:
+                              - name: GITEA_INSTANCE_URL
+                                value: "http://gitea-http.{{ $ns }}.svc.cluster.local:3000"
+                              - name: GITEA_RUNNER_NAME
+                                valueFrom:
+                                  fieldRef:
+                                    fieldPath: metadata.name
+                              - name: GITEA_RUNNER_LABELS
+                                value: "pits-lab-gpu:host"
+                              - name: GITEA_RUNNER_REGISTRATION_TOKEN
+                                valueFrom:
+                                  secretKeyRef:
+                                    name: gitea-runner-token
+                                    key: GITEA_RUNNER_REGISTRATION_TOKEN
+                              - name: PITS_ZOT_URL
+                                value: "http://zot.{{ $ns }}.svc.cluster.local:5000"
+                              - name: PITS_ATTIC_URL
+                                value: "http://attic.{{ $ns }}.svc.cluster.local:8080"
+                            command: ["/usr/local/bin/cicd-runner-entrypoint"]
+                            volumeMounts:
+                              - name: ramdisk
+                                mountPath: /ramdisk
+                              - name: tmp
+                                mountPath: /tmp
+                            resources:
+                              requests:
+                                cpu: 200m
+                                memory: 512Mi
+                              limits:
+                                cpu: "32"
+                                memory: 16Gi
+                        volumes:
+                          - name: ramdisk
+                            emptyDir:
+                              medium: Memory
+                              sizeLimit: 12Gi
+                          - name: tmp
+                            emptyDir:
+                              medium: Memory
+                              sizeLimit: 2Gi

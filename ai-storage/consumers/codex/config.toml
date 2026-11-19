@@ -1,0 +1,10 @@
+# Codex CLI thin consumer configuration (~/.codex/config.toml)
+# Points to the same Streamable HTTP Producer or local Singleton Daemon Proxy.
+
+[mcp_servers.pits_ai_storage_remote]
+url = "https://mcp.lab.martensite.dev/mcp"
+bearer_token_env_var = "AI_STORE_MCP_TOKEN"
+
+[mcp_servers.pits_ai_storage_local]
+command = "ai-store"
+args = ["mcp"]

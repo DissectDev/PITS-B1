@@ -1,0 +1,223 @@
+# Lightweight CoreDNS + Tailscale + L4 TLS Passthrough inside cluster-pits-lab.
+# - CoreDNS resolves *.lab.martensite.dev -> 100.85.4.76 (this pod's persistent Tailscale IP),
+#   and empty NOERROR for AAAA.
+# - nginx stream (:443) forwards TLS SNI passthrough straight to lab-zero-trust-gateway-istio:443
+#   WITHOUT advertising 10.89.20.21/32 (avoiding LAN /32 route hijacking of :6443/:30300/:30500).
+# - Stores Tailscale state in Kubernetes Secret istio-system/lab-tailscale-state.
+# - Strictly excludes netboot-004 (win11-001 host).
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: lab-tailscale-router
+  namespace: istio-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: lab-tailscale-router
+  namespace: istio-system
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: lab-tailscale-router
+  namespace: istio-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: lab-tailscale-router
+subjects:
+  - kind: ServiceAccount
+    name: lab-tailscale-router
+    namespace: istio-system
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lab-split-dns-corefile
+  namespace: istio-system
+data:
+  Corefile: |
+    lab.martensite.dev:53 {
+        log
+        errors
+        template IN A {
+            match .*
+            answer "{{ .Name }} 300 IN A 100.85.4.76"
+            fallthrough
+        }
+        template IN AAAA {
+            match .*
+            rcode NOERROR
+        }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lab-split-dns-nginx
+  namespace: istio-system
+data:
+  nginx.conf: |
+    worker_processes 2;
+    error_log /dev/stderr warn;
+    pid /tmp/nginx.pid;
+    events {
+      worker_connections 1024;
+    }
+    stream {
+      resolver 10.96.0.10 valid=10s ipv6=off;
+      server {
+        listen 443;
+        proxy_connect_timeout 5s;
+        proxy_timeout 300s;
+        set $gw_upstream lab-zero-trust-gateway-istio.istio-system.svc.cluster.local:443;
+        proxy_pass $gw_upstream;
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lab-split-dns
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/name: lab-split-dns
+    app.kubernetes.io/part-of: pits-istio-ambient
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lab-split-dns
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: lab-split-dns
+        app.kubernetes.io/part-of: pits-istio-ambient
+    spec:
+      serviceAccountName: lab-tailscale-router
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      - netboot-004
+      containers:
+        - name: coredns
+          image: registry.k8s.io/coredns/coredns:v1.14.7
+          imagePullPolicy: IfNotPresent
+          args:
+            - -conf
+            - /etc/coredns/Corefile
+          ports:
+            - name: dns-udp
+              containerPort: 53
+              protocol: UDP
+            - name: dns-tcp
+              containerPort: 53
+              protocol: TCP
+          volumeMounts:
+            - name: corefile
+              mountPath: /etc/coredns
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: ["NET_BIND_SERVICE"]
+        - name: https-passthrough
+          image: docker.io/library/nginx:1.29-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: https
+              containerPort: 443
+              protocol: TCP
+          volumeMounts:
+            - name: nginx-conf
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: "1"
+              memory: 128Mi
+        - name: tailscale
+          image: docker.io/tailscale/tailscale:v1.104.7
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - ln -sf /usr/sbin/iptables-nft /usr/sbin/iptables && ln -sf /usr/sbin/ip6tables-nft /usr/sbin/ip6tables && exec /usr/local/bin/containerboot
+          env:
+            - name: TS_KUBE_SECRET
+              value: lab-tailscale-state
+            - name: TS_STATE_DIR
+              value: /var/lib/tailscale
+            - name: TS_USERSPACE
+              value: "false"
+            - name: TS_HOSTNAME
+              value: lab-split-dns
+            - name: TS_ACCEPT_DNS
+              value: "false"
+            - name: TS_DEBUG_DISABLE_UDP_GSO
+              value: "true"
+            - name: TS_EXTRA_ARGS
+              value: "--advertise-tags=tag:server --reset"
+            - name: TS_AUTHKEY
+              valueFrom:
+                secretKeyRef:
+                  name: lab-tailscale-auth
+                  key: authkey
+                  optional: true
+          volumeMounts:
+            - name: dev-net-tun
+              mountPath: /dev/net/tun
+            - name: tailscale-state
+              mountPath: /var/lib/tailscale
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW"]
+      volumes:
+        - name: corefile
+          configMap:
+            name: lab-split-dns-corefile
+        - name: nginx-conf
+          configMap:
+            name: lab-split-dns-nginx
+        - name: dev-net-tun
+          hostPath:
+            path: /dev/net/tun
+            type: CharDevice
+        - name: tailscale-state
+          emptyDir: {}

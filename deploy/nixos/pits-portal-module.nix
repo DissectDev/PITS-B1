@@ -6,7 +6,7 @@
 # 2. Runs the PITS Backstage v1.56 Resource Portal & Catalog API directly on `pits-core`, hitting
 #    local `https://127.0.0.1:18443` (`pits-agent`) and `https://127.0.0.1:6443` (RKE2) over loopback
 #    (<1ms), eliminating Tailscale DERP amplification for control telemetry.
-# 3. Defaults to binding strictly `127.0.0.1:18090` and `100.74.25.42:18090` (`tailscale0`),
+# 3. Defaults to binding strictly `127.0.0.1:18090` and `100.95.95.88:18090` (`tailscale0`),
 #    leaving `mgmt0` and Pod CNI interfaces unexposed unless explicitly configured.
 # 4. Private operator profile & kubeconfig/mTLS material live in `/var/lib/pits/portal/profile.yaml`
 #    (`0600 root:root`), never in `/nix/store` or Git.
@@ -64,9 +64,10 @@ in
       type = lib.types.listOf lib.types.str;
       default = [
         "127.0.0.1:18090"
-        "100.74.25.42:18090"
+        "100.95.95.88:18090"
+        "10.90.0.1:18090"
       ];
-      description = "Exact socket addresses to bind (defaulting to loopback + tailscale0 IP so LAN/CNI cannot reach the portal).";
+      description = "Exact socket addresses to bind (loopback, tailscale0, and tb-lo0 10.90.0.1 for local RKE2 VLAN 20 relay; mgmt0 remains unexposed).";
     };
 
     stateDir = lib.mkOption {
@@ -91,6 +92,12 @@ in
       type = lib.types.bool;
       default = false;
       description = "Also allow TCP 18090 from `site.mgmt.lanCidr` in addition to `tailscale0`.";
+    };
+
+    openPodBridgeFirewall = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Allow local RKE2 pods on pits-core (`lxc+`, `10.42.128.0/17`) to reach `10.90.0.1:18090` for the VLAN 20 `pits-portal-lab-relay` pod.";
     };
 
     sourcingDbUrlFile = lib.mkOption {
@@ -118,9 +125,14 @@ in
       "d ${cfg.stateDir}/rdp 0700 root root -"
     ];
 
-    networking.firewall.extraCommands = lib.mkIf (cfg.openMgmtFirewall && (site ? mgmt) && (site.mgmt ? lanCidr)) ''
-      iptables -A nixos-fw -p tcp -s ${site.mgmt.lanCidr} --dport 18090 -j nixos-fw-accept
-    '';
+    networking.firewall.extraCommands = lib.concatStringsSep "\n" (
+      lib.optional (cfg.openMgmtFirewall && (site ? mgmt) && (site.mgmt ? lanCidr)) ''
+        iptables -A nixos-fw -p tcp -s ${site.mgmt.lanCidr} --dport 18090 -j nixos-fw-accept
+      ''
+      ++ lib.optional cfg.openPodBridgeFirewall ''
+        iptables -A nixos-fw -i lxc+ -s 10.42.128.0/17 -d 10.90.0.1/32 -p tcp --dport 18090 -j nixos-fw-accept
+      ''
+    );
 
     systemd.services.pits-portal = {
       description = "PITS Backstage v1.56 Control-Plane Portal & Resource Catalog Server";
@@ -159,6 +171,16 @@ in
           i=0
           while [ "$i" -lt 40 ]; do
             if ip -4 -o addr show dev tailscale0 2>/dev/null | grep -q 'inet 100\.'; then
+              break
+            fi
+            i=$((i + 1))
+            sleep 0.5
+          done
+        fi
+        if printf '%s\n' ${lib.escapeShellArgs cfg.listenAddresses} | grep -q '^10\.90\.0\.1:'; then
+          i=0
+          while [ "$i" -lt 40 ]; do
+            if ip -4 -o addr show dev tb-lo0 2>/dev/null | grep -q 'inet 10\.90\.0\.1/'; then
               break
             fi
             i=$((i + 1))

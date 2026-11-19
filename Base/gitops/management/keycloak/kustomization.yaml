@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: keycloak
+resources:
+  - postgres.yaml
+  - certificate.yaml
+  - keycloak.yaml
+  - lab-relay.yaml
+  - public-gateway.yaml

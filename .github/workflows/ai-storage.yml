@@ -1,0 +1,35 @@
+name: AI Storage (OpenDAL 5-Layer Runtime & MCP Producer)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ai-storage/**"
+      - ".agents/plugins/pits-ai-storage/**"
+      - ".github/workflows/ai-storage.yml"
+  pull_request:
+    paths:
+      - "ai-storage/**"
+      - ".agents/plugins/pits-ai-storage/**"
+      - ".github/workflows/ai-storage.yml"
+  workflow_dispatch:
+
+jobs:
+  rust-test:
+    name: Cargo Test & Check (ai-storage)
+    runs-on: pits-lab-rust
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure DDR5 tmpfs cargo dirs
+        run: |
+          if [ -d /ramdisk ]; then
+            mkdir -p /ramdisk/cargo-home /ramdisk/cargo-target
+            echo "CARGO_HOME=/ramdisk/cargo-home" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_DIR=/ramdisk/cargo-target" >> "$GITHUB_ENV"
+          fi
+      - name: Run cargo test and check
+        working-directory: ai-storage
+        run: |
+          set -euo pipefail
+          cargo test --no-fail-fast
+          cargo check --all-targets

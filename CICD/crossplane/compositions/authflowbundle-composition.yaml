@@ -1,0 +1,134 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: keycloak-flow-native-api
+  labels:
+    pits.io/stack: iam-control-plane
+spec:
+  compositeTypeRef:
+    apiVersion: iam.corp.io/v1alpha1
+    kind: XAuthFlowBundle
+  mode: Pipeline
+  pipeline:
+    - step: render-sync-job
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource -}}
+            {{- $rawSpec := dict
+                "realm" $xr.spec.realm
+                "baseAlias" $xr.spec.flowAlias
+                "description" ($xr.spec.description | default "")
+                "bindAsRealmBrowserFlow" ($xr.spec.bindAsRealmBrowserFlow | default false)
+                "cleanupUnusedVersions" ($xr.spec.cleanupUnusedVersions | default true)
+                "steps" $xr.spec.steps | toJson -}}
+            {{- $hash := $rawSpec | sha256sum | trunc 8 -}}
+            {{- $targetAlias := printf "%s-%s" $xr.spec.flowAlias $hash -}}
+            {{- $finalSpec := dict
+                "realm" $xr.spec.realm
+                "baseAlias" $xr.spec.flowAlias
+                "targetAlias" $targetAlias
+                "description" ($xr.spec.description | default "")
+                "bindAsRealmBrowserFlow" ($xr.spec.bindAsRealmBrowserFlow | default false)
+                "cleanupUnusedVersions" ($xr.spec.cleanupUnusedVersions | default true)
+                "steps" $xr.spec.steps | toPrettyJson -}}
+            ---
+            apiVersion: iam.corp.io/v1alpha1
+            kind: XAuthFlowBundle
+            status:
+              activeFlowAlias: {{ $targetAlias | quote }}
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: flow-spec-cm
+            spec:
+              providerConfigRef:
+                name: default
+              forProvider:
+                manifest:
+                  apiVersion: v1
+                  kind: ConfigMap
+                  metadata:
+                    name: flow-spec-{{ $xr.metadata.name }}
+                    namespace: iam-system
+                  data:
+                    flow-spec.json: |
+            {{ $finalSpec | indent 12 }}
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: flow-sync-job
+            spec:
+              providerConfigRef:
+                name: default
+              readiness:
+                policy: DeriveFromCelQuery
+                celQuery: "has(object.status.conditions) && object.status.conditions.exists(c, c.type == 'Complete' && c.status == 'True')"
+              forProvider:
+                manifest:
+                  apiVersion: batch/v1
+                  kind: Job
+                  metadata:
+                    name: flow-sync-{{ $xr.metadata.name }}-{{ $hash }}
+                    namespace: iam-system
+                  spec:
+                    backoffLimit: 3
+                    ttlSecondsAfterFinished: 3600
+                    template:
+                      spec:
+                        restartPolicy: OnFailure
+                        affinity:
+                          nodeAffinity:
+                            requiredDuringSchedulingIgnoredDuringExecution:
+                              nodeSelectorTerms:
+                                - matchExpressions:
+                                    - key: kubernetes.io/hostname
+                                      operator: NotIn
+                                      values:
+                                        - netboot-004
+                        containers:
+                          - name: sync
+                            image: docker.io/library/python:3.12-alpine
+                            imagePullPolicy: IfNotPresent
+                            command: ["python3", "/scripts/sync_flow.py"]
+                            envFrom:
+                              - secretRef:
+                                  name: keycloak-sync-creds
+                            env:
+                              - name: FLOW_SPEC_PATH
+                                value: /config/flow-spec.json
+                              - name: KEYCLOAK_CA_CERT_PATH
+                                value: /ca/ca.crt
+                            volumeMounts:
+                              - name: spec
+                                mountPath: /config
+                                readOnly: true
+                              - name: script
+                                mountPath: /scripts
+                                readOnly: true
+                              - name: ca
+                                mountPath: /ca
+                                readOnly: true
+                        volumes:
+                          - name: spec
+                            configMap:
+                              name: flow-spec-{{ $xr.metadata.name }}
+                          - name: script
+                            configMap:
+                              name: keycloak-flow-sync-script
+                          - name: ca
+                            configMap:
+                              name: pits-ca-cert
+                              optional: true
+    - step: auto-ready
+      functionRef:
+        name: function-auto-ready

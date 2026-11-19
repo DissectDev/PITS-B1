@@ -1,0 +1,145 @@
+# oauth2-proxy ext_authz service for Istio Ambient Gateway (cluster-pits-lab).
+# Consumes Crossplane-managed iam-system/mode-a-gateway-oidc-secret (clientID, clientSecret)
+# and runtime-generated iam-system/oauth2-proxy-cookie-secret (cookie-secret).
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oauth2-proxy
+  namespace: iam-system
+  labels:
+    app.kubernetes.io/name: oauth2-proxy
+    app.kubernetes.io/part-of: pits-iam
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: oauth2-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: oauth2-proxy
+        app.kubernetes.io/part-of: pits-iam
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      - netboot-004
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: oauth2-proxy
+          image: ghcr.io/oauth2-proxy/oauth2-proxy:v7.15.6
+          imagePullPolicy: IfNotPresent
+          args:
+            - --http-address=0.0.0.0:4180
+            - --provider=keycloak-oidc
+            - --oidc-issuer-url=https://sso.martensite.dev/realms/corp
+            - --skip-oidc-discovery=true
+            - --login-url=https://sso.martensite.dev/realms/corp/protocol/openid-connect/auth
+            - --redeem-url=https://10.89.20.30:8443/realms/corp/protocol/openid-connect/token
+            - --oidc-jwks-url=https://10.89.20.30:8443/realms/corp/protocol/openid-connect/certs
+            - --profile-url=https://10.89.20.30:8443/realms/corp/protocol/openid-connect/userinfo
+            - --validate-url=https://10.89.20.30:8443/realms/corp/protocol/openid-connect/userinfo
+            - --provider-ca-file=/etc/ssl/pits-ca/ca.crt
+            - --use-system-trust-store=true
+            - --code-challenge-method=S256
+            - --acr-values=fido2
+            - --scope=openid email profile acr roles
+            - --email-domain=*
+            - --cookie-secure=true
+            - --cookie-samesite=lax
+            - --cookie-refresh=45m
+            - --cookie-expire=12h
+            - --cookie-domain=.lab.martensite.dev
+            - --whitelist-domain=.lab.martensite.dev
+            - --reverse-proxy=true
+            - --skip-provider-button=true
+            - --set-xauthrequest=true
+            - --set-authorization-header=true
+            - --pass-access-token=false
+            - --pass-authorization-header=true
+            - --prefer-email-to-user=false
+            - --silence-ping-logging=true
+            - --upstream=static://200
+          env:
+            - name: OAUTH2_PROXY_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: mode-a-gateway-oidc-secret
+                  key: clientID
+            - name: OAUTH2_PROXY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: mode-a-gateway-oidc-secret
+                  key: clientSecret
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: oauth2-proxy-cookie-secret
+                  key: cookie-secret
+          ports:
+            - name: http
+              containerPort: 4180
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          volumeMounts:
+            - name: pits-ca
+              mountPath: /etc/ssl/pits-ca
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: pits-ca
+          configMap:
+            name: pits-ca-cert
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oauth2-proxy
+  namespace: iam-system
+  labels:
+    app.kubernetes.io/name: oauth2-proxy
+    app.kubernetes.io/part-of: pits-iam
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 4180
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: oauth2-proxy

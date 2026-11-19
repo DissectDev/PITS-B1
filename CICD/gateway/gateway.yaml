@@ -1,0 +1,282 @@
+# Istio Gateway API resources for cluster-pits-lab zero-trust north-south ingress.
+# - Gateway binds *.lab.martensite.dev:443 using istio-system/lab-gateway-tls (Let's Encrypt DNS-01).
+# - Infrastructure ConfigMap excludes netboot-004 and exposes externalIP 10.89.20.21 (VLAN 20).
+# - /oauth2/* routes directly to oauth2-proxy for OIDC redirects & callbacks.
+# - echo.lab.martensite.dev provides a zero-trust header-verification endpoint.
+# - git.lab.martensite.dev exposes Gitea Web behind Keycloak FIDO2 without touching Flux's internal gitea-http:3000.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lab-gateway-infra
+  namespace: istio-system
+data:
+  deployment: |
+    spec:
+      template:
+        spec:
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: NotIn
+                        values:
+                          - netboot-004
+  service: |
+    spec:
+      type: ClusterIP
+      externalIPs:
+        - 10.89.20.21
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: lab-zero-trust-gateway
+  namespace: istio-system
+spec:
+  gatewayClassName: istio
+  infrastructure:
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: lab-gateway-infra
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 443
+      hostname: "*.lab.martensite.dev"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: lab-gateway-tls
+      allowedRoutes:
+        namespaces:
+          from: All
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: oauth2-proxy-routes
+  namespace: iam-system
+spec:
+  parentRefs:
+    - name: lab-zero-trust-gateway
+      namespace: istio-system
+  hostnames:
+    - echo.lab.martensite.dev
+    - git.lab.martensite.dev
+    - portal.lab.martensite.dev
+    - "*.lab.martensite.dev"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /oauth2
+      backendRefs:
+        - name: oauth2-proxy
+          port: 4180
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lab-auth-echo-script
+  namespace: iam-system
+data:
+  echo.sh: |
+    #!/bin/sh
+    REQ_LINE=""
+    IFS= read -r REQ_LINE
+    HEADERS=""
+    while IFS= read -r LINE; do
+      LINE=$(printf '%s' "$LINE" | tr -d '\r')
+      [ -z "$LINE" ] && break
+      HEADERS="${HEADERS}${LINE}\n"
+    done
+    BODY=$(printf "OK: PITS Zero-Trust Gateway\nRequest: %s\n%b" "$(printf '%s' "$REQ_LINE" | tr -d '\r')" "$HEADERS")
+    LEN=$(printf '%s' "$BODY" | wc -c)
+    printf "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s" "$LEN" "$BODY"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lab-auth-echo
+  namespace: iam-system
+  labels:
+    app.kubernetes.io/name: lab-auth-echo
+    app.kubernetes.io/part-of: pits-iam
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lab-auth-echo
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: lab-auth-echo
+        app.kubernetes.io/part-of: pits-iam
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      - netboot-004
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: echo
+          image: docker.io/library/busybox:1.36.1
+          imagePullPolicy: IfNotPresent
+          command:
+            - nc
+            - -lk
+            - -p
+            - "8080"
+            - -e
+            - /scripts/echo.sh
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: script
+          configMap:
+            name: lab-auth-echo-script
+            defaultMode: 0555
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lab-auth-echo
+  namespace: iam-system
+  labels:
+    app.kubernetes.io/name: lab-auth-echo
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: lab-auth-echo
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: lab-auth-echo-route
+  namespace: iam-system
+spec:
+  parentRefs:
+    - name: lab-zero-trust-gateway
+      namespace: istio-system
+  hostnames:
+    - echo.lab.martensite.dev
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: lab-auth-echo
+          port: 8080
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: gitea-web-route
+  namespace: pits-cicd
+spec:
+  parentRefs:
+    - name: lab-zero-trust-gateway
+      namespace: istio-system
+  hostnames:
+    - git.lab.martensite.dev
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: gitea-http
+          port: 3000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pits-portal-core
+  namespace: iam-system
+  labels:
+    app.kubernetes.io/name: pits-portal-core
+    app.kubernetes.io/part-of: pits-iam
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 18090
+      targetPort: 18090
+      protocol: TCP
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: pits-portal-core
+  namespace: iam-system
+subsets:
+  - addresses:
+      - ip: 10.89.20.31
+    ports:
+      - name: http
+        port: 18090
+        protocol: TCP
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: pits-portal-route
+  namespace: iam-system
+spec:
+  parentRefs:
+    - name: lab-zero-trust-gateway
+      namespace: istio-system
+  hostnames:
+    - portal.lab.martensite.dev
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: pits-portal-core
+          port: 18090

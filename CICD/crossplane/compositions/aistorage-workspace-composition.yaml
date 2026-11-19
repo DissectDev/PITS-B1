@@ -1,0 +1,771 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: aistorage-workspace-composition
+  labels:
+    pits.io/stack: ai-storage
+spec:
+  compositeTypeRef:
+    apiVersion: storage.ai.pits.io/v1alpha1
+    kind: XAIStorageWorkspace
+  mode: Pipeline
+  pipeline:
+    - step: render-ai-storage-workspace
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- define "isReady" -}}
+            {{- $obs := index . 0 -}}
+            {{- $name := index . 1 -}}
+            {{- $ready := "False" -}}
+            {{- if $obs -}}
+              {{- with (index $obs $name) -}}
+                {{- if and .resource .resource.status .resource.status.conditions -}}
+                  {{- range .resource.status.conditions -}}
+                    {{- if and (eq .type "Ready") (eq .status "True") -}}
+                      {{- $ready = "True" -}}
+                    {{- end -}}
+                  {{- end -}}
+                {{- end -}}
+              {{- end -}}
+            {{- end -}}
+            {{- $ready -}}
+            {{- end -}}
+            {{- $obs := .observed.resources -}}
+            {{- $xr := .observed.composite.resource -}}
+            {{- $spec := $xr.spec -}}
+            {{- $project := $spec.projectName | default $xr.metadata.name -}}
+            {{- $ns := printf "ai-storage-%s" $project -}}
+            {{- $env := $spec.environment | default "lab-rustfs" -}}
+            {{- $domain := $spec.domain | default "mcp.lab.martensite.dev" -}}
+            {{- $excludeNodes := $spec.excludeNodes | default (list "netboot-004") -}}
+            {{- $stateSC := "mayastor-2" -}}
+            {{- $cacheSC := "openebs-single-replica" -}}
+            {{- $rustfsSize := "40Gi" -}}
+            {{- $dbSize := "10Gi" -}}
+            {{- if $spec.storage -}}
+              {{- $stateSC = $spec.storage.stateStorageClass | default "mayastor-2" -}}
+              {{- $cacheSC = $spec.storage.cacheStorageClass | default "openebs-single-replica" -}}
+              {{- $rustfsSize = $spec.storage.rustfsSize | default "40Gi" -}}
+              {{- $dbSize = $spec.storage.dbSize | default "10Gi" -}}
+            {{- end -}}
+            {{- $imgAiStore := "docker.io/pits/ai-store:v0.1.0" -}}
+            {{- $imgRustfs := "docker.io/rustfs/rustfs:latest" -}}
+            {{- $imgValkey := "docker.io/valkey/valkey:8-alpine" -}}
+            {{- $imgPg := "ghcr.io/cloudnative-pg/postgresql:17.6" -}}
+            {{- if $spec.images -}}
+              {{- $imgAiStore = $spec.images.aiStore | default $imgAiStore -}}
+              {{- $imgRustfs = $spec.images.rustfs | default $imgRustfs -}}
+              {{- $imgValkey = $spec.images.valkey | default $imgValkey -}}
+              {{- $imgPg = $spec.images.postgres | default $imgPg -}}
+            {{- end -}}
+            {{- $wsPvcSize := "20Gi" -}}
+            {{- $cachePvcSize := "20Gi" -}}
+            {{- $memTtlDays := 90 -}}
+            {{- $kbTrigram := true -}}
+            {{- $kbVector := true -}}
+            {{- $artMaxMb := 512 -}}
+            {{- $tracesFmt := "jsonl" -}}
+            {{- $tracesFlush := 15 -}}
+            {{- $hfRepo := "" -}}
+            {{- if $spec.archetypes -}}
+              {{- if $spec.archetypes.workspace -}}{{- $wsPvcSize = $spec.archetypes.workspace.pvcSize | default "20Gi" -}}{{- end -}}
+              {{- if $spec.archetypes.memory -}}{{- $memTtlDays = $spec.archetypes.memory.ttlDays | default 90 -}}{{- end -}}
+              {{- if $spec.archetypes.knowledge -}}
+                {{- $kbTrigram = $spec.archetypes.knowledge.enableTrigram | default true -}}
+                {{- $kbVector = $spec.archetypes.knowledge.enableVector | default true -}}
+              {{- end -}}
+              {{- if $spec.archetypes.datasets -}}
+                {{- $cachePvcSize = $spec.archetypes.datasets.cacheSize | default "20Gi" -}}
+                {{- $hfRepo = $spec.archetypes.datasets.hfRepo | default "" -}}
+              {{- end -}}
+              {{- if $spec.archetypes.artifacts -}}{{- $artMaxMb = $spec.archetypes.artifacts.maxFileSizeMB | default 512 -}}{{- end -}}
+              {{- if $spec.archetypes.traces -}}
+                {{- $tracesFmt = $spec.archetypes.traces.format | default "jsonl" -}}
+                {{- $tracesFlush = $spec.archetypes.traces.flushIntervalSec | default 15 -}}
+              {{- end -}}
+            {{- end -}}
+            {{- $replicas := 1 -}}
+            {{- $mcpPort := 8787 -}}
+            {{- $toolsPreset := "full" -}}
+            {{- $authMode := "keycloak-jwt" -}}
+            {{- if $spec.mcp -}}
+              {{- $replicas = $spec.mcp.replicas | default 1 -}}
+              {{- $mcpPort = $spec.mcp.port | default 8787 -}}
+              {{- $toolsPreset = $spec.mcp.toolsPreset | default "full" -}}
+              {{- $authMode = $spec.mcp.authMode | default "keycloak-jwt" -}}
+            {{- end -}}
+            {{- $s3Endpoint := printf "http://rustfs.%s.svc.cluster.local:9000" $ns -}}
+            {{- $primaryBackend := "lab_rustfs" -}}
+            {{- if eq $env "lab-local" -}}
+              {{- $primaryBackend = "local_ws" -}}
+            {{- end -}}
+            {{- $dataBackend := $primaryBackend -}}
+            {{- if $hfRepo -}}
+              {{- $dataBackend = "hf_public" -}}
+            {{- end -}}
+            {{- $profileYaml := printf "apiVersion: storage.ai.pits.io/v1alpha1\nkind: ProjectProfile\nmetadata:\n  name: %s\n  namespace: %s\nspec:\n  backends:\n    local_ws:\n      scheme: fs\n      root: /var/lib/ai-store/ws\n    lab_rustfs:\n      scheme: s3\n      endpoint: %s\n      bucket: %s-ai-storage\n      region: us-east-1\n      credentialRef: secret://opendal-creds\n  archetypes:\n    workspace:\n      uri: ws://\n      backend: local_ws\n      prefix: workspace\n      index: sqlite:///var/lib/ai-store/ws/ai-store-meta.sqlite3\n      archiveBackend: %s\n      archivePrefix: snapshots/%s\n    memory:\n      uri: mem://\n      backend: %s\n      prefix: memory/%s\n      index: postgres://secret://opendal-creds/pg-dsn\n      ttlDays: %v\n    knowledge:\n      uri: kb://\n      backend: %s\n      prefix: knowledge/%s\n      index: postgres://secret://opendal-creds/pg-dsn\n      enableTrigram: %v\n      enableVector: %v\n    datasets:\n      uri: data://\n      backend: %s\n      prefix: datasets/%s\n      cacheDir: /var/cache/ai-store/nvme\n      cacheMaxBytes: 21474836480\n    models:\n      uri: models://\n      backend: %s\n      prefix: models/%s\n      cacheDir: /var/cache/ai-store/nvme\n      cacheMaxBytes: 21474836480\n    artifacts:\n      uri: artifacts://\n      backend: %s\n      prefix: artifacts/%s\n      index: postgres://secret://opendal-creds/pg-dsn\n      contentAddressed: true\n    traces:\n      uri: traces://\n      backend: %s\n      prefix: traces/%s\n      flushIntervalSec: %v\n      format: %s\n    state:\n      uri: state://\n      backend: %s\n      prefix: state/%s\n      coordinator: redis://secret://opendal-creds/redis-url\n    sharedDrive:\n      uri: shared://\n      backend: %s\n      prefix: shared/%s\n      lockBackend: redis://secret://opendal-creds/redis-url\n  policies:\n    kb://:\n      mode: read-only\n      maxFileSizeMB: 128\n    data://:\n      mode: read-only\n      maxFileSizeMB: 4096\n    models://:\n      mode: read-only\n      maxFileSizeMB: 16384\n    artifacts://:\n      mode: append-only\n      maxFileSizeMB: %v\n    traces://:\n      mode: append-only\n      maxFileSizeMB: 256\n    ws://:\n      mode: read-write\n      maxFileSizeMB: 64\n    mem://:\n      mode: read-write\n      maxFileSizeMB: 16\n      requireScope: true\n    state://:\n      mode: read-write\n      maxFileSizeMB: 32\n    shared://:\n      mode: read-write\n      maxFileSizeMB: 1024\n  exposure:\n    transport: streamable-http\n    host: 0.0.0.0\n    port: %v\n    path: /mcp\n    toolsPreset: %s\n" $project $ns $s3Endpoint $project $primaryBackend $project $primaryBackend $project $memTtlDays $primaryBackend $project $kbTrigram $kbVector $dataBackend $project $dataBackend $project $primaryBackend $project $primaryBackend $project $tracesFlush $tracesFmt $primaryBackend $project $primaryBackend $project $artMaxMb $mcpPort $toolsPreset -}}
+            {{- $profileHash := $profileYaml | sha256sum | trunc 12 -}}
+            ---
+            apiVersion: storage.ai.pits.io/v1alpha1
+            kind: XAIStorageWorkspace
+            status:
+              mcpEndpoint: {{ printf "https://%s/mcp" $domain | quote }}
+              internalEndpoint: {{ printf "http://%s-ai-store.%s.svc.cluster.local:%v/mcp" $project $ns $mcpPort | quote }}
+              profileConfigMap: {{ printf "%s-profile" $project | quote }}
+              credentialSecret: {{ printf "%s-opendal-creds" $project | quote }}
+              readyArchetypes: ["ws://", "mem://", "kb://", "data://", "models://", "artifacts://", "traces://", "state://", "shared://"]
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-ns
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: ns
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "ns") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: v1
+                  kind: Namespace
+                  metadata:
+                    name: {{ $ns }}
+                    labels:
+                      app.kubernetes.io/part-of: pits-ai-storage
+                      istio.io/dataplane-mode: ambient
+                      pod-security.kubernetes.io/enforce: baseline
+                      pod-security.kubernetes.io/warn: baseline
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-ws-pvc
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: ws-pvc
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "ws-pvc") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: v1
+                  kind: PersistentVolumeClaim
+                  metadata:
+                    name: {{ $project }}-ws-data
+                    namespace: {{ $ns }}
+                  spec:
+                    accessModes: ["ReadWriteOnce"]
+                    storageClassName: {{ $stateSC }}
+                    resources:
+                      requests:
+                        storage: {{ $wsPvcSize }}
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-cache-pvc
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: cache-pvc
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "cache-pvc") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: v1
+                  kind: PersistentVolumeClaim
+                  metadata:
+                    name: {{ $project }}-nvme-cache
+                    namespace: {{ $ns }}
+                  spec:
+                    accessModes: ["ReadWriteOnce"]
+                    storageClassName: {{ $cacheSC }}
+                    resources:
+                      requests:
+                        storage: {{ $cachePvcSize }}
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-rustfs-pvc
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: rustfs-pvc
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "rustfs-pvc") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: v1
+                  kind: PersistentVolumeClaim
+                  metadata:
+                    name: rustfs-data
+                    namespace: {{ $ns }}
+                  spec:
+                    accessModes: ["ReadWriteOnce"]
+                    storageClassName: {{ $cacheSC }}
+                    resources:
+                      requests:
+                        storage: {{ $rustfsSize }}
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-creds-secret
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: creds-secret
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "creds-secret") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: v1
+                  kind: Secret
+                  metadata:
+                    name: {{ $project }}-opendal-creds
+                    namespace: {{ $ns }}
+                  type: Opaque
+                  stringData:
+                    access_key_id: "pits-ai-store"
+                    secret_access_key: "pits-rustfs-lab-secret-2026"
+                    pg-dsn: {{ printf "postgres://aistore:pits-pg-lab-2026@ai-pg-rw.%s.svc.cluster.local:5432/aistore" $ns | quote }}
+                    redis-url: {{ printf "redis://valkey.%s.svc.cluster.local:6379" $ns | quote }}
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-pg-cluster
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: pg-cluster
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "pg-cluster") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: postgresql.cnpg.io/v1
+                  kind: Cluster
+                  metadata:
+                    name: ai-pg
+                    namespace: {{ $ns }}
+                  spec:
+                    instances: 1
+                    imageName: {{ $imgPg | quote }}
+                    imagePullPolicy: IfNotPresent
+                    storage:
+                      storageClass: {{ $stateSC }}
+                      size: {{ $dbSize }}
+                    bootstrap:
+                      initdb:
+                        database: aistore
+                        owner: aistore
+                        secret:
+                          name: ai-pg-auth
+                    affinity:
+                      nodeAffinity:
+                        requiredDuringSchedulingIgnoredDuringExecution:
+                          nodeSelectorTerms:
+                            - matchExpressions:
+                                - key: kubernetes.io/hostname
+                                  operator: In
+                                  values: ["netboot-001", "netboot-002", "netboot-003", "netboot-005"]
+                                - key: kubernetes.io/hostname
+                                  operator: NotIn
+                                  values: {{ $excludeNodes | toJson }}
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-pg-auth
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: pg-auth
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "pg-auth") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: v1
+                  kind: Secret
+                  metadata:
+                    name: ai-pg-auth
+                    namespace: {{ $ns }}
+                  type: kubernetes.io/basic-auth
+                  stringData:
+                    username: aistore
+                    password: pits-pg-lab-2026
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-rustfs-deploy
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: rustfs-deploy
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "rustfs-deploy") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: apps/v1
+                  kind: Deployment
+                  metadata:
+                    name: rustfs
+                    namespace: {{ $ns }}
+                    labels:
+                      app.kubernetes.io/name: rustfs
+                  spec:
+                    replicas: 1
+                    strategy:
+                      type: Recreate
+                    selector:
+                      matchLabels:
+                        app.kubernetes.io/name: rustfs
+                    template:
+                      metadata:
+                        labels:
+                          app.kubernetes.io/name: rustfs
+                      spec:
+                        securityContext:
+                          fsGroup: 10001
+                        affinity:
+                          nodeAffinity:
+                            requiredDuringSchedulingIgnoredDuringExecution:
+                              nodeSelectorTerms:
+                                - matchExpressions:
+                                    - key: kubernetes.io/hostname
+                                      operator: In
+                                      values: ["netboot-001", "netboot-002", "netboot-003", "netboot-005"]
+                                    - key: kubernetes.io/hostname
+                                      operator: NotIn
+                                      values: {{ $excludeNodes | toJson }}
+                        containers:
+                          - name: rustfs
+                            image: {{ $imgRustfs | quote }}
+                            imagePullPolicy: IfNotPresent
+                            env:
+                              - name: RUSTFS_ACCESS_KEY
+                                valueFrom:
+                                  secretKeyRef:
+                                    name: {{ $project }}-opendal-creds
+                                    key: access_key_id
+                              - name: RUSTFS_SECRET_KEY
+                                valueFrom:
+                                  secretKeyRef:
+                                    name: {{ $project }}-opendal-creds
+                                    key: secret_access_key
+                              - name: RUSTFS_VOLUMES
+                                value: /data
+                              - name: RUSTFS_ADDRESS
+                                value: ":9000"
+                            ports:
+                              - name: s3
+                                containerPort: 9000
+                            readinessProbe:
+                              tcpSocket:
+                                port: 9000
+                              initialDelaySeconds: 3
+                              periodSeconds: 5
+                            volumeMounts:
+                              - name: data
+                                mountPath: /data
+                              - name: logs
+                                mountPath: /logs
+                        volumes:
+                          - name: data
+                            persistentVolumeClaim:
+                              claimName: rustfs-data
+                          - name: logs
+                            emptyDir: {}
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-rustfs-svc
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: rustfs-svc
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "rustfs-svc") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: v1
+                  kind: Service
+                  metadata:
+                    name: rustfs
+                    namespace: {{ $ns }}
+                  spec:
+                    ports:
+                      - name: s3
+                        port: 9000
+                        targetPort: 9000
+                    selector:
+                      app.kubernetes.io/name: rustfs
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-valkey-deploy
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: valkey-deploy
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "valkey-deploy") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: apps/v1
+                  kind: Deployment
+                  metadata:
+                    name: valkey
+                    namespace: {{ $ns }}
+                    labels:
+                      app.kubernetes.io/name: valkey
+                  spec:
+                    replicas: 1
+                    selector:
+                      matchLabels:
+                        app.kubernetes.io/name: valkey
+                    template:
+                      metadata:
+                        labels:
+                          app.kubernetes.io/name: valkey
+                      spec:
+                        affinity:
+                          nodeAffinity:
+                            requiredDuringSchedulingIgnoredDuringExecution:
+                              nodeSelectorTerms:
+                                - matchExpressions:
+                                    - key: kubernetes.io/hostname
+                                      operator: In
+                                      values: ["netboot-001", "netboot-002", "netboot-003", "netboot-005"]
+                                    - key: kubernetes.io/hostname
+                                      operator: NotIn
+                                      values: {{ $excludeNodes | toJson }}
+                        containers:
+                          - name: valkey
+                            image: {{ $imgValkey | quote }}
+                            imagePullPolicy: IfNotPresent
+                            ports:
+                              - name: redis
+                                containerPort: 6379
+                            readinessProbe:
+                              tcpSocket:
+                                port: 6379
+                              initialDelaySeconds: 2
+                              periodSeconds: 5
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-valkey-svc
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: valkey-svc
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "valkey-svc") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: v1
+                  kind: Service
+                  metadata:
+                    name: valkey
+                    namespace: {{ $ns }}
+                  spec:
+                    ports:
+                      - name: redis
+                        port: 6379
+                        targetPort: 6379
+                    selector:
+                      app.kubernetes.io/name: valkey
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-bucket-init-job
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: bucket-init-job
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "bucket-init-job") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: batch/v1
+                  kind: Job
+                  metadata:
+                    name: {{ $project }}-s3-bucket-init
+                    namespace: {{ $ns }}
+                  spec:
+                    backoffLimit: 6
+                    template:
+                      spec:
+                        restartPolicy: OnFailure
+                        affinity:
+                          nodeAffinity:
+                            requiredDuringSchedulingIgnoredDuringExecution:
+                              nodeSelectorTerms:
+                                - matchExpressions:
+                                    - key: kubernetes.io/hostname
+                                      operator: NotIn
+                                      values: {{ $excludeNodes | toJson }}
+                        containers:
+                          - name: s3-init
+                            image: docker.io/library/python:3.12-alpine
+                            imagePullPolicy: IfNotPresent
+                            env:
+                              - name: S3_ENDPOINT
+                                value: {{ $s3Endpoint | quote }}
+                              - name: S3_BUCKET
+                                value: {{ printf "%s-ai-storage" $project | quote }}
+                              - name: AWS_ACCESS_KEY_ID
+                                valueFrom:
+                                  secretKeyRef:
+                                    name: {{ $project }}-opendal-creds
+                                    key: access_key_id
+                              - name: AWS_SECRET_ACCESS_KEY
+                                valueFrom:
+                                  secretKeyRef:
+                                    name: {{ $project }}-opendal-creds
+                                    key: secret_access_key
+                            command:
+                              - python3
+                              - -c
+                              - |
+                                import datetime, hashlib, hmac, os, time, urllib.error, urllib.request
+                                ep = os.environ["S3_ENDPOINT"].rstrip("/")
+                                bucket = os.environ["S3_BUCKET"]
+                                ak = os.environ["AWS_ACCESS_KEY_ID"]
+                                sk = os.environ["AWS_SECRET_ACCESS_KEY"]
+                                region = "us-east-1"
+                                def sign(key, msg):
+                                    return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+                                for _ in range(60):
+                                    try:
+                                        now = datetime.datetime.now(datetime.timezone.utc)
+                                        amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+                                        datestamp = now.strftime("%Y%m%d")
+                                        payload_hash = hashlib.sha256(b"").hexdigest()
+                                        host = ep.split("://", 1)[1]
+                                        canonical_uri = f"/{bucket}"
+                                        canonical_headers = f"host:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{amz_date}\n"
+                                        signed_headers = "host;x-amz-content-sha256;x-amz-date"
+                                        canonical_req = f"PUT\n{canonical_uri}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
+                                        scope = f"{datestamp}/{region}/s3/aws4_request"
+                                        sts = f"AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n" + hashlib.sha256(canonical_req.encode()).hexdigest()
+                                        k_date = sign(("AWS4" + sk).encode("utf-8"), datestamp)
+                                        k_reg = sign(k_date, region)
+                                        k_svc = sign(k_reg, "s3")
+                                        k_sign = sign(k_svc, "aws4_request")
+                                        sig = hmac.new(k_sign, sts.encode("utf-8"), hashlib.sha256).hexdigest()
+                                        auth = f"AWS4-HMAC-SHA256 Credential={ak}/{scope}, SignedHeaders={signed_headers}, Signature={sig}"
+                                        req = urllib.request.Request(f"{ep}/{bucket}", method="PUT", headers={
+                                            "x-amz-date": amz_date,
+                                            "x-amz-content-sha256": payload_hash,
+                                            "Authorization": auth,
+                                        })
+                                        with urllib.request.urlopen(req, timeout=5) as r:
+                                            print("Created bucket:", r.status)
+                                            raise SystemExit(0)
+                                    except urllib.error.HTTPError as e:
+                                        if e.code in (200, 409):
+                                            print("Bucket already ready:", e.code)
+                                            raise SystemExit(0)
+                                        print("S3 HTTP retry:", e.code)
+                                    except Exception as ex:
+                                        print("Waiting for RustFS:", ex)
+                                    time.sleep(3)
+                                raise SystemExit(1)
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-profile-cm
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: profile-cm
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "profile-cm") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: v1
+                  kind: ConfigMap
+                  metadata:
+                    name: {{ $project }}-profile
+                    namespace: {{ $ns }}
+                  data:
+                    project-profile.yaml: |
+            {{ $profileYaml | indent 10 }}
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-mcp-deploy
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: mcp-deploy
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "mcp-deploy") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: apps/v1
+                  kind: Deployment
+                  metadata:
+                    name: {{ $project }}-ai-store
+                    namespace: {{ $ns }}
+                    labels:
+                      app.kubernetes.io/name: ai-store
+                      app.kubernetes.io/instance: {{ $project }}
+                  spec:
+                    replicas: {{ $replicas }}
+                    selector:
+                      matchLabels:
+                        app.kubernetes.io/name: ai-store
+                        app.kubernetes.io/instance: {{ $project }}
+                    template:
+                      metadata:
+                        labels:
+                          app.kubernetes.io/name: ai-store
+                          app.kubernetes.io/instance: {{ $project }}
+                        annotations:
+                          storage.ai.pits.io/profile-sha256: {{ $profileHash | quote }}
+                      spec:
+                        affinity:
+                          nodeAffinity:
+                            requiredDuringSchedulingIgnoredDuringExecution:
+                              nodeSelectorTerms:
+                                - matchExpressions:
+                                    - key: kubernetes.io/hostname
+                                      operator: In
+                                      values: ["netboot-001", "netboot-002", "netboot-003", "netboot-005"]
+                                    - key: kubernetes.io/hostname
+                                      operator: NotIn
+                                      values: {{ $excludeNodes | toJson }}
+                        containers:
+                          - name: ai-store
+                            image: {{ $imgAiStore | quote }}
+                            imagePullPolicy: Always
+                            args: ["serve", "--profile", "/etc/ai-store/project-profile.yaml"]
+                            env:
+                              - name: AI_STORE_SECRETS_DIR
+                                value: /var/run/ai-store/secrets
+                              - name: RUST_LOG
+                                value: info
+                            ports:
+                              - name: mcp
+                                containerPort: {{ $mcpPort }}
+                            readinessProbe:
+                              httpGet:
+                                path: /readyz
+                                port: {{ $mcpPort }}
+                              initialDelaySeconds: 3
+                              periodSeconds: 5
+                            livenessProbe:
+                              httpGet:
+                                path: /healthz
+                                port: {{ $mcpPort }}
+                              initialDelaySeconds: 5
+                              periodSeconds: 10
+                            volumeMounts:
+                              - name: profile
+                                mountPath: /etc/ai-store
+                                readOnly: true
+                              - name: creds
+                                mountPath: /var/run/ai-store/secrets/opendal-creds
+                                readOnly: true
+                              - name: ws-data
+                                mountPath: /var/lib/ai-store/ws
+                              - name: nvme-cache
+                                mountPath: /var/cache/ai-store/nvme
+                            resources:
+                              requests:
+                                cpu: 100m
+                                memory: 128Mi
+                              limits:
+                                cpu: "2"
+                                memory: 2Gi
+                        volumes:
+                          - name: profile
+                            configMap:
+                              name: {{ $project }}-profile
+                          - name: creds
+                            secret:
+                              secretName: {{ $project }}-opendal-creds
+                          - name: ws-data
+                            persistentVolumeClaim:
+                              claimName: {{ $project }}-ws-data
+                          - name: nvme-cache
+                            persistentVolumeClaim:
+                              claimName: {{ $project }}-nvme-cache
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-mcp-svc
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: mcp-svc
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "mcp-svc") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: v1
+                  kind: Service
+                  metadata:
+                    name: {{ $project }}-ai-store
+                    namespace: {{ $ns }}
+                  spec:
+                    type: ClusterIP
+                    ports:
+                      - name: mcp
+                        port: {{ $mcpPort }}
+                        targetPort: {{ $mcpPort }}
+                    selector:
+                      app.kubernetes.io/name: ai-store
+                      app.kubernetes.io/instance: {{ $project }}
+            ---
+            apiVersion: kubernetes.crossplane.io/v1alpha2
+            kind: Object
+            metadata:
+              name: {{ $xr.metadata.name }}-mcp-httproute
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: mcp-httproute
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "mcp-httproute") }}"
+            spec:
+              forProvider:
+                manifest:
+                  apiVersion: gateway.networking.k8s.io/v1
+                  kind: HTTPRoute
+                  metadata:
+                    name: {{ $project }}-mcp-route
+                    namespace: {{ $ns }}
+                  spec:
+                    parentRefs:
+                      - name: lab-zero-trust-gateway
+                        namespace: istio-system
+                    hostnames:
+                      - {{ $domain | quote }}
+                    rules:
+                      - matches:
+                          - path:
+                              type: PathPrefix
+                              value: /mcp
+                          - path:
+                              type: PathPrefix
+                              value: /healthz
+                        backendRefs:
+                          - name: {{ $project }}-ai-store
+                            port: {{ $mcpPort }}
+            ---
+            apiVersion: openidclient.keycloak.crossplane.io/v1alpha2
+            kind: Client
+            metadata:
+              name: {{ $xr.metadata.name }}-keycloak-client
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: keycloak-client
+                gotemplating.fn.crossplane.io/ready: "{{ template "isReady" (list $obs "keycloak-client") }}"
+            spec:
+              forProvider:
+                realmIdRef:
+                  name: corp-realm
+                clientId: {{ printf "ai-store-%s" $project | quote }}
+                name: {{ printf "PITS AI Storage MCP (%s)" $project | quote }}
+                enabled: true
+                accessType: "CONFIDENTIAL"
+                standardFlowEnabled: true
+                serviceAccountsEnabled: true
+                validRedirectUris:
+                  - {{ printf "https://%s/oauth2/callback" $domain | quote }}
+                webOrigins:
+                  - {{ printf "https://%s" $domain | quote }}
+              writeConnectionSecretToRef:
+                name: {{ printf "%s-oidc-secret" $project }}
+                namespace: {{ $ns }}
+              providerConfigRef:
+                name: keycloak-provider-config
+    - step: auto-ready
+      functionRef:
+        name: function-auto-ready

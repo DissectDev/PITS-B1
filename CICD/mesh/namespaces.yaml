@@ -1,0 +1,20 @@
+# Istio Ambient namespaces for cluster-pits-lab.
+# Talos Linux requires privileged PodSecurity on istio-system and ztunnel for CNI/in-pod eBPF/iptables redirection.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: istio-system
+  labels:
+    app.kubernetes.io/part-of: pits-istio-ambient
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: privileged
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ztunnel
+  labels:
+    app.kubernetes.io/part-of: pits-istio-ambient
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: privileged

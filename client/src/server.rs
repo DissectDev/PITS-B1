@@ -802,7 +802,62 @@ async fn api_catalog_refresh_entity(State(st): State<ConsoleState>) -> impl Into
     StatusCode::OK
 }
 
-async fn api_auth_guest_refresh() -> impl IntoResponse {
+async fn api_auth_guest_refresh(headers: HeaderMap) -> impl IntoResponse {
+    let header_val = |name: &str| -> Option<String> {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    let gw_user = header_val("x-auth-request-user")
+        .or_else(|| header_val("x-forwarded-user"));
+    let gw_email = header_val("x-auth-request-email")
+        .or_else(|| header_val("x-forwarded-email"));
+
+    if gw_user.is_some() || gw_email.is_some() {
+        let email = gw_email.unwrap_or_else(|| "pitsadmin@pits.home.arpa".to_string());
+        let raw_user = gw_user.unwrap_or_else(|| {
+            email
+                .split('@')
+                .next()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("pitsadmin")
+                .to_string()
+        });
+        let user_slug: String = raw_user
+            .to_ascii_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+            .collect();
+        let user_ref = format!(
+            "user:default/{}",
+            if user_slug.is_empty() { "pitsadmin" } else { &user_slug }
+        );
+        let identity = serde_json::json!({
+            "type": "user",
+            "userEntityRef": user_ref,
+            "ownershipEntityRefs": [user_ref, "group:default/operators", "group:default/risk-engineering"],
+        });
+        // Behind Zero-Trust Gateway (oauth2-proxy + Istio RequestAuthentication), omit the
+        // synthetic unsigned guest JWT so Backstage fetchApi relies on the gateway session cookie
+        // instead of sending an unsigned `Authorization: Bearer` header that Envoy JWKS rejects.
+        return Json(serde_json::json!({
+            "providerInfo": { "gatewayAuth": "oauth2-proxy" },
+            "profile": {
+                "displayName": raw_user,
+                "email": email,
+            },
+            "backstageIdentity": {
+                "expiresInSeconds": 3600,
+                "identity": identity.clone(),
+            },
+            "expiresInSeconds": 3600,
+            "identity": identity,
+        }));
+    }
+
     let now = chrono::Utc::now().timestamp();
     let exp = now + 86400;
     let payload = serde_json::json!({
@@ -967,6 +1022,7 @@ fn sanitized_profile_json(prof: &ClientProfile) -> serde_json::Value {
         "talosconfigPath": prof.talosconfig_path,
         "talosContext": prof.talos_context,
         "talosViaAgentBridge": prof.talos_via_agent_bridge,
+        "extraClusters": prof.extra_clusters,
     })
 }
 
@@ -990,6 +1046,7 @@ struct PitsProfilePatch {
     talosconfig_path: Option<String>,
     talos_context: Option<String>,
     talos_via_agent_bridge: Option<bool>,
+    extra_clusters: Option<Vec<crate::config::ExtraClusterConfig>>,
 }
 
 fn apply_optional_field(slot: &mut Option<String>, incoming: Option<String>) {
@@ -1030,6 +1087,12 @@ async fn api_pits_save_profile(
         }
         if let Some(v) = patch.talos_via_agent_bridge {
             prof.talos_via_agent_bridge = v;
+        }
+        if let Some(extras) = patch.extra_clusters {
+            prof.extra_clusters = extras
+                .into_iter()
+                .filter(|c| !c.name.trim().is_empty() && !c.kubeconfig_path.trim().is_empty())
+                .collect();
         }
 
         if let Some(ref ws_src) = prof.active_workspace_source {
@@ -1079,7 +1142,7 @@ async fn api_pits_generate_pki(
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .unwrap_or("100.74.25.42");
+        .unwrap_or("100.95.95.88");
     let pki = generate_agent_mtls_pki(san).map_err(err_resp)?;
 
     let out_dir = local_state_dir().join("agent-pki");
@@ -1605,6 +1668,10 @@ async fn api_k8s_summary(State(st): State<ConsoleState>) -> impl IntoResponse {
             total_pods: 0,
             bound_pvs: 0,
             npu_slices: vec![],
+            dra_slices: vec![],
+            dra_claims: vec![],
+            device_plugin_gpu_used: std::collections::BTreeMap::new(),
+            device_classes: vec![],
             error: Some(e.to_string()),
         }),
     };
@@ -1622,6 +1689,10 @@ async fn api_k8s_summary(State(st): State<ConsoleState>) -> impl IntoResponse {
             total_pods: 0,
             bound_pvs: 0,
             npu_slices: vec![],
+            dra_slices: vec![],
+            dra_claims: vec![],
+            device_plugin_gpu_used: std::collections::BTreeMap::new(),
+            device_classes: vec![],
             error: Some(e.to_string()),
         }),
     };
@@ -2391,6 +2462,28 @@ mod tests {
             );
         }
 
+        // 1b. Behind Zero-Trust Gateway (`X-Auth-Request-User`/`Email`), omit synthetic guest JWT
+        let (st, gw_auth) = call_json(
+            &app,
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/guest/refresh")
+                .header("x-auth-request-user", "admin")
+                .header("x-auth-request-email", "admin@martensite.dev")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(gw_auth.get("token").is_none());
+        assert!(gw_auth["backstageIdentity"].get("token").is_none());
+        assert_eq!(gw_auth["profile"]["displayName"], "admin");
+        assert_eq!(gw_auth["profile"]["email"], "admin@martensite.dev");
+        assert_eq!(
+            gw_auth["backstageIdentity"]["identity"]["userEntityRef"],
+            "user:default/admin"
+        );
+
         // 2. Backstage Catalog `/api/catalog/entity-facets` (repeated `facet` + `filter`)
         let (st, facets) = call_json(
             &app,
@@ -2402,12 +2495,12 @@ mod tests {
         .await;
         assert_eq!(st, StatusCode::OK);
         let spec_types = facets["facets"]["spec.type"].as_array().unwrap();
-        assert_eq!(spec_types.len(), 12);
+        assert_eq!(spec_types.len(), 13);
         let total_resources: usize = spec_types
             .iter()
             .map(|entry| entry["count"].as_u64().unwrap() as usize)
             .sum();
-        assert_eq!(total_resources, 31);
+        assert_eq!(total_resources, 33);
 
         // 3. Backstage Catalog `/api/catalog/entities/by-query` (repeated `filter` + pagination)
         let (st, by_query) = call_json(
@@ -2518,7 +2611,18 @@ mod tests {
         )
         .await;
         assert_eq!(st, StatusCode::OK);
-        assert_eq!(rtypes.as_array().unwrap().len(), 12);
+        assert_eq!(rtypes.as_array().unwrap().len(), 16);
+
+        let (st, cicd_stack) = call_json(
+            &app,
+            Request::builder()
+                .uri("/api/pits/v1/entities/default/pits-lab-acceleration")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(cicd_stack["resourceType"], "cicd-pipeline");
 
         let (st, host4) = call_json(
             &app,

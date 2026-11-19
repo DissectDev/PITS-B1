@@ -1,0 +1,136 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xaistorageworkspaces.storage.ai.pits.io
+spec:
+  group: storage.ai.pits.io
+  names:
+    kind: XAIStorageWorkspace
+    plural: xaistorageworkspaces
+  claimNames:
+    kind: AIStorageWorkspace
+    plural: aistorageworkspaces
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [projectName, environment]
+              properties:
+                projectName:
+                  type: string
+                environment:
+                  type: string
+                  enum: [lab-local, lab-rustfs, cloud-s3-hybrid]
+                  default: lab-rustfs
+                excludeNodes:
+                  type: array
+                  items:
+                    type: string
+                  default: ["netboot-004"]
+                domain:
+                  type: string
+                  default: mcp.lab.martensite.dev
+                storage:
+                  type: object
+                  properties:
+                    stateStorageClass:
+                      type: string
+                      default: mayastor-2
+                    cacheStorageClass:
+                      type: string
+                      default: openebs-single-replica
+                    rustfsSize:
+                      type: string
+                      default: 40Gi
+                    dbSize:
+                      type: string
+                      default: 10Gi
+                images:
+                  type: object
+                  properties:
+                    aiStore:
+                      type: string
+                      default: docker.io/pits/ai-store:v0.1.0
+                    rustfs:
+                      type: string
+                      default: docker.io/rustfs/rustfs:latest
+                    valkey:
+                      type: string
+                      default: docker.io/valkey/valkey:8-alpine
+                    postgres:
+                      type: string
+                      default: ghcr.io/cloudnative-pg/postgresql:17.6
+                archetypes:
+                  type: object
+                  properties:
+                    workspace:
+                      type: object
+                      properties:
+                        enabled: { type: boolean, default: true }
+                        pvcSize: { type: string, default: 20Gi }
+                    memory:
+                      type: object
+                      properties:
+                        enabled: { type: boolean, default: true }
+                        ttlDays: { type: integer, default: 90 }
+                    knowledge:
+                      type: object
+                      properties:
+                        enabled: { type: boolean, default: true }
+                        enableVector: { type: boolean, default: true }
+                        enableTrigram: { type: boolean, default: true }
+                    datasets:
+                      type: object
+                      properties:
+                        enabled: { type: boolean, default: true }
+                        hfRepo: { type: string }
+                        cacheSize: { type: string, default: 20Gi }
+                    artifacts:
+                      type: object
+                      properties:
+                        enabled: { type: boolean, default: true }
+                        maxFileSizeMB: { type: integer, default: 512 }
+                    traces:
+                      type: object
+                      properties:
+                        enabled: { type: boolean, default: true }
+                        format: { type: string, default: jsonl }
+                        flushIntervalSec: { type: integer, default: 15 }
+                    state:
+                      type: object
+                      properties:
+                        enabled: { type: boolean, default: true }
+                    sharedDrive:
+                      type: object
+                      properties:
+                        enabled: { type: boolean, default: true }
+                mcp:
+                  type: object
+                  properties:
+                    replicas: { type: integer, default: 1 }
+                    port: { type: integer, default: 8787 }
+                    toolsPreset:
+                      type: string
+                      enum: [full, readonly, sandbox-worker]
+                      default: full
+                    authMode:
+                      type: string
+                      enum: [keycloak-jwt, bearer-secret]
+                      default: keycloak-jwt
+            status:
+              type: object
+              properties:
+                mcpEndpoint: { type: string }
+                internalEndpoint: { type: string }
+                profileConfigMap: { type: string }
+                credentialSecret: { type: string }
+                readyArchetypes:
+                  type: array
+                  items: { type: string }

@@ -257,6 +257,10 @@ func (in *Inspector) Inspect(ctx context.Context) (*api.VPPInspectReport, error)
 	for _, rt := range routes {
 		report.Routes = append(report.Routes, rt.Route.Prefix.String())
 	}
+	if showIfRaw, cerr := cliInband(ctx, conn, "show interface"); cerr == nil && showIfRaw != "" {
+		parsedCounters := ParseShowInterfaceCounters(showIfRaw)
+		MergeInterfaceCounters(report, parsedCounters, time.Now().UTC())
+	}
 	return report, nil
 }
 

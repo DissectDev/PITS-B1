@@ -1,0 +1,67 @@
+# Three-stage Zero-Trust Security Policies bound to lab-zero-trust-gateway (istio-system):
+# 1. CUSTOM AuthorizationPolicy (ext_authz -> oauth2-proxy) for browser requests (non-Bearer, non-/oauth2/*).
+# 2. RequestAuthentication (Envoy jwt_authn) validating Keycloak corp JWKS on all Bearer tokens.
+# 3. ALLOW AuthorizationPolicy permitting /oauth2/* callbacks or JWT claims with acr == "fido2".
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: lab-gateway-ext-authz
+  namespace: istio-system
+spec:
+  targetRefs:
+    - kind: Gateway
+      group: gateway.networking.k8s.io
+      name: lab-zero-trust-gateway
+  action: CUSTOM
+  provider:
+    name: oauth2-proxy-ext-authz
+  rules:
+    - to:
+        - operation:
+            notPaths:
+              - "/oauth2/*"
+      when:
+        - key: request.headers[authorization]
+          notValues:
+            - "Bearer *"
+---
+apiVersion: security.istio.io/v1
+kind: RequestAuthentication
+metadata:
+  name: lab-gateway-keycloak-jwt
+  namespace: istio-system
+spec:
+  targetRefs:
+    - kind: Gateway
+      group: gateway.networking.k8s.io
+      name: lab-zero-trust-gateway
+  jwtRules:
+    - issuer: "https://sso.martensite.dev/realms/corp"
+      jwksUri: "https://sso.martensite.dev/realms/corp/protocol/openid-connect/certs"
+      forwardOriginalToken: true
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: lab-gateway-require-fido2
+  namespace: istio-system
+spec:
+  targetRefs:
+    - kind: Gateway
+      group: gateway.networking.k8s.io
+      name: lab-zero-trust-gateway
+  action: ALLOW
+  rules:
+    - to:
+        - operation:
+            paths:
+              - "/oauth2/*"
+    - from:
+        - source:
+            requestPrincipals:
+              - "*"
+      when:
+        - key: request.auth.claims[acr]
+          values:
+            - "fido2"

@@ -1,0 +1,255 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-flow-sync-script
+  namespace: iam-system
+data:
+  sync_flow.py: |
+    import json
+    import os
+    import ssl
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    BASE_URL = os.environ["KEYCLOAK_URL"].rstrip("/")
+    TOKEN_REALM = os.environ.get("KEYCLOAK_TOKEN_REALM", "master")
+    CLIENT_ID = os.environ["KEYCLOAK_CLIENT_ID"]
+    CLIENT_SECRET = os.environ["KEYCLOAK_CLIENT_SECRET"]
+    SPEC_PATH = os.environ.get("FLOW_SPEC_PATH", "/config/flow-spec.json")
+    CA_CERT_PATH = os.environ.get("KEYCLOAK_CA_CERT_PATH", "").strip()
+
+    SSL_CTX = None
+    if CA_CERT_PATH and os.path.exists(CA_CERT_PATH):
+        SSL_CTX = ssl.create_default_context(cafile=CA_CERT_PATH)
+
+
+    def http_request(method, url, token=None, data=None, form=False):
+        headers = {}
+        body = None
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        if data is not None:
+            if form:
+                headers["Content-Type"] = "application/x-www-form-urlencoded"
+                body = urllib.parse.urlencode(data).encode("utf-8")
+            else:
+                headers["Content-Type"] = "application/json"
+                body = json.dumps(data).encode("utf-8")
+        req = urllib.request.Request(url, data=body, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=30, context=SSL_CTX) as resp:
+                raw = resp.read().decode("utf-8")
+                return resp.status, json.loads(raw) if raw else None
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"HTTP {e.code} {method} {url}: {err_body}") from e
+
+
+    def get_token():
+        url = f"{BASE_URL}/realms/{TOKEN_REALM}/protocol/openid-connect/token"
+        _, resp = http_request(
+            "POST",
+            url,
+            data={
+                "grant_type": "client_credentials",
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+            },
+            form=True,
+        )
+        return resp["access_token"]
+
+
+    def encode_alias(alias):
+        return urllib.parse.quote(alias, safe="")
+
+
+    def list_flows(token, realm):
+        url = f"{BASE_URL}/admin/realms/{realm}/authentication/flows"
+        _, flows = http_request("GET", url, token=token)
+        return flows
+
+
+    def list_executions(token, realm, flow_alias):
+        url = f"{BASE_URL}/admin/realms/{realm}/authentication/flows/{encode_alias(flow_alias)}/executions"
+        _, execs = http_request("GET", url, token=token)
+        return execs
+
+
+    def get_realm(token, realm):
+        url = f"{BASE_URL}/admin/realms/{realm}"
+        _, data = http_request("GET", url, token=token)
+        return data
+
+
+    def list_clients(token, realm):
+        url = f"{BASE_URL}/admin/realms/{realm}/clients?max=1000"
+        _, data = http_request("GET", url, token=token)
+        return data
+
+
+    def collect_bound_flow_ids(token, realm):
+        bound_ids = set()
+        for c in list_clients(token, realm):
+            overrides = c.get("authenticationFlowBindingOverrides") or {}
+            for flow_id in overrides.values():
+                if flow_id:
+                    bound_ids.add(flow_id)
+        return bound_ids
+
+
+    def populate_steps(token, realm, parent_alias, steps):
+        for idx, step in enumerate(steps):
+            step_type = step.get("type", "execution")
+            requirement = step.get("requirement", "REQUIRED")
+            before_ids = {e["id"] for e in list_executions(token, realm, parent_alias)}
+
+            if step_type == "subflow":
+                sub_alias = step["alias"]
+                http_request(
+                    "POST",
+                    f"{BASE_URL}/admin/realms/{realm}/authentication/flows/{encode_alias(parent_alias)}/executions/flow",
+                    token=token,
+                    data={
+                        "alias": sub_alias,
+                        "type": step.get("flowType", "basic-flow"),
+                        "description": step.get("description", ""),
+                        "provider": step.get("provider", "registration-page-form"),
+                    },
+                )
+                after_execs = list_executions(token, realm, parent_alias)
+                created = [e for e in after_execs if e["id"] not in before_ids]
+                if not created:
+                    raise RuntimeError(f"Failed to locate created subflow '{sub_alias}' under '{parent_alias}'")
+                target_exec = created[-1]
+                target_exec["requirement"] = requirement
+                http_request(
+                    "PUT",
+                    f"{BASE_URL}/admin/realms/{realm}/authentication/flows/{encode_alias(parent_alias)}/executions",
+                    token=token,
+                    data=target_exec,
+                )
+                populate_steps(token, realm, sub_alias, step.get("steps", []))
+
+            elif step_type == "execution":
+                provider = step["provider"]
+                http_request(
+                    "POST",
+                    f"{BASE_URL}/admin/realms/{realm}/authentication/flows/{encode_alias(parent_alias)}/executions/execution",
+                    token=token,
+                    data={"provider": provider},
+                )
+                after_execs = list_executions(token, realm, parent_alias)
+                created = [e for e in after_execs if e["id"] not in before_ids]
+                if not created:
+                    raise RuntimeError(f"Failed to locate created execution '{provider}' under '{parent_alias}'")
+                target_exec = created[-1]
+                target_exec["requirement"] = requirement
+                http_request(
+                    "PUT",
+                    f"{BASE_URL}/admin/realms/{realm}/authentication/flows/{encode_alias(parent_alias)}/executions",
+                    token=token,
+                    data=target_exec,
+                )
+                if step.get("config"):
+                    cfg_alias = step.get("configAlias") or f"{parent_alias}-{provider}-{idx}"
+                    http_request(
+                        "POST",
+                        f"{BASE_URL}/admin/realms/{realm}/authentication/executions/{target_exec['id']}/config",
+                        token=token,
+                        data={"alias": cfg_alias, "config": step["config"]},
+                    )
+            else:
+                raise ValueError(f"Unknown step type: {step_type}")
+
+
+    def cleanup_old_flows(token, realm, base_alias, current_alias):
+        prefix = f"{base_alias}-"
+        realm_rep = get_realm(token, realm)
+        bound_aliases = {
+            realm_rep.get("browserFlow"),
+            realm_rep.get("registrationFlow"),
+            realm_rep.get("directGrantFlow"),
+            realm_rep.get("resetCredentialsFlow"),
+            realm_rep.get("clientAuthenticationFlow"),
+            realm_rep.get("dockerAuthenticationFlow"),
+        }
+        bound_ids = collect_bound_flow_ids(token, realm)
+
+        for f in list_flows(token, realm):
+            alias = f.get("alias", "")
+            fid = f.get("id")
+            if alias.startswith(prefix) and alias != current_alias and not f.get("builtIn"):
+                if alias in bound_aliases or fid in bound_ids:
+                    print(f"[skip cleanup] flow {alias} ({fid}) is still bound")
+                    continue
+                print(f"[cleanup] deleting unused old flow {alias} ({fid})")
+                http_request(
+                    "DELETE",
+                    f"{BASE_URL}/admin/realms/{realm}/authentication/flows/{fid}",
+                    token=token,
+                )
+
+
+    def main():
+        with open(SPEC_PATH, "r", encoding="utf-8") as f:
+            spec = json.load(f)
+
+        realm = spec["realm"]
+        base_alias = spec["baseAlias"]
+        target_alias = spec["targetAlias"]
+        description = spec.get("description", "")
+        steps = spec.get("steps", [])
+        bind_realm_browser = spec.get("bindAsRealmBrowserFlow", False)
+        cleanup_old = spec.get("cleanupUnusedVersions", True)
+
+        token = get_token()
+        existing = {f["alias"]: f for f in list_flows(token, realm)}
+
+        if target_alias in existing:
+            old_id = existing[target_alias]["id"]
+            realm_rep = get_realm(token, realm)
+            bound_ids = collect_bound_flow_ids(token, realm)
+            if realm_rep.get("browserFlow") == target_alias or old_id in bound_ids:
+                print(f"[ok] flow {target_alias} ({old_id}) already active & bound; skipping recreate")
+                return
+            print(f"[retry-reset] deleting incomplete unbound flow {target_alias} ({old_id})")
+            http_request(
+                "DELETE",
+                f"{BASE_URL}/admin/realms/{realm}/authentication/flows/{old_id}",
+                token=token,
+            )
+
+        print(f"[create] top-level flow {target_alias} in realm {realm}")
+        http_request(
+            "POST",
+            f"{BASE_URL}/admin/realms/{realm}/authentication/flows",
+            token=token,
+            data={
+                "alias": target_alias,
+                "description": description,
+                "providerId": "basic-flow",
+                "topLevel": True,
+                "builtIn": False,
+            },
+        )
+
+        populate_steps(token, realm, target_alias, steps)
+
+        if bind_realm_browser:
+            print(f"[bind] setting realm '{realm}' browserFlow -> '{target_alias}'")
+            realm_rep = get_realm(token, realm)
+            realm_rep["browserFlow"] = target_alias
+            http_request("PUT", f"{BASE_URL}/admin/realms/{realm}", token=token, data=realm_rep)
+
+        if cleanup_old:
+            cleanup_old_flows(token, realm, base_alias, target_alias)
+
+        flows_after = {f["alias"]: f for f in list_flows(token, realm)}
+        flow_id = flows_after[target_alias]["id"]
+        print(f"[done] synced flow alias={target_alias} id={flow_id}")
+
+
+    if __name__ == "__main__":
+        main()

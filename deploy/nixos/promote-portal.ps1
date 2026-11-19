@@ -1,9 +1,16 @@
 <#
 .SYNOPSIS
   Build and declaratively deploy/promote the PITS Backstage v1.56 Control-Plane Portal (`pits-portal`)
-  to NixOS `pits-core` (`100.74.25.42`).
+  to NixOS `pits-core` (`100.95.95.88`).
 
 .DESCRIPTION
+  Unified build, verification, and deployment workflows for `c:\Project\PITS\Infra` have been
+  handed over to the `CICD/` subproject (`CICD/scripts/Invoke-CicdPipeline.ps1` and
+  `CICD/scripts/Deploy-CoreArtifacts.ps1 -Target portal`). This script remains the declarative
+  NixOS promotion backend invoked by `Deploy-CoreArtifacts.ps1` and stays directly callable for
+  backward compatibility (pass `-ViaCicd` to delegate through `Deploy-CoreArtifacts.ps1` with
+  pre-promotion `cluster-pits-lab` verification).
+
   1. Optionally rebuilds `portal/dist` (`npm.cmd run build`) with your latest UI edits.
   2. Vendors Cargo crates offline outside the Git tree and streams clean source (`client/`,
      `portal/dist/`, `vendor/`) over Tailscale SSH to `/var/lib/pits/portal-src`.
@@ -14,23 +21,34 @@
   4. Compiles `pitsctl` natively inside Nix on `pits-core` (pinning a Nix GC root at
      `/var/lib/pits/portal/current`), links `/var/lib/pits/portal/bin/pitsctl`, runs
      `nixos-rebuild switch --flake path:/home/libraskywalker/PITS-B1#core` (with rollback
-     on error), and verifies live portal readiness on `http://100.74.25.42:18090`.
+     on error), and verifies live portal readiness on `http://100.95.95.88:18090`.
 #>
 [CmdletBinding()]
 param(
-    [string]$SshTarget = "root@100.74.25.42",
+    [string]$SshTarget = "root@100.95.95.88",
     [string]$FlakeDir = "/home/libraskywalker/PITS-B1/Base",
     [string]$FlakeAttr = "core",
-    [string]$PortalHost = "100.74.25.42",
+    [string]$PortalHost = "100.95.95.88",
     [int]$PortalPort = 18090,
     [string]$WorkspaceSource = "c:\Users\pitsadmin\edge-router",
     [switch]$SkipUiBuild,
     [switch]$SyncProfile,
-    [switch]$NoSwitch
+    [switch]$NoSwitch,
+    [switch]$ViaCicd
 )
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$CicdDeployScript = Join-Path $RepoRoot "CICD\scripts\Deploy-CoreArtifacts.ps1"
+if ($ViaCicd) {
+    if (-not (Test-Path $CicdDeployScript)) {
+        throw "CICD handover orchestrator not found at $CicdDeployScript"
+    }
+    Write-Host "[Handover] Delegating portal promotion to CICD/scripts/Deploy-CoreArtifacts.ps1 -Target portal..." -ForegroundColor Cyan
+    & $CicdDeployScript -Target portal -SshTarget $SshTarget
+    exit $LASTEXITCODE
+}
+
 $PortalDir = Join-Path $RepoRoot "portal"
 $ClientDir = Join-Path $RepoRoot "client"
 $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
@@ -41,17 +59,14 @@ function Invoke-SshScript {
     )
     $cleanScript = $Script.Replace("`r`n", "`n") + "`n"
     $bytes = $Utf8NoBom.GetBytes($cleanScript)
-    $len = $bytes.Length
+    $b64 = [Convert]::ToBase64String($bytes)
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = "ssh"
-    $psi.Arguments = "-T -o BatchMode=yes -o ConnectTimeout=10 $SshTarget `"head -c $len | sh -eu`""
+    $psi.Arguments = "-T -o BatchMode=yes -o ConnectTimeout=10 $SshTarget `"printf '%s' '$b64' | base64 -d | sh -eu`""
     $psi.UseShellExecute = $false
-    $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $proc = [System.Diagnostics.Process]::Start($psi)
-    $proc.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
-    $proc.StandardInput.Close()
     $outTask = $proc.StandardOutput.ReadToEndAsync()
     $errTask = $proc.StandardError.ReadToEndAsync()
     $proc.WaitForExit()
@@ -69,27 +84,20 @@ function Send-BytesOverSsh {
         [Parameter(Mandatory = $true)][string]$RemotePath,
         [string]$ModeOctal = "0644"
     )
-    $len = $Bytes.Length
+    $id = [Guid]::NewGuid().ToString("N").Substring(0, 8)
+    $localTmp = Join-Path $env:TEMP "pits-file-$id.tmp"
+    $remoteTmp = "/tmp/pits-file-$id.tmp"
     $parent = ($RemotePath -replace '/[^/]+$', '')
     if ([string]::IsNullOrWhiteSpace($parent)) { $parent = "/var/lib/pits/portal" }
-    $remoteCmd = "umask 077 && mkdir -p '$parent' && tmp='$RemotePath.tmp.$$' && head -c $len > `"`$tmp`" && chmod $ModeOctal `"`$tmp`" && mv -f `"`$tmp`" '$RemotePath'"
-    $psi = [System.Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName = "ssh"
-    $psi.Arguments = "-T -o BatchMode=yes -o ConnectTimeout=10 $SshTarget `"$remoteCmd`""
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardInput = $true
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $proc = [System.Diagnostics.Process]::Start($psi)
-    $proc.StandardInput.BaseStream.Write($Bytes, 0, $Bytes.Length)
-    $proc.StandardInput.Close()
-    $outTask = $proc.StandardOutput.ReadToEndAsync()
-    $errTask = $proc.StandardError.ReadToEndAsync()
-    $proc.WaitForExit()
-    $null = $outTask.GetAwaiter().GetResult()
-    $stderr = $errTask.GetAwaiter().GetResult()
-    if ($proc.ExitCode -ne 0) {
-        throw "SSH upload to ${SshTarget}:${RemotePath} failed (exit $($proc.ExitCode)): $stderr"
+    [System.IO.File]::WriteAllBytes($localTmp, $Bytes)
+    try {
+        & scp.exe -q -o BatchMode=yes -o ConnectTimeout=10 $localTmp "${SshTarget}:${remoteTmp}"
+        if ($LASTEXITCODE -ne 0) {
+            throw "scp upload to ${SshTarget}:${RemotePath} failed (exit $LASTEXITCODE)"
+        }
+        $null = Invoke-SshScript "umask 077 && mkdir -p '$parent' && chmod $ModeOctal '$remoteTmp' && mv -f '$remoteTmp' '$RemotePath'"
+    } finally {
+        Remove-Item -Force $localTmp -ErrorAction SilentlyContinue
     }
 }
 
@@ -99,25 +107,19 @@ function Send-TarGzOverSsh {
         [Parameter(Mandatory = $true)][string]$RemoteCommandTemplate,
         [Parameter(Mandatory = $true)][string]$Label
     )
-    $len = $Bytes.Length
-    $remoteCmd = $RemoteCommandTemplate.Replace("__LEN__", "$len")
-    $psi = [System.Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName = "ssh"
-    $psi.Arguments = "-T -o BatchMode=yes -o ConnectTimeout=10 $SshTarget `"$remoteCmd`""
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardInput = $true
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $proc = [System.Diagnostics.Process]::Start($psi)
-    $proc.StandardInput.BaseStream.Write($Bytes, 0, $Bytes.Length)
-    $proc.StandardInput.Close()
-    $outTask = $proc.StandardOutput.ReadToEndAsync()
-    $errTask = $proc.StandardError.ReadToEndAsync()
-    $proc.WaitForExit()
-    $stdout = $outTask.GetAwaiter().GetResult()
-    $stderr = $errTask.GetAwaiter().GetResult()
-    if ($proc.ExitCode -ne 0) {
-        throw "Upload $Label to $SshTarget failed (exit $($proc.ExitCode)):`nSTDERR: $stderr`nSTDOUT: $stdout"
+    $id = [Guid]::NewGuid().ToString("N").Substring(0, 8)
+    $localTmp = Join-Path $env:TEMP "pits-scp-$id.tar.gz"
+    $remoteTmp = "/tmp/pits-scp-$id.tar.gz"
+    [System.IO.File]::WriteAllBytes($localTmp, $Bytes)
+    try {
+        & scp.exe -q -o BatchMode=yes -o ConnectTimeout=10 $localTmp "${SshTarget}:${remoteTmp}"
+        if ($LASTEXITCODE -ne 0) {
+            throw "scp upload $Label to $SshTarget failed (exit $LASTEXITCODE)"
+        }
+        $remoteCmd = $RemoteCommandTemplate.Replace("head -c __LEN__ | tar -xzf -", "tar --warning=no-unknown-keyword -xzf '$remoteTmp'") + " && rm -f '$remoteTmp'"
+        $null = Invoke-SshScript "trap 'rm -f $remoteTmp' EXIT`n$remoteCmd"
+    } finally {
+        Remove-Item -Force $localTmp -ErrorAction SilentlyContinue
     }
 }
 
@@ -306,6 +308,13 @@ CARGOEOF
   mv /var/lib/pits/portal-vendor.new /var/lib/pits/portal-vendor
 fi
 
+export NIX_REMOTE=daemon
+nix --extra-experimental-features 'nix-command flakes' build \
+  --offline \
+  --impure \
+  --no-warn-dirty \
+  --out-link /var/lib/pits/portal/current \
+  --expr "((builtins.getFlake \"path:$FlakeTrim\").nixosConfigurations.$FlakeAttr.pkgs.callPackage $FlakeTrim/modules/pits-portal-package.nix { src = /var/lib/pits/portal-src; vendorSrc = /var/lib/pits/portal-vendor; })" || \
 nix --extra-experimental-features 'nix-command flakes' build \
   --impure \
   --no-warn-dirty \
@@ -341,7 +350,8 @@ if [ -f '$FlakeTrim/flake.nix' ]; then
   chown --reference='$FlakeTrim/flake.nix' "`$HOST_DEFAULT" || true
 fi
 
-if ! nixos-rebuild $subCmd --flake 'path:$FlakeTrim#$FlakeAttr'; then
+export NIX_REMOTE=daemon
+if ! nixos-rebuild $subCmd --offline --flake 'path:$FlakeTrim#$FlakeAttr' && ! nixos-rebuild $subCmd --flake 'path:$FlakeTrim#$FlakeAttr'; then
   if [ -f /var/lib/pits/portal/default.nix.bak ]; then
     cp -f /var/lib/pits/portal/default.nix.bak "`$HOST_DEFAULT"
     chown --reference='$FlakeTrim/flake.nix' "`$HOST_DEFAULT" || true

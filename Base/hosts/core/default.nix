@@ -4,6 +4,7 @@
   imports = [
     ../../modules/pits-agent.nix
     ../../modules/pits-portal.nix
+    ../../modules/pits-mode-a-gateway.nix
     ./hardware.nix
     ./filesystems.nix
     ../../modules/site-check.nix

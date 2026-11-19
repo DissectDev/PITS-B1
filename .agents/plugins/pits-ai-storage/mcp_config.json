@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "pits-ai-storage-remote": {
+      "serverUrl": "https://mcp.lab.martensite.dev/mcp",
+      "headers": {
+        "Authorization": "Bearer ${AI_STORE_MCP_TOKEN}"
+      }
+    },
+    "pits-ai-storage-local": {
+      "command": "c:/Project/PITS/Infra/ai-storage/bin/ai-store.exe",
+      "args": ["mcp"]
+    }
+  }
+}

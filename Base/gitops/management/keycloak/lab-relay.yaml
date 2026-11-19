@@ -1,0 +1,99 @@
+# Exposes ONLY Keycloak (:8443 TLS passthrough) onto VLAN 20 (10.89.20.30)
+# so cluster-pits-lab Crossplane IAM control plane can manage Keycloak on pits-core
+# without opening EdgeRouter management-net isolation.
+---
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: keycloak-lab
+  namespace: keycloak
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "name": "keycloak-lab",
+      "type": "macvlan",
+      "master": "sfp0.20",
+      "mode": "bridge",
+      "ipam": {
+        "type": "static",
+        "addresses": [
+          {
+            "address": "10.89.20.30/24"
+          }
+        ]
+      }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-lab-relay-nginx
+  namespace: keycloak
+data:
+  nginx.conf: |
+    worker_processes 1;
+    events {
+      worker_connections 512;
+    }
+    stream {
+      resolver 10.43.0.10 valid=10s ipv6=off;
+      server {
+        listen 10.89.20.30:8443;
+        proxy_connect_timeout 5s;
+        proxy_timeout 60s;
+        set $kc_upstream keycloak-service.keycloak.svc.cluster.local:8443;
+        proxy_pass $kc_upstream;
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak-lab-relay
+  namespace: keycloak
+  labels:
+    app: keycloak-lab-relay
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keycloak-lab-relay
+  template:
+    metadata:
+      labels:
+        app: keycloak-lab-relay
+      annotations:
+        k8s.v1.cni.cncf.io/networks: '[{"name":"keycloak-lab","interface":"lab0"}]'
+    spec:
+      containers:
+        - name: nginx
+          image: docker.io/library/nginx:1.29-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8443
+              name: https
+          volumeMounts:
+            - name: nginx-conf
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+          readinessProbe:
+            exec:
+              command:
+                - nc
+                - -z
+                - 10.89.20.30
+                - "8443"
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: nginx-conf
+          configMap:
+            name: keycloak-lab-relay-nginx

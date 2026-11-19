@@ -45,6 +45,84 @@ pub struct EntityRelation {
     pub target_ref: String,
 }
 
+/// Observation mode governing the static-policy vs. dynamic-telemetry balance of a Resource Type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ObservationMode {
+    PolicyFirst,
+    #[default]
+    Hybrid,
+    DynamicFirst,
+    GovernanceEvent,
+}
+
+impl ObservationMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ObservationMode::PolicyFirst => "policy-first",
+            ObservationMode::Hybrid => "hybrid",
+            ObservationMode::DynamicFirst => "dynamic-first",
+            ObservationMode::GovernanceEvent => "governance-event",
+        }
+    }
+
+    pub fn cadence_tier(&self) -> &'static str {
+        match self {
+            ObservationMode::PolicyFirst => "slow-300s",
+            ObservationMode::Hybrid => "standard-60s",
+            ObservationMode::DynamicFirst => "fast-15s",
+            ObservationMode::GovernanceEvent => "event-driven",
+        }
+    }
+}
+
+/// Compact static-policy or type-level highlight pill (`key`, `label`, `value`, `status`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SummaryPill {
+    pub key: String,
+    pub label: String,
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+}
+
+/// Live dynamic telemetry signal with delta (`Δ`), trend indicator, and observation freshness age.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DynamicSignal {
+    pub key: String,
+    pub label: String,
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delta: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trend: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_age_secs: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+}
+
+/// Dual-track structured summary combining static contract invariants and live dynamic signals.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntitySummary {
+    pub observation_mode: ObservationMode,
+    pub cadence_tier: String,
+    pub headline: String,
+    #[serde(default)]
+    pub static_policy: Vec<SummaryPill>,
+    #[serde(default)]
+    pub dynamic_signals: Vec<DynamicSignal>,
+    #[serde(default)]
+    pub drift_detected: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drift_summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_changed_at: Option<DateTime<Utc>>,
+}
+
 /// First-class Resource Type (`spec.type`) summary for portal directory & `pitsctl types`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,6 +135,16 @@ pub struct ResourceTypeSummary {
     pub healthy_count: usize,
     pub warning_count: usize,
     pub action_ids: Vec<String>,
+    #[serde(default)]
+    pub observation_mode: String,
+    #[serde(default)]
+    pub cadence_tier: String,
+    #[serde(default)]
+    pub policy_compliant_count: usize,
+    #[serde(default)]
+    pub drifted_count: usize,
+    #[serde(default)]
+    pub highlights: Vec<SummaryPill>,
 }
 
 /// Grouped key-value attribute table on an Entity Landing Page.
@@ -127,6 +215,8 @@ pub struct PitsEntityDetail {
     pub status: String,
     pub status_level: String,
     pub summary_line: String,
+    #[serde(default)]
+    pub summary: EntitySummary,
     pub refreshed_at: DateTime<Utc>,
     pub live_connected: bool,
     pub attribute_sections: Vec<AttributeSection>,

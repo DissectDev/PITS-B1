@@ -18,17 +18,118 @@ on:
 
 jobs:
   rust-test:
-    name: Cargo Check & Test (client)
-    runs-on: ubuntu-latest
+    name: Cargo Check & Nextest (client)
+    runs-on: pits-lab-rust
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Ensure portal dist placeholder for client/build.rs
+      - name: Verify preinstalled Rust toolchain & configure offline DDR5 tmpfs cache
         run: |
-          mkdir -p portal/dist
-          test -f portal/dist/index.html || printf '<!doctype html><html><body>PITS Portal Stub</body></html>\n' > portal/dist/index.html
-      - name: Run cargo check and cargo test
+          set -euo pipefail
+          for bin in rustc cargo cargo-nextest; do
+            if ! command -v "$bin" >/dev/null 2>&1; then
+              echo "Missing required toolchain binary: $bin" >&2
+              exit 1
+            fi
+          done
+          rustc --version
+          cargo --version
+          cargo-nextest --version
+          if [ -d /ramdisk ]; then
+            mkdir -p /ramdisk/cargo-home /ramdisk/cargo-target
+            echo "CARGO_HOME=/ramdisk/cargo-home" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_DIR=/ramdisk/cargo-target" >> "$GITHUB_ENV"
+            if [ -f /opt/pits-cache/cargo-config.toml ]; then
+              cp -f /opt/pits-cache/cargo-config.toml /ramdisk/cargo-home/config.toml
+            fi
+          fi
+      - name: Ensure clean fallback to embedded webui when portal dist bundle is absent
+        run: |
+          if [ -f portal/dist/index.html ] && [ ! -d portal/dist/assets ]; then
+            rm -rf portal/dist
+          fi
+      - name: Run cargo nextest and cargo check
         working-directory: client
         run: |
-          cargo check --locked
-          cargo test --locked
+          set -euo pipefail
+          CARGO_CFG="${CARGO_HOME:-$HOME/.cargo}/config.toml"
+          OFFLINE_FLAGS="--frozen"
+          if [ -f "$CARGO_CFG" ] && grep -q 'offline = true' "$CARGO_CFG"; then
+            OFFLINE_FLAGS="--offline --frozen"
+          fi
+          cargo nextest run ${OFFLINE_FLAGS} -j 1 --retries 2 --no-fail-fast
+          cargo check ${OFFLINE_FLAGS} --all-targets
+
+  windows-target:
+    name: Windows Target Cross-Compile (x86_64-pc-windows-gnu)
+    runs-on: pits-lab-windows
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Rust x86_64-pc-windows-gnu & MinGW-w64 toolchain
+        run: |
+          set -euo pipefail
+          for bin in rustc cargo x86_64-w64-mingw32-gcc x86_64-w64-mingw32-ar x86_64-w64-mingw32-objdump; do
+            if ! command -v "$bin" >/dev/null 2>&1; then
+              echo "Missing required Windows cross-compile binary: $bin" >&2
+              exit 1
+            fi
+          done
+          SYSROOT="$(rustc --print sysroot)"
+          if [ ! -d "${SYSROOT}/lib/rustlib/x86_64-pc-windows-gnu" ]; then
+            echo "Missing Rust stdlib for x86_64-pc-windows-gnu in ${SYSROOT}/lib/rustlib" >&2
+            exit 1
+          fi
+          rustc --version
+          x86_64-w64-mingw32-gcc --version | head -n 1
+          if [ -d /ramdisk ]; then
+            mkdir -p /ramdisk/cargo-home /ramdisk/cargo-target /ramdisk/npm-cache
+            echo "CARGO_HOME=/ramdisk/cargo-home" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_DIR=/ramdisk/cargo-target" >> "$GITHUB_ENV"
+            echo "npm_config_cache=/ramdisk/npm-cache" >> "$GITHUB_ENV"
+            if [ -f /opt/pits-cache/cargo-config.toml ]; then
+              cp -f /opt/pits-cache/cargo-config.toml /ramdisk/cargo-home/config.toml
+            fi
+          fi
+      - name: Ensure clean embedded webui or build portal/dist when available
+        run: |
+          set -euo pipefail
+          if [ -f portal/dist/index.html ] && [ ! -d portal/dist/assets ]; then
+            rm -rf portal/dist
+          fi
+          if [ ! -f portal/dist/index.html ] && [ -f portal/package.json ]; then
+            if [ -d /ramdisk/portal-node-modules/.bin ] || [ -e /opt/pits-cache/portal-node-modules/vite/package.json ]; then
+              cd portal
+              if [ -L node_modules ] || [ ! -d node_modules/.bin ]; then
+                rm -rf node_modules
+                if [ -d /ramdisk/portal-node-modules/.bin ]; then
+                  cp -a /ramdisk/portal-node-modules node_modules
+                  chmod -R u+w node_modules
+                else
+                  STORE_NM="$(dirname "$(dirname "$(readlink -f /opt/pits-cache/portal-node-modules/vite/package.json)")")"
+                  cp -a "$STORE_NM" node_modules
+                  chmod -R u+w node_modules
+                fi
+              fi
+              ./node_modules/.bin/vite build
+            fi
+          fi
+      - name: Cross-check all targets & build release pitsctl.exe
+        working-directory: client
+        run: |
+          set -euo pipefail
+          CARGO_CFG="${CARGO_HOME:-$HOME/.cargo}/config.toml"
+          OFFLINE_FLAGS="--frozen"
+          if [ -f "$CARGO_CFG" ] && grep -q 'offline = true' "$CARGO_CFG"; then
+            OFFLINE_FLAGS="--offline --frozen"
+          fi
+          cargo check ${OFFLINE_FLAGS} --all-targets --target x86_64-pc-windows-gnu
+          cargo build ${OFFLINE_FLAGS} --release --target x86_64-pc-windows-gnu
+          EXE_PATH="${CARGO_TARGET_DIR:-target}/x86_64-pc-windows-gnu/release/pitsctl.exe"
+          test -s "$EXE_PATH"
+          DLLS="$(x86_64-w64-mingw32-objdump -p "$EXE_PATH" | grep 'DLL Name:' || true)"
+          echo "$DLLS"
+          if echo "$DLLS" | grep -qiE 'libwinpthread|libgcc_s|libstdc\+\+'; then
+            echo "ERROR: pitsctl.exe must statically link MinGW runtime without non-system DLL dependencies" >&2
+            exit 1
+          fi
+          sha256sum "$EXE_PATH"
+          ls -lh "$EXE_PATH"

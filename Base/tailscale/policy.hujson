@@ -1,0 +1,54 @@
+// Declarative Tailscale ACL / Grants / Device Posture Policy (HuJSON).
+// Governance rules:
+//   1. Employee endpoints remain User-owned (NO tag: on laptops/workstations so Keycloak user identity & FIDO2 groups are preserved).
+//   2. Infrastructure nodes (pits-core, Mode-A PEP gateways, DERP relays, test runners) use tag:.
+//   3. Single authoritative policy file maintained via GitOps / Tailscale Admin Console.
+//   4. Break-glass recovery access preserved via autogroup:admin emergency rule.
+{
+  "tagOwners": {
+    "tag:admin": ["autogroup:admin"],
+    "tag:server": ["autogroup:admin"],
+    "tag:pep-gateway": ["autogroup:admin"],
+    "tag:k8s-core": ["autogroup:admin"],
+    "tag:derp": ["autogroup:admin"]
+  },
+
+  "postures": {
+    "posture:corpWorkstation": [
+      "node:os in ['windows', 'linux', 'macos']",
+      "node:tsReleaseTrack == 'stable'"
+    ]
+  },
+
+  "grants": [
+    // Mode-A PEP Gateway & Lab Split DNS / Istio Zero-Trust Gateway (*.lab.martensite.dev -> lab-split-dns:443)
+    {
+      "src": ["autogroup:member"],
+      "srcPosture": ["posture:corpWorkstation"],
+      "dst": ["tag:server", "tag:pep-gateway"],
+      "ip": ["tcp:443", "tcp:18444", "tcp:18090", "udp:53", "tcp:53"]
+    },
+    // Break-glass & Platform Admin access (SSH / RKE2 / pits-agent mTLS / DERP)
+    {
+      "src": ["autogroup:admin"],
+      "dst": ["tag:server", "tag:pep-gateway", "tag:k8s-core", "tag:derp"],
+      "ip": ["*"]
+    },
+    // Infrastructure mesh & local DERP/STUN relay
+    {
+      "src": ["tag:server", "tag:k8s-core"],
+      "dst": ["tag:derp", "tag:server"],
+      "ip": ["tcp:8443", "udp:3478", "udp:41641"]
+    }
+  ],
+
+  "ssh": [
+    {
+      "action": "check",
+      "src": ["autogroup:admin"],
+      "dst": ["tag:server", "tag:pep-gateway"],
+      "users": ["autogroup:nonroot", "root"],
+      "checkPeriod": "12h"
+    }
+  ]
+}

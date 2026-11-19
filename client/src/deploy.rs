@@ -1,4 +1,4 @@
-//! Declarative NixOS deployer (`pitsctl deploy-nixos`) for `pits-core` (`100.74.25.42`).
+//! Declarative NixOS deployer (`pitsctl deploy-nixos`) for `pits-core` (`100.95.95.88`).
 //!
 //! Respects NixOS immutability (`/home/libraskywalker/PITS-B1/Base` & RKE2):
 //! - Never writes to `/usr/local/bin` or imperative `/etc/systemd/system/*.service`.
@@ -250,7 +250,7 @@ pub async fn deploy_to_nixos_pits_core(
 
     let planned_steps = vec![
         format!(
-            "1. Ensure Ed25519 mTLS PKI (SAN: {}, 100.74.25.42, 192.168.71.35, pits-core, pits-core.bun-humboldt.ts.net) in {}",
+            "1. Ensure Ed25519 mTLS PKI (SAN: {}, 100.95.95.88, 192.168.71.35, pits-core, pits-core.baiji-company.ts.net) in {}",
             opts.agent_host,
             local_state_dir().display()
         ),
@@ -572,11 +572,11 @@ mod tests {
     #[test]
     fn test_rewrite_rke2_kubeconfig_endpoint() {
         let raw = "apiVersion: v1\nclusters:\n- cluster:\n    server: https://127.0.0.1:6443\n  name: default\nusers: []\ncontexts: []\n";
-        let out = rewrite_rke2_kubeconfig_endpoint(raw, "100.74.25.42");
-        assert!(out.contains("https://100.74.25.42:6443"));
+        let out = rewrite_rke2_kubeconfig_endpoint(raw, "100.95.95.88");
+        assert!(out.contains("https://100.95.95.88:6443"));
         assert!(out.contains("tls-server-name: pits-core"));
         let parsed = crate::config::parse_kubeconfig_str(&out, None, None).unwrap();
-        assert_eq!(parsed.server_url, "https://100.74.25.42:6443");
+        assert_eq!(parsed.server_url, "https://100.95.95.88:6443");
         assert_eq!(parsed.tls_server_name.as_deref(), Some("pits-core"));
     }
 }

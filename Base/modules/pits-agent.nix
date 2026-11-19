@@ -7,7 +7,7 @@
 #    `./package.nix` (`vendorHash = null`), while `binaryPath` defaults to the SHA-256 verified
 #    static Linux ELF staged at `/var/lib/pits/agent/bin/pits-agent`.
 # 3. Private mTLS keys reside in root-only `/var/lib/pits/agent/pki` (`0700`), never in `/nix/store` or Git.
-# 4. `tailscale0` (`100.74.25.42`) is already in `networking.firewall.trustedInterfaces` for `tag:admin`;
+# 4. `tailscale0` (`100.95.95.88`) is already in `networking.firewall.trustedInterfaces` for `tag:admin`;
 #    management LAN (`192.168.71.0/24`) access is opt-in via `services.pits-agent.openMgmtFirewall`.
 {
   config,
@@ -47,7 +47,7 @@ in
     listenAddress = lib.mkOption {
       type = lib.types.str;
       default = "0.0.0.0:18443";
-      description = "mTLS 1.3 listen address (`100.74.25.42:18443` on Tailscale).";
+      description = "mTLS 1.3 listen address (`100.95.95.88:18443` on Tailscale).";
     };
 
     pkiDir = lib.mkOption {

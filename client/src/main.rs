@@ -1,7 +1,7 @@
 //! `pitsctl` — Resource-Centric PITS Infrastructure Client & Embedded Backstage v1.56 Portal.
 //!
 //! Primary Resource-Type & Entity-Centric CLI surface:
-//! - `pitsctl types`    — List all 8 infrastructure Resource Types, entity health counts & actions
+//! - `pitsctl types`    — List all 13 infrastructure & sourcing Resource Types, entity health counts & actions
 //! - `pitsctl get`      — List synthesized Backstage `Resource` entities by Resource Type (`all` or specific)
 //! - `pitsctl describe` — Inspect an entity's structured Attributes, Relations & Contextual Actions
 //! - `pitsctl action`   — Execute a guard-checked contextual Action against a specific entity
@@ -96,24 +96,6 @@ struct Cli {
 enum Commands {
     /// List all registered PITS Resource Types, entity health counts, and supported contextual actions
     Types {
-        /// Output format: `table`, `json`, or `yaml`
-        #[arg(
-            short = 'o',
-            long = "output",
-            value_parser = ["table", "json", "yaml"],
-            default_value = "table"
-        )]
-        output: String,
-        /// Force live telemetry refresh across cluster & agent endpoints
-        #[arg(long)]
-        live: bool,
-    },
-
-    /// List infrastructure entities aggregated by Resource Type (`all`, `baremetal-host`, `npu-accelerator`, `san-volume`, ...)
-    Get {
-        /// Resource Type name (`all`, `baremetal-host`, `npu-accelerator`, `virtual-machine`, `edge-router`, `pxe-boot-profile`, `storage-pool`, `san-volume`, `kubernetes-cluster`)
-        #[arg(default_value = "all")]
-        resource_type: String,
         /// Output format: `table`, `wide`, `json`, or `yaml`
         #[arg(
             short = 'o',
@@ -127,7 +109,33 @@ enum Commands {
         live: bool,
     },
 
-    /// Inspect full landing details for a specific entity (Identity, Live Status, Structured Attributes, Relations & Actions)
+    /// List infrastructure entities aggregated by Resource Type (`all`, `baremetal-host`, `npu-accelerator`, `san-volume`, `cicd-pipeline`, ...)
+    Get {
+        /// Resource Type name (`all`, `baremetal-host`, `npu-accelerator`, `virtual-machine`, `edge-router`, `pxe-boot-profile`, `storage-pool`, `san-volume`, `kubernetes-cluster`, `cicd-pipeline`, ...)
+        #[arg(default_value = "all")]
+        resource_type: String,
+        /// Dual-track summary view: `auto`, `policy`, `live`, or `drift`
+        #[arg(
+            long = "view",
+            value_parser = ["auto", "policy", "live", "drift"],
+            default_value = "auto"
+        )]
+        view: String,
+        /// Output format: `table`, `wide`, `json`, or `yaml`
+        #[arg(
+            short = 'o',
+            long = "output",
+            value_parser = ["table", "wide", "json", "yaml"],
+            default_value = "table"
+        )]
+        output: String,
+        /// Force live telemetry refresh across cluster & agent endpoints
+        #[arg(long)]
+        live: bool,
+    },
+
+    /// Inspect full landing details for a specific entity (Identity, Dual-Track Summary, Attributes, Relations & Actions)
+    #[command(visible_alias = "inspect")]
     Describe {
         /// Target entity (`<resource_type>/<name>`, `<name>`, or `resource:default/<name>`)
         entity: String,
@@ -197,11 +205,11 @@ enum Commands {
 
     /// Declaratively deploy `pits-agent` onto NixOS `pits-core` (`PITS-B1` module or RKE2 DaemonSet)
     DeployNixos {
-        /// Tailscale SSH target (`pits-host01` or `root@100.74.25.42`)
+        /// Tailscale SSH target (`pits-host01` or `root@100.95.95.88`)
         #[arg(long, default_value = "pits-host01")]
         ssh_target: String,
         /// Reachable `pits-core` Tailscale or management address
-        #[arg(long, default_value = "100.74.25.42")]
+        #[arg(long, default_value = "100.95.95.88")]
         agent_host: String,
         #[arg(long, default_value_t = 18443)]
         agent_port: u16,
@@ -296,7 +304,7 @@ enum CatalogAction {
         #[arg(
             short = 'o',
             long = "output",
-            value_parser = ["table", "json", "yaml"],
+            value_parser = ["table", "wide", "json", "yaml"],
             default_value = "table"
         )]
         output: String,
@@ -326,11 +334,31 @@ enum ProfileAction {
     },
     /// Generate Ed25519 CA + Server + Client mTLS certificates and save client identity to profile
     GeneratePki {
-        #[arg(long, default_value = "100.74.25.42")]
+        #[arg(long, default_value = "100.95.95.88")]
         server_san: String,
         /// Optional directory outside Syncthing to export server certs for `pits-agent`
         #[arg(long)]
         export_server_dir: Option<PathBuf>,
+    },
+    /// Register or update an additional Kubernetes / vCluster endpoint in profile
+    AddCluster {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        kubeconfig: PathBuf,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        role: Option<String>,
+        #[arg(long)]
+        context: Option<String>,
+        #[arg(long, default_value_t = false)]
+        via_agent_bridge: bool,
+    },
+    /// Remove an additional Kubernetes cluster from profile
+    RemoveCluster {
+        #[arg(long)]
+        name: String,
     },
 }
 
@@ -601,11 +629,12 @@ async fn main() -> Result<()> {
 
         Commands::Get {
             resource_type,
+            view,
             output,
             live,
         } => {
             let registry = build_registry(runtime_profile(&profile), bundle);
-            run_get_command(&registry, &resource_type, &output, live).await?;
+            run_get_command(&registry, &resource_type, &view, &output, live).await?;
         }
 
         Commands::Describe {
@@ -711,6 +740,7 @@ async fn main() -> Result<()> {
                     "talosconfigPath": profile.talosconfig_path,
                     "talosContext": profile.talos_context,
                     "talosViaAgentBridge": profile.talos_via_agent_bridge,
+                    "extraClusters": profile.extra_clusters,
                 });
                 print!("{}", serde_yaml::to_string(&view)?);
             }
@@ -767,6 +797,41 @@ async fn main() -> Result<()> {
                         "exportedAgentServerCertsDir": out_dir,
                     }))?
                 );
+            }
+            ProfileAction::AddCluster {
+                name,
+                kubeconfig,
+                title,
+                role,
+                context,
+                via_agent_bridge,
+            } => {
+                let entry = crate::config::ExtraClusterConfig {
+                    name: name.trim().to_string(),
+                    title,
+                    role,
+                    kubeconfig_path: kubeconfig.display().to_string(),
+                    context,
+                    via_agent_bridge,
+                };
+                if let Some(existing) = profile
+                    .extra_clusters
+                    .iter_mut()
+                    .find(|c| c.name.eq_ignore_ascii_case(&entry.name))
+                {
+                    *existing = entry;
+                } else {
+                    profile.extra_clusters.push(entry);
+                }
+                let p = profile.save(cli.profile.as_deref())?;
+                println!("Saved cluster {} to {}", name, p.display());
+            }
+            ProfileAction::RemoveCluster { name } => {
+                profile
+                    .extra_clusters
+                    .retain(|c| !c.name.eq_ignore_ascii_case(name.trim()));
+                let p = profile.save(cli.profile.as_deref())?;
+                println!("Updated profile {}", p.display());
             }
         },
 
@@ -1411,57 +1476,223 @@ async fn run_types_command(registry: &CatalogRegistry, output: &str, live: bool)
     match output {
         "json" => println!("{}", serde_json::to_string_pretty(&types)?),
         "yaml" => print!("{}", serde_yaml::to_string(&types)?),
-        _ => print_resource_types_table(&types),
+        "wide" => print_resource_types_table(&types, true),
+        _ => print_resource_types_table(&types, false),
     }
     Ok(())
 }
 
-fn print_resource_types_table(types: &[ResourceTypeSummary]) {
-    let headers = [
-        "RESOURCE TYPE",
-        "CATEGORY",
-        "ENTITIES",
-        "HEALTHY",
-        "WARN",
-        "ACTIONS",
-    ];
-    let rows: Vec<[String; 6]> = types
+fn format_type_highlights(t: &ResourceTypeSummary) -> String {
+    if t.highlights.is_empty() {
+        return "-".to_string();
+    }
+    t.highlights
         .iter()
-        .map(|t| {
-            [
-                t.resource_type.clone(),
-                t.category.clone(),
-                t.entity_count.to_string(),
-                t.healthy_count.to_string(),
-                t.warning_count.to_string(),
-                t.action_ids.join(", "),
-            ]
+        .map(|p| format!("{}={}", p.label, p.value))
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+fn print_resource_types_table(types: &[ResourceTypeSummary], wide: bool) {
+    if wide {
+        let headers = [
+            "RESOURCE TYPE",
+            "CATEGORY",
+            "MODE",
+            "ENTITIES",
+            "HEALTH",
+            "DRIFT",
+            "HIGHLIGHTS",
+            "ACTIONS",
+        ];
+        let rows: Vec<[String; 8]> = types
+            .iter()
+            .map(|t| {
+                [
+                    t.resource_type.clone(),
+                    t.category.clone(),
+                    t.observation_mode.clone(),
+                    t.entity_count.to_string(),
+                    format!("{} ok / {} warn", t.healthy_count, t.warning_count),
+                    if t.drifted_count > 0 {
+                        format!("{} DRIFT", t.drifted_count)
+                    } else {
+                        "0".to_string()
+                    },
+                    format_type_highlights(t),
+                    t.action_ids.join(", "),
+                ]
+            })
+            .collect();
+        render_aligned_table(&headers, &rows);
+    } else {
+        let headers = [
+            "RESOURCE TYPE",
+            "MODE",
+            "ENTITIES",
+            "HEALTH",
+            "DRIFT",
+            "HIGHLIGHTS",
+        ];
+        let rows: Vec<[String; 6]> = types
+            .iter()
+            .map(|t| {
+                [
+                    t.resource_type.clone(),
+                    t.observation_mode.clone(),
+                    t.entity_count.to_string(),
+                    format!("{} ok / {} warn", t.healthy_count, t.warning_count),
+                    if t.drifted_count > 0 {
+                        format!("{} DRIFT", t.drifted_count)
+                    } else {
+                        "0".to_string()
+                    },
+                    format_type_highlights(t),
+                ]
+            })
+            .collect();
+        render_aligned_table(&headers, &rows);
+    }
+
+    let total_entities: usize = types.iter().map(|t| t.entity_count).sum();
+    let total_drifted: usize = types.iter().map(|t| t.drifted_count).sum();
+    println!(
+        "\nTotal: {} resource types, {} resource entities, {} drifted",
+        types.len(),
+        total_entities,
+        total_drifted
+    );
+}
+
+fn format_policy_pills(detail: &PitsEntityDetail, limit: usize) -> String {
+    let parts: Vec<String> = detail
+        .summary
+        .static_policy
+        .iter()
+        .take(limit)
+        .map(|p| format!("{}={}", p.label, p.value))
+        .collect();
+    if parts.is_empty() {
+        detail.summary_line.clone()
+    } else {
+        parts.join(" · ")
+    }
+}
+
+fn format_dynamic_signals(detail: &PitsEntityDetail, limit: usize) -> String {
+    let parts: Vec<String> = detail
+        .summary
+        .dynamic_signals
+        .iter()
+        .take(limit)
+        .map(|s| match &s.delta {
+            Some(d) if !d.is_empty() => format!("{}={} ({})", s.label, s.value, d),
+            _ => format!("{}={}", s.label, s.value),
         })
         .collect();
+    if parts.is_empty() {
+        detail.summary_line.clone()
+    } else {
+        parts.join(" · ")
+    }
+}
 
-    render_aligned_table(&headers, &rows);
-    let total_entities: usize = types.iter().map(|t| t.entity_count).sum();
-    println!(
-        "\nTotal: {} resource types, {} resource entities",
-        types.len(),
-        total_entities
-    );
+pub(crate) fn format_entity_summary_for_view(detail: &PitsEntityDetail, view: &str) -> String {
+    match view {
+        "policy" => format_policy_pills(detail, usize::MAX),
+        "live" => format_dynamic_signals(detail, usize::MAX),
+        "drift" => {
+            if detail.summary.drift_detected {
+                format!(
+                    "DRIFT: {}",
+                    detail
+                        .summary
+                        .drift_summary
+                        .as_deref()
+                        .unwrap_or("policy or runtime drift detected")
+                )
+            } else {
+                "Compliant (No Drift)".to_string()
+            }
+        }
+        _ => {
+            use crate::catalog::ObservationMode;
+            match detail.summary.observation_mode {
+                ObservationMode::PolicyFirst => {
+                    let drift_tag = if detail.summary.drift_detected {
+                        format!(
+                            "DRIFT: {}",
+                            detail.summary.drift_summary.as_deref().unwrap_or("yes")
+                        )
+                    } else {
+                        "Compliant".to_string()
+                    };
+                    format!("[Policy] {} | {}", format_policy_pills(detail, 3), drift_tag)
+                }
+                ObservationMode::DynamicFirst => {
+                    format!(
+                        "[Live] {} | [Policy] {}",
+                        format_dynamic_signals(detail, 3),
+                        format_policy_pills(detail, 2)
+                    )
+                }
+                ObservationMode::Hybrid => {
+                    format!(
+                        "[Policy] {} | [Live] {}",
+                        format_policy_pills(detail, 2),
+                        format_dynamic_signals(detail, 2)
+                    )
+                }
+                ObservationMode::GovernanceEvent => {
+                    format!(
+                        "[Gov] {} | [Events] {}",
+                        format_policy_pills(detail, 2),
+                        format_dynamic_signals(detail, 2)
+                    )
+                }
+            }
+        }
+    }
 }
 
 async fn run_get_command(
     registry: &CatalogRegistry,
     requested_type: &str,
+    view: &str,
     output: &str,
     live: bool,
 ) -> Result<()> {
     let all_entities = registry.list_entities(live).await;
     let req_lower = requested_type.trim().to_ascii_lowercase();
-    let req_singular = req_lower.strip_suffix('s').unwrap_or(&req_lower);
+    let req_norm = match req_lower.as_str() {
+        "cicd" | "ci-cd" | "cicd-pipelines" => "cicd-pipeline",
+        "aistorage" | "ai-storage" | "aistorageworkspace" | "ai-storage-workspaces" => {
+            "ai-storage-workspace"
+        }
+        "authflow" | "auth-flow" | "authflowbundle" | "auth-flow-bundles" => "auth-flow-bundle",
+        _ => req_lower.strip_suffix('s').unwrap_or(&req_lower),
+    };
 
     let filtered: Vec<_> = if req_lower == "all" || req_lower == "*" {
         all_entities
             .into_iter()
             .filter(|e| e.kind.eq_ignore_ascii_case("Resource"))
+            .collect()
+    } else if req_lower == "crossplane" || req_lower == "xp" {
+        all_entities
+            .into_iter()
+            .filter(|e| {
+                e.metadata.tags.iter().any(|t| t == "crossplane")
+                    || e.spec
+                        .get("type")
+                        .and_then(|v| v.as_str())
+                        .map(|t| {
+                            t.starts_with("crossplane-")
+                                || t == "ai-storage-workspace"
+                                || t == "auth-flow-bundle"
+                        })
+                        .unwrap_or(false)
+            })
             .collect()
     } else if req_lower == "domain" || req_lower == "domains" {
         all_entities
@@ -1482,7 +1713,9 @@ async fn run_get_command(
         all_entities
             .into_iter()
             .filter(|e| {
-                if !e.kind.eq_ignore_ascii_case("Resource") {
+                if !e.kind.eq_ignore_ascii_case("Resource")
+                    && !e.kind.eq_ignore_ascii_case("Component")
+                {
                     return false;
                 }
                 let st = e
@@ -1491,7 +1724,7 @@ async fn run_get_command(
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_ascii_lowercase();
-                st == req_lower || st == req_singular
+                st == req_lower || st == req_norm
             })
             .collect()
     };
@@ -1514,15 +1747,22 @@ async fn run_get_command(
         "json" => println!("{}", serde_json::to_string_pretty(&filtered)?),
         "yaml" => print!("{}", serde_yaml::to_string(&filtered)?),
         "wide" => {
+            let summary_hdr = match view {
+                "policy" => "STATIC POLICY",
+                "live" => "DYNAMIC SIGNALS",
+                "drift" => "DRIFT ASSESSMENT",
+                _ => "DUAL-TRACK SUMMARY",
+            };
             let headers = [
                 "RESOURCE TYPE",
                 "NAME",
+                "MODE",
                 "STATUS",
+                "DRIFT",
                 "OWNER",
-                "RELATIONS",
-                "SUMMARY",
+                summary_hdr,
             ];
-            let mut rows = Vec::with_capacity(filtered.len());
+            let mut entries: Vec<(bool, [String; 7])> = Vec::with_capacity(filtered.len());
             for ent in &filtered {
                 let rtype = ent
                     .spec
@@ -1536,34 +1776,55 @@ async fn run_get_command(
                     .and_then(|v| v.as_str())
                     .unwrap_or("-")
                     .to_string();
-                let (status, summary) = match registry
+                let (mode, status, drifted, summary) = match registry
                     .get_pits_entity_detail(&ent.metadata.namespace, &ent.metadata.name, false)
                     .await
                 {
-                    Ok(d) => (d.status, d.summary_line),
+                    Ok(d) => (
+                        d.summary.observation_mode.as_str().to_string(),
+                        d.status.clone(),
+                        d.summary.drift_detected,
+                        format_entity_summary_for_view(&d, view),
+                    ),
                     Err(_) => (
+                        "-".to_string(),
                         ent.metadata
                             .annotations
                             .get("pits.io/status")
                             .cloned()
                             .unwrap_or_else(|| "Active".to_string()),
+                        false,
                         ent.metadata.description.clone().unwrap_or_default(),
                     ),
                 };
-                rows.push([
-                    rtype,
-                    ent.metadata.name.clone(),
-                    status,
-                    owner,
-                    ent.relations.len().to_string(),
-                    summary,
-                ]);
+                entries.push((
+                    drifted,
+                    [
+                        rtype,
+                        ent.metadata.name.clone(),
+                        mode,
+                        status,
+                        if drifted { "DRIFT".to_string() } else { "ok".to_string() },
+                        owner,
+                        summary,
+                    ],
+                ));
             }
+            if view == "drift" {
+                entries.sort_by(|a, b| b.0.cmp(&a.0));
+            }
+            let rows: Vec<[String; 7]> = entries.into_iter().map(|(_, r)| r).collect();
             render_aligned_table(&headers, &rows);
         }
         _ => {
-            let headers = ["RESOURCE TYPE", "NAME", "STATUS", "SUMMARY"];
-            let mut rows = Vec::with_capacity(filtered.len());
+            let summary_hdr = match view {
+                "policy" => "STATIC POLICY",
+                "live" => "DYNAMIC SIGNALS",
+                "drift" => "DRIFT ASSESSMENT",
+                _ => "DUAL-TRACK SUMMARY",
+            };
+            let headers = ["RESOURCE TYPE", "NAME", "STATUS", "DRIFT", summary_hdr];
+            let mut entries: Vec<(bool, [String; 5])> = Vec::with_capacity(filtered.len());
             for ent in &filtered {
                 let rtype = ent
                     .spec
@@ -1571,23 +1832,46 @@ async fn run_get_command(
                     .and_then(|v| v.as_str())
                     .unwrap_or(ent.kind.as_str())
                     .to_string();
-                let (status, summary) = match registry
+                let (status, drifted, summary) = match registry
                     .get_pits_entity_detail(&ent.metadata.namespace, &ent.metadata.name, false)
                     .await
                 {
-                    Ok(d) => (d.status, d.summary_line),
+                    Ok(d) => (
+                        d.status.clone(),
+                        d.summary.drift_detected,
+                        format_entity_summary_for_view(&d, view),
+                    ),
                     Err(_) => (
                         ent.metadata
                             .annotations
                             .get("pits.io/status")
                             .cloned()
                             .unwrap_or_else(|| "Active".to_string()),
+                        false,
                         ent.metadata.description.clone().unwrap_or_default(),
                     ),
                 };
-                rows.push([rtype, ent.metadata.name.clone(), status, summary]);
+                entries.push((
+                    drifted,
+                    [
+                        rtype,
+                        ent.metadata.name.clone(),
+                        status,
+                        if drifted { "DRIFT".to_string() } else { "ok".to_string() },
+                        summary,
+                    ],
+                ));
             }
+            if view == "drift" {
+                entries.sort_by(|a, b| b.0.cmp(&a.0));
+            }
+            let drifted_cnt = entries.iter().filter(|(d, _)| *d).count();
+            let total_cnt = entries.len();
+            let rows: Vec<[String; 5]> = entries.into_iter().map(|(_, r)| r).collect();
             render_aligned_table(&headers, &rows);
+            if view == "drift" {
+                println!("\nDrift Summary: {drifted_cnt} / {total_cnt} entities drifted");
+            }
         }
     }
 
@@ -1660,9 +1944,90 @@ fn print_entity_detail_text(detail: &PitsEntityDetail) {
         detail.status,
         detail.status_level.to_ascii_uppercase()
     );
+    println!(
+        "Observation Mode: {} ({})",
+        detail.summary.observation_mode.as_str(),
+        detail.summary.cadence_tier
+    );
+    if detail.summary.drift_detected {
+        println!(
+            "Drift:           DRIFTED — {}",
+            detail
+                .summary
+                .drift_summary
+                .as_deref()
+                .unwrap_or("policy or runtime drift detected")
+        );
+    } else {
+        println!("Drift:           None (Policy Compliant)");
+    }
+    if let Some(changed) = detail.summary.last_changed_at {
+        println!("Last Changed At: {}", changed.to_rfc3339());
+    }
     println!("Summary:         {}", detail.summary_line);
     println!("Live Connected:  {}", detail.live_connected);
     println!("Refreshed At:    {}", detail.refreshed_at.to_rfc3339());
+
+    if !detail.summary.static_policy.is_empty() {
+        println!("\n=== Static Policy & Contract ===");
+        let max_label = detail
+            .summary
+            .static_policy
+            .iter()
+            .map(|p| p.label.chars().count())
+            .max()
+            .unwrap_or(16);
+        for p in &detail.summary.static_policy {
+            let badge = match p.status.as_deref() {
+                Some(st) if !st.is_empty() => format!(" [{}]", st.to_ascii_uppercase()),
+                _ => String::new(),
+            };
+            println!(
+                "  {:<width$} : {}{}",
+                p.label,
+                p.value,
+                badge,
+                width = max_label
+            );
+        }
+    }
+
+    if !detail.summary.dynamic_signals.is_empty() {
+        println!("\n=== Dynamic Signals (Value / Δ / Age) ===");
+        let max_label = detail
+            .summary
+            .dynamic_signals
+            .iter()
+            .map(|s| s.label.chars().count())
+            .max()
+            .unwrap_or(16);
+        for s in &detail.summary.dynamic_signals {
+            let delta_str = s
+                .delta
+                .as_deref()
+                .filter(|d| !d.is_empty())
+                .map(|d| format!(" (Δ: {d})"))
+                .unwrap_or_default();
+            let age_str = s
+                .observed_age_secs
+                .filter(|a| *a > 0)
+                .map(|a| format!(" [age {a}s]"))
+                .unwrap_or_default();
+            let badge = match s.status.as_deref() {
+                Some(st) if !st.is_empty() => format!(" [{}]", st.to_ascii_uppercase()),
+                _ => String::new(),
+            };
+            println!(
+                "  {:<width$} : {}{}{}{}",
+                s.label,
+                s.value,
+                delta_str,
+                age_str,
+                badge,
+                width = max_label
+            );
+        }
+    }
 
     for sec in &detail.attribute_sections {
         println!("\n=== {} ({}) ===", sec.title, sec.id);
@@ -1840,21 +2205,47 @@ mod cli_tests {
 
     #[test]
     fn test_resource_centric_cli_parsing() {
-        let c1 = Cli::try_parse_from(["pitsctl", "types", "-o", "json", "--live"]).unwrap();
+        let c1 = Cli::try_parse_from(["pitsctl", "types", "-o", "wide", "--live"]).unwrap();
         assert!(matches!(c1.command, Commands::Types { live: true, .. }));
 
         let c2 = Cli::try_parse_from(["pitsctl", "get"]).unwrap();
         match c2.command {
             Commands::Get {
                 resource_type,
+                view,
                 output,
                 live,
             } => {
                 assert_eq!(resource_type, "all");
+                assert_eq!(view, "auto");
                 assert_eq!(output, "table");
                 assert!(!live);
             }
             _ => panic!("expected Get"),
+        }
+
+        let c2_view = Cli::try_parse_from([
+            "pitsctl",
+            "get",
+            "edge-router",
+            "--view",
+            "drift",
+            "-o",
+            "wide",
+        ])
+        .unwrap();
+        match c2_view.command {
+            Commands::Get {
+                resource_type,
+                view,
+                output,
+                ..
+            } => {
+                assert_eq!(resource_type, "edge-router");
+                assert_eq!(view, "drift");
+                assert_eq!(output, "wide");
+            }
+            _ => panic!("expected Get with --view"),
         }
 
         let c3 = Cli::try_parse_from([
@@ -1865,6 +2256,14 @@ mod cli_tests {
         ])
         .unwrap();
         assert!(matches!(c3.command, Commands::Describe { live: true, .. }));
+
+        let c3_inspect = Cli::try_parse_from([
+            "pitsctl",
+            "inspect",
+            "edge-router/pits-core-router",
+        ])
+        .unwrap();
+        assert!(matches!(c3_inspect.command, Commands::Describe { .. }));
 
         let c4 = Cli::try_parse_from([
             "pitsctl",
@@ -1930,5 +2329,39 @@ mod cli_tests {
             parse_entity_arg("resource:default/netboot-003-npu"),
             ("default".to_string(), "netboot-003-npu".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn test_get_view_formatting_modes_policy_live_drift_auto() {
+        let mut prof = ClientProfile::default();
+        prof.agent_bearer_token = None;
+        prof.agent_ca_pem = None;
+        prof.agent_client_cert_pem = None;
+        prof.agent_client_key_pem = None;
+        prof.core_kubeconfig_path = None;
+        prof.lab_kubeconfig_path = None;
+        prof.talosconfig_path = None;
+        let reg = build_registry(prof, WorkspaceBundle::builtin_pits_baseline());
+
+        let npu3 = reg
+            .get_pits_entity_detail("default", "npu-accelerator/netboot-003-npu", false)
+            .await
+            .expect("netboot-003-npu");
+        let v_policy = format_entity_summary_for_view(&npu3, "policy");
+        let v_live = format_entity_summary_for_view(&npu3, "live");
+        let v_drift = format_entity_summary_for_view(&npu3, "drift");
+        let v_auto = format_entity_summary_for_view(&npu3, "auto");
+
+        assert!(v_policy.contains("Expected Driver=amdxdna"), "policy={v_policy}");
+        assert!(v_live.contains("Bound Driver=unbound"), "live={v_live}");
+        assert!(v_drift.starts_with("DRIFT:"), "drift={v_drift}");
+        assert!(v_auto.contains("[Policy]") && v_auto.contains("[Live]"), "auto={v_auto}");
+
+        let router = reg
+            .get_pits_entity_detail("default", "edge-router/pits-core-router", false)
+            .await
+            .expect("pits-core-router");
+        assert_eq!(format_entity_summary_for_view(&router, "drift"), "Compliant (No Drift)");
+        assert!(format_entity_summary_for_view(&router, "auto").starts_with("[Live]"));
     }
 }

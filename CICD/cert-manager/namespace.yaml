@@ -1,0 +1,10 @@
+# cert-manager namespace on cluster-pits-lab (autonomous Let's Encrypt DNS-01 issuance).
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager
+  labels:
+    app.kubernetes.io/part-of: pits-cert-manager
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: baseline

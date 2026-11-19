@@ -1,0 +1,207 @@
+# Crossplane Provider & Function definitions + DeploymentRuntimeConfigs.
+# All provider/function pods strictly exclude netboot-004 (win11-001 host).
+---
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: runtime-provider-helm
+spec:
+  serviceAccountTemplate:
+    metadata:
+      name: provider-helm
+  deploymentTemplate:
+    spec:
+      selector: {}
+      template:
+        spec:
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: NotIn
+                        values:
+                          - netboot-004
+          containers:
+            - name: package-runtime
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
+---
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: runtime-provider-kubernetes
+spec:
+  serviceAccountTemplate:
+    metadata:
+      name: provider-kubernetes
+  deploymentTemplate:
+    spec:
+      selector: {}
+      template:
+        spec:
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: NotIn
+                        values:
+                          - netboot-004
+          containers:
+            - name: package-runtime
+---
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: runtime-function-go-templating
+spec:
+  deploymentTemplate:
+    spec:
+      selector: {}
+      template:
+        spec:
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: NotIn
+                        values:
+                          - netboot-004
+          containers:
+            - name: package-runtime
+---
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: runtime-provider-keycloak
+spec:
+  deploymentTemplate:
+    spec:
+      selector: {}
+      template:
+        spec:
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: NotIn
+                        values:
+                          - netboot-004
+          containers:
+            - name: package-runtime
+              env:
+                - name: SSL_CERT_DIR
+                  value: /etc/ssl/certs:/etc/ssl/pits-ca
+              volumeMounts:
+                - name: pits-ca
+                  mountPath: /etc/ssl/pits-ca
+                  readOnly: true
+          volumes:
+            - name: pits-ca
+              configMap:
+                name: pits-ca-cert
+                optional: true
+---
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: runtime-function-auto-ready
+spec:
+  deploymentTemplate:
+    spec:
+      selector: {}
+      template:
+        spec:
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: NotIn
+                        values:
+                          - netboot-004
+          containers:
+            - name: package-runtime
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: provider-helm-cluster-admin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: provider-helm
+    namespace: crossplane-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: provider-kubernetes-cluster-admin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: provider-kubernetes
+    namespace: crossplane-system
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-helm
+spec:
+  package: xpkg.upbound.io/crossplane-contrib/provider-helm:v1.5.0
+  runtimeConfigRef:
+    name: runtime-provider-helm
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-kubernetes
+spec:
+  package: xpkg.upbound.io/crossplane-contrib/provider-kubernetes:v1.4.1
+  runtimeConfigRef:
+    name: runtime-provider-kubernetes
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Function
+metadata:
+  name: function-go-templating
+spec:
+  package: xpkg.upbound.io/crossplane-contrib/function-go-templating:v0.13.2
+  runtimeConfigRef:
+    name: runtime-function-go-templating
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-keycloak
+spec:
+  package: xpkg.upbound.io/crossplane-contrib/provider-keycloak:v3.2.3
+  runtimeConfigRef:
+    name: runtime-provider-keycloak
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Function
+metadata:
+  name: function-auto-ready
+spec:
+  package: xpkg.upbound.io/crossplane-contrib/function-auto-ready:v0.6.4
+  runtimeConfigRef:
+    name: runtime-function-auto-ready

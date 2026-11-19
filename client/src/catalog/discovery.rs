@@ -15,7 +15,7 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
-use crate::catalog::model::{AttributeSection, PitsEntityDetail};
+use crate::catalog::model::{AttributeSection, EntityRelation, EntitySummary, PitsEntityDetail};
 use crate::catalog::sourcing::{
     canonical_component_ref, canonical_system_ref, DiscoveryCandidateRecord, SourcingResourceRecord,
     SOURCING_RESOURCE_TYPES,
@@ -23,7 +23,7 @@ use crate::catalog::sourcing::{
 use crate::catalog::synthesizer::{
     attr, kube_get_retry, make_catalog_entity, rel, LiveTelemetry, RESOURCE_TYPE_METAS,
 };
-use crate::k8s::KubeNodeSummary;
+use crate::k8s::{ClusterControlPlaneSummary, KubeNodeSummary};
 use crate::pxe::analyze_hook_inventory;
 use crate::transport::KubeClient;
 
@@ -104,6 +104,76 @@ const GVK_MAPPINGS: &[GvkMappingRule] = &[
         kind: "CompositeResourceDefinition",
         backstage_kind: "Component",
         resource_type: "crossplane-xrd",
+        category: "Component",
+    },
+    GvkMappingRule {
+        group: "apiextensions.crossplane.io",
+        kind: "Composition",
+        backstage_kind: "Component",
+        resource_type: "crossplane-composition",
+        category: "Component",
+    },
+    GvkMappingRule {
+        group: "pkg.crossplane.io",
+        kind: "Function",
+        backstage_kind: "Component",
+        resource_type: "crossplane-function",
+        category: "Component",
+    },
+    GvkMappingRule {
+        group: "pkg.crossplane.io",
+        kind: "Configuration",
+        backstage_kind: "Component",
+        resource_type: "crossplane-configuration",
+        category: "Component",
+    },
+    GvkMappingRule {
+        group: "openebs.io",
+        kind: "DiskPool",
+        backstage_kind: "Resource",
+        resource_type: "storage-pool",
+        category: "Storage Fabric",
+    },
+    GvkMappingRule {
+        group: "lab.pits.io",
+        kind: "LabDevStack",
+        backstage_kind: "Resource",
+        resource_type: "cicd-pipeline",
+        category: "Control Planes",
+    },
+    GvkMappingRule {
+        group: "lab.pits.io",
+        kind: "XLabDevStack",
+        backstage_kind: "Component",
+        resource_type: "crossplane-xr",
+        category: "Component",
+    },
+    GvkMappingRule {
+        group: "storage.ai.pits.io",
+        kind: "AIStorageWorkspace",
+        backstage_kind: "Resource",
+        resource_type: "ai-storage-workspace",
+        category: "Storage Fabric",
+    },
+    GvkMappingRule {
+        group: "storage.ai.pits.io",
+        kind: "XAIStorageWorkspace",
+        backstage_kind: "Component",
+        resource_type: "crossplane-xr",
+        category: "Component",
+    },
+    GvkMappingRule {
+        group: "iam.corp.io",
+        kind: "AuthFlowBundle",
+        backstage_kind: "Resource",
+        resource_type: "auth-flow-bundle",
+        category: "Control Planes",
+    },
+    GvkMappingRule {
+        group: "iam.corp.io",
+        kind: "XAuthFlowBundle",
+        backstage_kind: "Component",
+        resource_type: "crossplane-xr",
         category: "Component",
     },
     GvkMappingRule {
@@ -277,14 +347,29 @@ pub fn extract_xrd_collection_paths(xrd_list: &Value) -> Vec<(String, String, St
             .pointer("/spec/versions")
             .and_then(|v| v.as_array())
             .and_then(|vers| {
-                vers.iter().find_map(|ver| {
-                    let served = ver.get("served").and_then(|b| b.as_bool()).unwrap_or(true);
-                    if served {
-                        ver.get("name").and_then(|n| n.as_str())
-                    } else {
-                        None
-                    }
-                })
+                vers.iter()
+                    .find_map(|ver| {
+                        let served = ver.get("served").and_then(|b| b.as_bool()).unwrap_or(true);
+                        let referenceable = ver
+                            .get("referenceable")
+                            .and_then(|b| b.as_bool())
+                            .unwrap_or(false);
+                        if served && referenceable {
+                            ver.get("name").and_then(|n| n.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .or_else(|| {
+                        vers.iter().find_map(|ver| {
+                            let served = ver.get("served").and_then(|b| b.as_bool()).unwrap_or(true);
+                            if served {
+                                ver.get("name").and_then(|n| n.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                    })
             })
             .unwrap_or("v1alpha1");
 
@@ -342,15 +427,26 @@ pub fn should_ingest_k8s_object(obj: &DiscoveredK8sResource) -> bool {
         return true;
     }
 
+    let group = api_group_of(&obj.api_version);
     let is_crossplane = annotation_or_label(obj, "crossplane.io/composite").is_some()
         || annotation_or_label(obj, "crossplane.io/claim-name").is_some()
         || annotation_or_label(obj, "crossplane.io/external-name").is_some()
         || obj.api_version.contains("crossplane.io")
         || matches!(
-            api_group_of(&obj.api_version),
-            "platform.edge.router" | "edge.router"
+            group,
+            "platform.edge.router"
+                | "edge.router"
+                | "lab.pits.io"
+                | "storage.ai.pits.io"
+                | "iam.corp.io"
         );
     if is_crossplane {
+        return true;
+    }
+
+    if api_group_of(&obj.api_version) == "openebs.io"
+        && obj.kind.eq_ignore_ascii_case("DiskPool")
+    {
         return true;
     }
 
@@ -410,6 +506,13 @@ pub fn resolve_catalog_type(obj: &DiscoveredK8sResource) -> (&'static str, Strin
             "Control Planes",
         );
     }
+    if kind_low.contains("devstack") || kind_low.contains("pipeline") || kind_low.contains("cicd") {
+        return (
+            "Resource",
+            "cicd-pipeline".to_string(),
+            "Control Planes",
+        );
+    }
 
     if annotation_or_label(obj, "crossplane.io/claim-name").is_some() {
         return ("Component", "crossplane-claim".to_string(), "Component");
@@ -445,6 +548,13 @@ pub fn resolve_baseline_alias(obj: &DiscoveredK8sResource) -> Option<&'static st
             "access-lab" => Some("default/access-lab"),
             _ => None,
         };
+    }
+    if group == "lab.pits.io"
+        && obj.kind.eq_ignore_ascii_case("LabDevStack")
+        && obj.namespace == "pits-cicd"
+        && obj.name == "pits-lab-acceleration"
+    {
+        return Some("default/pits-lab-acceleration");
     }
     None
 }
@@ -611,6 +721,7 @@ pub fn build_discovered_k8s_node_detail(
         status: status.to_string(),
         status_level: status_level.to_string(),
         summary_line: summary,
+        summary: EntitySummary::default(),
         refreshed_at: now,
         live_connected: true,
         attribute_sections: sections,
@@ -661,6 +772,7 @@ pub(crate) fn collect_live_discovered_nodes(
 ) -> Vec<(String, PitsEntityDetail)> {
     if live.core_cluster.is_none()
         && live.lab_cluster.is_none()
+        && live.extra_clusters.is_empty()
         && live.tink_hardware.is_none()
         && live.hook_inventory.is_empty()
     {
@@ -668,20 +780,31 @@ pub(crate) fn collect_live_discovered_nodes(
     }
     let mut seeds: BTreeMap<String, DiscoveredBaremetalSeed> = BTreeMap::new();
 
-    for (cp_opt, cluster_ref, cluster_name, tag) in [
+    let mut cluster_sources: Vec<(Option<&ClusterControlPlaneSummary>, String, String, String)> = vec![
         (
-            &live.core_cluster,
-            "resource:default/cluster-pits-core",
-            "cluster-pits-core",
-            "core-plane",
+            live.core_cluster.as_ref(),
+            "resource:default/cluster-pits-core".to_string(),
+            "cluster-pits-core".to_string(),
+            "core-plane".to_string(),
         ),
         (
-            &live.lab_cluster,
-            "resource:default/cluster-pits-lab",
-            "cluster-pits-lab",
-            "lab-vlan20",
+            live.lab_cluster.as_ref(),
+            "resource:default/cluster-pits-lab".to_string(),
+            "cluster-pits-lab".to_string(),
+            "lab-vlan20".to_string(),
         ),
-    ] {
+    ];
+    for extra in &live.extra_clusters {
+        let slug = sanitize_k8s_slug(&extra.config.name);
+        cluster_sources.push((
+            Some(&extra.summary),
+            format!("resource:default/{slug}"),
+            slug,
+            "external-k8s".to_string(),
+        ));
+    }
+
+    for (cp_opt, cluster_ref, cluster_name, tag) in cluster_sources {
         if let Some(cp) = cp_opt {
             for node in &cp.nodes {
                 let slug = sanitize_k8s_slug(&node.name);
@@ -889,6 +1012,7 @@ pub(crate) fn collect_live_discovered_nodes(
             status: status.to_string(),
             status_level: status_level.to_string(),
             summary_line: summary,
+            summary: EntitySummary::default(),
             refreshed_at: now,
             live_connected: true,
             attribute_sections: sections,
@@ -907,9 +1031,62 @@ pub(crate) fn collect_live_discovered_nodes(
     out
 }
 
+fn is_mayastor_diskpool(obj: &DiscoveredK8sResource) -> bool {
+    api_group_of(&obj.api_version) == "openebs.io" && obj.kind.eq_ignore_ascii_case("DiskPool")
+}
+
+fn evaluate_diskpool_status(obj: &DiscoveredK8sResource) -> (&'static str, &'static str) {
+    let pool_status = obj
+        .status
+        .get("pool_status")
+        .or_else(|| obj.status.get("status"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or("");
+    let alert_status = obj
+        .status
+        .get("alertError")
+        .and_then(|v| v.as_str())
+        .or_else(|| obj.status.pointer("/errorInfo/alerts/status").and_then(|v| v.as_str()))
+        .map(str::trim)
+        .unwrap_or("");
+    let cr_state = obj
+        .status
+        .get("cr_state")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or("");
+
+    if pool_status.eq_ignore_ascii_case("Online") {
+        if alert_status.is_empty() || alert_status.eq_ignore_ascii_case("Healthy") {
+            return ("Online", "ok");
+        }
+        return ("OnlineAlert", "warn");
+    }
+    if pool_status.eq_ignore_ascii_case("Degraded")
+        || pool_status.eq_ignore_ascii_case("Suspending")
+        || cr_state.eq_ignore_ascii_case("Creating")
+    {
+        return ("Degraded", "warn");
+    }
+    if pool_status.eq_ignore_ascii_case("Offline")
+        || pool_status.eq_ignore_ascii_case("Faulted")
+        || pool_status.eq_ignore_ascii_case("Unknown")
+    {
+        return ("Offline", "error");
+    }
+    if cr_state.eq_ignore_ascii_case("Created") {
+        return ("Created", "ok");
+    }
+    ("Pending", "warn")
+}
+
 fn evaluate_k8s_reconcile_status(obj: &DiscoveredK8sResource) -> (&'static str, &'static str) {
     if obj.annotations.get("crossplane.io/paused").map(String::as_str) == Some("true") {
         return ("Paused", "warn");
+    }
+    if is_mayastor_diskpool(obj) {
+        return evaluate_diskpool_status(obj);
     }
     if let Some(conds) = obj.status.get("conditions").and_then(|v| v.as_array()) {
         let ready = conds
@@ -925,6 +1102,295 @@ fn evaluate_k8s_reconcile_status(obj: &DiscoveredK8sResource) -> (&'static str, 
         }
     }
     ("Active", "ok")
+}
+
+fn build_mayastor_diskpool_metadata(
+    obj: &DiscoveredK8sResource,
+    status: &str,
+    status_level: &str,
+    summary: &mut String,
+    relations: &mut Vec<EntityRelation>,
+    tags: &mut Vec<String>,
+    spec_fields: &mut serde_json::Map<String, Value>,
+    extra_sections: &mut Vec<AttributeSection>,
+) {
+    let node_name = obj
+        .spec
+        .get("node")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("unknown");
+    let disks: Vec<String> = obj
+        .spec
+        .get("disks")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let disks_display = if disks.is_empty() {
+        "-".to_string()
+    } else {
+        disks.join(", ")
+    };
+
+    let capacity_q = obj
+        .status
+        .get("capacity_q")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-")
+        .to_string();
+    let used_q = obj
+        .status
+        .get("used_q")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-")
+        .to_string();
+    let available_q = obj
+        .status
+        .get("available_q")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-")
+        .to_string();
+    let disk_cap = obj
+        .status
+        .get("diskCapacity")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-")
+        .to_string();
+    let max_expand = obj
+        .status
+        .get("maxExpandableSize")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-")
+        .to_string();
+    let cluster_size = obj
+        .status
+        .get("clusterSize")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-")
+        .to_string();
+    let alert_status = obj
+        .status
+        .get("alertError")
+        .and_then(|v| v.as_str())
+        .or_else(|| obj.status.pointer("/errorInfo/alerts/status").and_then(|v| v.as_str()))
+        .unwrap_or("Unknown")
+        .to_string();
+    let cr_state = obj
+        .status
+        .get("cr_state")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-")
+        .to_string();
+    let encrypted = obj
+        .status
+        .get("encrypted")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if node_name != "unknown" {
+        relations.push(rel(
+            "dependsOn",
+            &format!("resource:default/{}", sanitize_k8s_slug(node_name)),
+        ));
+    }
+    for t in ["mayastor", "spdk-diskpool", "thunderbolt-storage"] {
+        if !tags.iter().any(|x| x == t) {
+            tags.push(t.to_string());
+        }
+    }
+
+    spec_fields.insert("backend".to_string(), json!("mayastor-spdk"));
+    spec_fields.insert("node".to_string(), json!(node_name));
+    spec_fields.insert("disks".to_string(), json!(disks));
+    spec_fields.insert("crState".to_string(), json!(cr_state));
+    spec_fields.insert("poolStatus".to_string(), json!(status));
+    spec_fields.insert("alertStatus".to_string(), json!(alert_status));
+    spec_fields.insert("capacity".to_string(), json!(capacity_q));
+    spec_fields.insert("used".to_string(), json!(used_q));
+    spec_fields.insert("available".to_string(), json!(available_q));
+    spec_fields.insert("diskCapacity".to_string(), json!(disk_cap));
+    spec_fields.insert("maxExpandableSize".to_string(), json!(max_expand));
+
+    *summary = format!(
+        "Mayastor SPDK DiskPool {} on {} ({}) · used {} / {} ({}, {})",
+        obj.name, node_name, disks_display, used_q, capacity_q, status, alert_status
+    );
+
+    extra_sections.push(AttributeSection {
+        id: "mayastor-diskpool".to_string(),
+        title: "Mayastor SPDK DiskPool Telemetry".to_string(),
+        items: vec![
+            attr("backend", "Storage Backend", "OpenEBS Mayastor SPDK (NVMe-oF / Thunderbolt)", Some("info"), false),
+            attr("node", "Backing Node", node_name, Some("ok"), true),
+            attr("disks", "Block Devices", disks_display, None, true),
+            attr("poolStatus", "Pool State / Alerts", format!("{status} · {alert_status} (cr={cr_state})"), Some(status_level), false),
+            attr("capacity", "Capacity / Used / Available", format!("{capacity_q} / {used_q} / {available_q}"), Some("info"), false),
+            attr("diskExpand", "Physical Disk / Max Expandable", format!("{disk_cap} / {max_expand}"), None, false),
+            attr("geometry", "Cluster Size / Encrypted", format!("{cluster_size} / {encrypted}"), None, false),
+        ],
+    });
+}
+
+fn build_ai_storage_workspace_metadata(
+    obj: &DiscoveredK8sResource,
+    status: &str,
+    status_level: &str,
+    summary: &mut String,
+    tags: &mut Vec<String>,
+    spec_fields: &mut serde_json::Map<String, Value>,
+    extra_sections: &mut Vec<AttributeSection>,
+) {
+    let environment = obj
+        .spec
+        .get("environment")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-");
+    let domain = obj
+        .spec
+        .get("domain")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-");
+    let auth_mode = obj
+        .spec
+        .pointer("/mcp/authMode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-");
+    let mcp_endpoint = obj
+        .status
+        .get("mcpEndpoint")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-");
+    let internal_endpoint = obj
+        .status
+        .get("internalEndpoint")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-");
+    let profile_cm = obj
+        .status
+        .get("profileConfigMap")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-");
+    let cred_secret = obj
+        .status
+        .get("credentialSecret")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-");
+    let ready_archetypes: Vec<String> = obj
+        .status
+        .get("readyArchetypes")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let archetypes_display = if ready_archetypes.is_empty() {
+        "-".to_string()
+    } else {
+        ready_archetypes.join(", ")
+    };
+
+    for t in ["ai-storage", "opendal", "mcp"] {
+        if !tags.iter().any(|x| x == t) {
+            tags.push(t.to_string());
+        }
+    }
+
+    spec_fields.insert("environment".to_string(), json!(environment));
+    spec_fields.insert("domain".to_string(), json!(domain));
+    spec_fields.insert("authMode".to_string(), json!(auth_mode));
+    spec_fields.insert("mcpEndpoint".to_string(), json!(mcp_endpoint));
+    spec_fields.insert("internalEndpoint".to_string(), json!(internal_endpoint));
+    spec_fields.insert("profileConfigMap".to_string(), json!(profile_cm));
+    spec_fields.insert("credentialSecret".to_string(), json!(cred_secret));
+    spec_fields.insert("readyArchetypes".to_string(), json!(ready_archetypes));
+
+    *summary = format!(
+        "Crossplane {} {}/{} (env={}) · mcp={} · {} archetypes · status={}",
+        obj.kind,
+        obj.namespace,
+        obj.name,
+        environment,
+        mcp_endpoint,
+        ready_archetypes.len(),
+        status
+    );
+
+    extra_sections.push(AttributeSection {
+        id: "ai-storage-workspace".to_string(),
+        title: "OpenDAL AI Storage Workspace (Crossplane)".to_string(),
+        items: vec![
+            attr("environment", "Environment / Auth", format!("{environment} / {auth_mode}"), Some("info"), true),
+            attr("mcpEndpoint", "External MCP Endpoint", mcp_endpoint, Some(status_level), true),
+            attr("internalEndpoint", "In-Cluster MCP Endpoint", internal_endpoint, None, true),
+            attr("profile", "Profile ConfigMap / Cred Secret", format!("{profile_cm} / {cred_secret}"), None, true),
+            attr("archetypes", "Ready Semantic Archetypes", archetypes_display, Some("ok"), true),
+        ],
+    });
+}
+
+fn build_auth_flow_bundle_metadata(
+    obj: &DiscoveredK8sResource,
+    status: &str,
+    status_level: &str,
+    summary: &mut String,
+    tags: &mut Vec<String>,
+    spec_fields: &mut serde_json::Map<String, Value>,
+    extra_sections: &mut Vec<AttributeSection>,
+) {
+    let realm = obj
+        .spec
+        .get("realm")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-");
+    let flow_alias = obj
+        .spec
+        .get("flowAlias")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-");
+    let active_flow = obj
+        .status
+        .get("activeFlowAlias")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-");
+    let bind_browser = obj
+        .spec
+        .get("bindAsRealmBrowserFlow")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    for t in ["iam", "keycloak", "fido2"] {
+        if !tags.iter().any(|x| x == t) {
+            tags.push(t.to_string());
+        }
+    }
+
+    spec_fields.insert("realm".to_string(), json!(realm));
+    spec_fields.insert("flowAlias".to_string(), json!(flow_alias));
+    spec_fields.insert("activeFlowAlias".to_string(), json!(active_flow));
+    spec_fields.insert("bindAsRealmBrowserFlow".to_string(), json!(bind_browser));
+
+    *summary = format!(
+        "Crossplane {} {}/{} (realm={}) · activeFlow={} · status={}",
+        obj.kind, obj.namespace, obj.name, realm, active_flow, status
+    );
+
+    extra_sections.push(AttributeSection {
+        id: "iam-auth-flow".to_string(),
+        title: "Keycloak Crossplane AuthFlowBundle".to_string(),
+        items: vec![
+            attr("realm", "Keycloak Realm", realm, Some("info"), true),
+            attr("flowAlias", "Configured Flow Alias", flow_alias, None, true),
+            attr("activeFlowAlias", "Active Flow Alias", active_flow, Some(status_level), true),
+            attr("bindBrowser", "Bind As Realm Browser Flow", bind_browser.to_string(), None, true),
+        ],
+    });
 }
 
 /// Synthesizes a Backstage `Resource` or `Component` [`PitsEntityDetail`] for an ingested K8s/Crossplane object.
@@ -973,8 +1439,10 @@ pub fn build_discovered_k8s_entity_detail(
 
     let (status, status_level) = evaluate_k8s_reconcile_status(obj);
     let claim_name = annotation_or_label(obj, "crossplane.io/claim-name").unwrap_or("-");
-    let composite_name = annotation_or_label(obj, "crossplane.io/composite").unwrap_or("-");
-    let summary = format!(
+    let composite_name = annotation_or_label(obj, "crossplane.io/composite")
+        .or_else(|| obj.spec.pointer("/resourceRef/name").and_then(|v| v.as_str()))
+        .unwrap_or("-");
+    let mut summary = format!(
         "Discovered {} ({}) in {}/{} · type={} · status={}",
         obj.kind, obj.api_version, obj.cluster_name, obj.namespace, resolved_type, status
     );
@@ -995,9 +1463,16 @@ pub fn build_discovered_k8s_entity_detail(
         }
     }
     if composite_name != "-" {
+        let composite_ns = if obj.spec.pointer("/resourceRef/name").is_some()
+            && obj.spec.pointer("/resourceRef/namespace").is_none()
+        {
+            "default"
+        } else {
+            &target_ns
+        };
         relations.push(rel(
             "dependsOn",
-            &format!("component:{}/{}", target_ns, sanitize_k8s_slug(composite_name)),
+            &format!("component:{}/{}", composite_ns, sanitize_k8s_slug(composite_name)),
         ));
     }
 
@@ -1011,10 +1486,63 @@ pub fn build_discovered_k8s_entity_detail(
         || composite_name != "-"
         || matches!(
             api_group_of(&obj.api_version),
-            "platform.edge.router" | "edge.router"
+            "platform.edge.router"
+                | "edge.router"
+                | "lab.pits.io"
+                | "storage.ai.pits.io"
+                | "iam.corp.io"
         )
     {
         tags.push("crossplane".to_string());
+    }
+
+    let mut spec_fields = match json!({
+        "type": resolved_type,
+        "lifecycle": lifecycle,
+        "owner": owner,
+        "system": system_name,
+        "k8sApiVersion": obj.api_version,
+        "k8sKind": obj.kind,
+        "k8sNamespace": obj.namespace,
+        "k8sName": obj.name,
+        "cluster": obj.cluster_name,
+        "autoDiscovered": true,
+    }) {
+        Value::Object(m) => m,
+        _ => serde_json::Map::new(),
+    };
+    let mut sections = Vec::new();
+    if is_mayastor_diskpool(obj) {
+        build_mayastor_diskpool_metadata(
+            obj,
+            status,
+            status_level,
+            &mut summary,
+            &mut relations,
+            &mut tags,
+            &mut spec_fields,
+            &mut sections,
+        );
+    } else if api_group_of(&obj.api_version) == "storage.ai.pits.io" {
+        build_ai_storage_workspace_metadata(
+            obj,
+            status,
+            status_level,
+            &mut summary,
+            &mut tags,
+            &mut spec_fields,
+            &mut sections,
+        );
+    } else if api_group_of(&obj.api_version) == "iam.corp.io" {
+        build_auth_flow_bundle_metadata(
+            obj,
+            status,
+            status_level,
+            &mut summary,
+            &mut tags,
+            &mut spec_fields,
+            &mut sections,
+        );
     }
 
     let mut entity = make_catalog_entity(
@@ -1029,18 +1557,7 @@ pub fn build_discovered_k8s_entity_detail(
         category,
         true,
         tags,
-        json!({
-            "type": resolved_type,
-            "lifecycle": lifecycle,
-            "owner": owner,
-            "system": system_name,
-            "k8sApiVersion": obj.api_version,
-            "k8sKind": obj.kind,
-            "k8sNamespace": obj.namespace,
-            "k8sName": obj.name,
-            "cluster": obj.cluster_name,
-            "autoDiscovered": true,
-        }),
+        Value::Object(spec_fields),
         relations,
     );
 
@@ -1063,7 +1580,7 @@ pub fn build_discovered_k8s_entity_detail(
         format!("{}/{}", obj.api_version, obj.kind),
     );
 
-    let sections = vec![AttributeSection {
+    sections.push(AttributeSection {
         id: "crossplane-k8s-connector".to_string(),
         title: "Crossplane & Kubernetes Connector Metadata".to_string(),
         items: vec![
@@ -1073,7 +1590,7 @@ pub fn build_discovered_k8s_entity_detail(
             attr("composite", "Crossplane Composite (XR)", composite_name, None, true),
             attr("reconcileStatus", "Sync / Ready State", status, Some(status_level), false),
         ],
-    }];
+    });
 
     let mut manifests = BTreeMap::new();
     manifests.insert(
@@ -1100,6 +1617,7 @@ pub fn build_discovered_k8s_entity_detail(
         status: status.to_string(),
         status_level: status_level.to_string(),
         summary_line: summary,
+        summary: EntitySummary::default(),
         refreshed_at: now,
         live_connected: true,
         attribute_sections: sections,
@@ -1229,7 +1747,7 @@ pub fn extract_sourcing_candidates_from_k8s(
     out
 }
 
-/// Concurrently probes Kubernetes Services, Crossplane XRDs/Providers, and EdgeRouter CRs.
+/// Concurrently probes Kubernetes Services, Crossplane XRDs/Providers, EdgeRouter CRs, and OpenEBS DiskPools.
 pub(crate) async fn discover_k8s_crossplane_fast(
     kc: &KubeClient,
     cluster_name: &str,
@@ -1237,7 +1755,7 @@ pub(crate) async fn discover_k8s_crossplane_fast(
     sem: Option<&Arc<Semaphore>>,
 ) -> Vec<DiscoveredK8sResource> {
     let sem_ref = sem.map(Arc::as_ref);
-    let (svc_res, xrd_res, prov_res, er_res, rtr_res) = tokio::join!(
+    let (svc_res, xrd_res, comp_res, prov_res, fn_res, er_res, rtr_res, dsp_v3_res) = tokio::join!(
         kube_get_retry(kc, "/api/v1/services", None, sem_ref),
         kube_get_retry(
             kc,
@@ -1245,12 +1763,37 @@ pub(crate) async fn discover_k8s_crossplane_fast(
             None,
             sem_ref
         ),
+        kube_get_retry(
+            kc,
+            "/apis/apiextensions.crossplane.io/v1/compositions",
+            None,
+            sem_ref
+        ),
         kube_get_retry(kc, "/apis/pkg.crossplane.io/v1/providers", None, sem_ref),
+        kube_get_retry(kc, "/apis/pkg.crossplane.io/v1/functions", None, sem_ref),
         kube_get_retry(kc, "/apis/platform.edge.router/v1alpha1/edgerouters", None, sem_ref),
         kube_get_retry(kc, "/apis/edge.router/v1alpha1/routers", None, sem_ref),
+        kube_get_retry(kc, "/apis/openebs.io/v1beta3/diskpools", None, sem_ref),
     );
 
     let mut discovered = Vec::new();
+    if let Ok(ref v) = dsp_v3_res {
+        discovered.extend(parse_k8s_list_items(
+            cluster_name,
+            cluster_ref,
+            "openebs.io/v1beta3",
+            "DiskPool",
+            v,
+        ));
+    } else if let Ok(v2) = kube_get_retry(kc, "/apis/openebs.io/v1beta2/diskpools", None, sem_ref).await {
+        discovered.extend(parse_k8s_list_items(
+            cluster_name,
+            cluster_ref,
+            "openebs.io/v1beta2",
+            "DiskPool",
+            &v2,
+        ));
+    }
     if let Ok(ref v) = svc_res {
         discovered.extend(parse_k8s_list_items(
             cluster_name,
@@ -1266,6 +1809,24 @@ pub(crate) async fn discover_k8s_crossplane_fast(
             cluster_ref,
             "pkg.crossplane.io/v1",
             "Provider",
+            v,
+        ));
+    }
+    if let Ok(ref v) = fn_res {
+        discovered.extend(parse_k8s_list_items(
+            cluster_name,
+            cluster_ref,
+            "pkg.crossplane.io/v1",
+            "Function",
+            v,
+        ));
+    }
+    if let Ok(ref v) = comp_res {
+        discovered.extend(parse_k8s_list_items(
+            cluster_name,
+            cluster_ref,
+            "apiextensions.crossplane.io/v1",
+            "Composition",
             v,
         ));
     }
@@ -1296,14 +1857,22 @@ pub(crate) async fn discover_k8s_crossplane_fast(
             "CompositeResourceDefinition",
             xrd_val,
         ));
-        let dynamic_endpoints: Vec<(String, String, String)> = extract_xrd_collection_paths(xrd_val)
+        let mut dynamic_endpoints: Vec<(String, String, String)> = extract_xrd_collection_paths(xrd_val)
             .into_iter()
             .filter(|(p, _, _)| {
                 p != "/apis/platform.edge.router/v1alpha1/edgerouters"
                     && p != "/apis/edge.router/v1alpha1/routers"
             })
-            .take(16)
             .collect();
+        dynamic_endpoints.sort_by_key(|(_, api_ver, _)| {
+            let group = api_group_of(api_ver);
+            match group {
+                "storage.ai.pits.io" | "iam.corp.io" | "lab.pits.io" => 0,
+                g if g.contains("pits.io") => 1,
+                _ => 2,
+            }
+        });
+        dynamic_endpoints.truncate(32);
 
         let mut join_set = JoinSet::new();
         for (path, api_ver, kind_hint) in dynamic_endpoints {
@@ -1368,6 +1937,10 @@ mod tests {
             total_pods: 12,
             bound_pvs: 0,
             npu_slices: Vec::new(),
+            dra_slices: Vec::new(),
+            dra_claims: Vec::new(),
+            device_plugin_gpu_used: BTreeMap::new(),
+            device_classes: Vec::new(),
             error: None,
         });
 
@@ -1796,5 +2369,368 @@ mod tests {
         let (bs_kind, rtype, _) = resolve_catalog_type(ws);
         assert_eq!(bs_kind, "Resource");
         assert_eq!(rtype, "virtual-machine");
+    }
+
+    #[tokio::test]
+    async fn mayastor_diskpools_discover_as_storage_pool_entities() {
+        let app = Router::new().route(
+            "/apis/openebs.io/v1beta3/diskpools",
+            get(|| async {
+                Json(json!({
+                    "apiVersion": "openebs.io/v1beta3",
+                    "kind": "DiskPoolList",
+                    "items": [
+                        {
+                            "apiVersion": "openebs.io/v1beta3",
+                            "kind": "DiskPool",
+                            "metadata": {
+                                "name": "pool-netboot-001",
+                                "namespace": "openebs"
+                            },
+                            "spec": {
+                                "node": "netboot-001",
+                                "disks": ["pcie:///0000:01:00.0"]
+                            },
+                            "status": {
+                                "alertError": "Healthy",
+                                "available_q": "952.9 GiB",
+                                "capacity_q": "952.9 GiB",
+                                "clusterSize": "4 MiB",
+                                "cr_state": "Created",
+                                "diskCapacity": "953.9 GiB",
+                                "encrypted": false,
+                                "maxExpandableSize": "1023.8 GiB",
+                                "pool_status": "Online",
+                                "status": "Online",
+                                "used_q": "0 B",
+                                "conditions": [
+                                    { "type": "PoolReady", "status": "False", "reason": "NodeIsOffline" }
+                                ]
+                            }
+                        }
+                    ]
+                }))
+            }),
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback mock k8s");
+        let addr = listener.local_addr().unwrap();
+        let server_task = tokio::spawn(async move {
+            axum::serve(listener, app).await.ok();
+        });
+
+        let kc = KubeClient::from_endpoint(
+            "pits-lab",
+            ResolvedKubeEndpoint {
+                context_name: "mock".to_string(),
+                server_url: format!("http://{addr}"),
+                tls_server_name: None,
+                ca_pem: None,
+                client_cert_pem: None,
+                client_key_pem: None,
+                bearer_token: None,
+                insecure_skip_tls_verify: true,
+            },
+            None,
+        )
+        .expect("build loopback KubeClient");
+
+        let found = discover_k8s_crossplane_fast(
+            &kc,
+            "cluster-pits-lab",
+            "resource:default/cluster-pits-lab",
+            None,
+        )
+        .await;
+        server_task.abort();
+
+        let dsp = found
+            .iter()
+            .find(|o| o.kind == "DiskPool" && o.name == "pool-netboot-001")
+            .expect("Mayastor DiskPool discovered");
+        assert!(should_ingest_k8s_object(dsp));
+        let (bs_kind, rtype, category) = resolve_catalog_type(dsp);
+        assert_eq!(bs_kind, "Resource");
+        assert_eq!(rtype, "storage-pool");
+        assert_eq!(category, "Storage Fabric");
+
+        let mut live = LiveTelemetry::default();
+        live.any_connected = true;
+        live.discovered_k8s_resources = found;
+        let bundle = WorkspaceBundle::builtin_pits_baseline();
+        let p = std::env::temp_dir().join(format!("pits-dsp-test-{}.yaml", uuid::Uuid::new_v4()));
+        let sourcing = SourcingStore::load_with_options(p, None, None, true);
+        let snap = synthesize_snapshot_from_inputs(&bundle, None, &live, &sourcing, Utc::now());
+
+        assert!(snap.details.contains_key("default/pits-data"));
+        let detail = snap
+            .details
+            .get("openebs/pool-netboot-001")
+            .expect("pool-netboot-001 synthesized into storage-pool details");
+        assert_eq!(detail.resource_type, "storage-pool");
+        assert_eq!(detail.status, "Online");
+        assert_eq!(detail.status_level, "ok");
+        assert!(detail.actions.is_empty());
+        assert!(detail
+            .entity
+            .relations
+            .iter()
+            .any(|r| r.relation_type == "dependsOn" && r.target_ref == "resource:default/netboot-001"));
+    }
+
+    #[test]
+    fn lab_devstack_claim_enriches_baseline_cicd_and_maps_custom_cicd_pipeline() {
+        let mut live = LiveTelemetry::default();
+        live.any_connected = true;
+        live.discovered_k8s_resources = vec![
+            DiscoveredK8sResource {
+                cluster_name: "cluster-pits-lab".to_string(),
+                cluster_ref: "resource:default/cluster-pits-lab".to_string(),
+                api_version: "lab.pits.io/v1alpha1".to_string(),
+                kind: "LabDevStack".to_string(),
+                namespace: "pits-cicd".to_string(),
+                name: "pits-lab-acceleration".to_string(),
+                labels: BTreeMap::new(),
+                annotations: BTreeMap::from([(
+                    "crossplane.io/composite".to_string(),
+                    "pits-lab-acceleration-xr".to_string(),
+                )]),
+                owner_refs: Vec::new(),
+                spec: json!({}),
+                status: json!({ "conditions": [{ "type": "Ready", "status": "True" }] }),
+            },
+            DiscoveredK8sResource {
+                cluster_name: "cluster-pits-lab".to_string(),
+                cluster_ref: "resource:default/cluster-pits-lab".to_string(),
+                api_version: "lab.pits.io/v1alpha1".to_string(),
+                kind: "LabDevStack".to_string(),
+                namespace: "pits-cicd".to_string(),
+                name: "staging-cicd-stack".to_string(),
+                labels: BTreeMap::new(),
+                annotations: BTreeMap::new(),
+                owner_refs: Vec::new(),
+                spec: json!({}),
+                status: json!({ "conditions": [{ "type": "Ready", "status": "True" }] }),
+            },
+        ];
+        let bundle = WorkspaceBundle::builtin_pits_baseline();
+        let p = std::env::temp_dir().join(format!("pits-cicd-disc-{}.yaml", uuid::Uuid::new_v4()));
+        let sourcing = SourcingStore::load_with_options(p, None, None, true);
+        let snap = synthesize_snapshot_from_inputs(&bundle, None, &live, &sourcing, Utc::now());
+
+        let count = snap
+            .entities
+            .iter()
+            .filter(|e| e.metadata.name == "pits-lab-acceleration")
+            .count();
+        assert_eq!(count, 1, "baseline LabDevStack must enrich without duplicating");
+        let base_stack = snap.details.get("default/pits-lab-acceleration").unwrap();
+        assert_eq!(base_stack.resource_type, "cicd-pipeline");
+        assert_eq!(
+            base_stack
+                .entity
+                .metadata
+                .annotations
+                .get("crossplane.io/composite")
+                .map(String::as_str),
+            Some("pits-lab-acceleration-xr")
+        );
+
+        let custom = snap
+            .details
+            .get("pits-cicd/staging-cicd-stack")
+            .expect("custom LabDevStack mapped to cicd-pipeline");
+        assert_eq!(custom.entity.kind, "Resource");
+        assert_eq!(custom.resource_type, "cicd-pipeline");
+        assert_eq!(custom.status, "SyncedReady");
+    }
+
+    #[tokio::test]
+    async fn discovers_aistorageworkspace_authflowbundle_compositions_and_functions() {
+        let app = Router::new()
+            .route(
+                "/apis/apiextensions.crossplane.io/v1/compositeresourcedefinitions",
+                get(|| async {
+                    Json(json!({
+                        "items": [
+                            {
+                                "metadata": { "name": "xaistorageworkspaces.storage.ai.pits.io" },
+                                "spec": {
+                                    "group": "storage.ai.pits.io",
+                                    "names": { "kind": "XAIStorageWorkspace", "plural": "xaistorageworkspaces" },
+                                    "claimNames": { "kind": "AIStorageWorkspace", "plural": "aistorageworkspaces" },
+                                    "versions": [{ "name": "v1alpha1", "served": true, "referenceable": true }]
+                                }
+                            },
+                            {
+                                "metadata": { "name": "xauthflowbundles.iam.corp.io" },
+                                "spec": {
+                                    "group": "iam.corp.io",
+                                    "names": { "kind": "XAuthFlowBundle", "plural": "xauthflowbundles" },
+                                    "claimNames": { "kind": "AuthFlowBundle", "plural": "authflowbundles" },
+                                    "versions": [{ "name": "v1alpha1", "served": true, "referenceable": true }]
+                                }
+                            }
+                        ]
+                    }))
+                }),
+            )
+            .route(
+                "/apis/apiextensions.crossplane.io/v1/compositions",
+                get(|| async {
+                    Json(json!({
+                        "items": [{ "metadata": { "name": "aistorage-workspace-composition" } }]
+                    }))
+                }),
+            )
+            .route(
+                "/apis/pkg.crossplane.io/v1/functions",
+                get(|| async {
+                    Json(json!({
+                        "items": [{ "metadata": { "name": "function-auto-ready" }, "spec": { "package": "xpkg.upbound.io/crossplane-contrib/function-auto-ready:v0.6.4" } }]
+                    }))
+                }),
+            )
+            .route(
+                "/apis/storage.ai.pits.io/v1alpha1/aistorageworkspaces",
+                get(|| async {
+                    Json(json!({
+                        "items": [{
+                            "apiVersion": "storage.ai.pits.io/v1alpha1",
+                            "kind": "AIStorageWorkspace",
+                            "metadata": { "namespace": "pits-cicd", "name": "pits-agent-space" },
+                            "spec": {
+                                "environment": "lab-rustfs",
+                                "domain": "mcp.lab.martensite.dev",
+                                "mcp": { "authMode": "keycloak-jwt" },
+                                "resourceRef": { "kind": "XAIStorageWorkspace", "name": "pits-agent-space-abc12" }
+                            },
+                            "status": {
+                                "mcpEndpoint": "https://mcp.lab.martensite.dev/mcp",
+                                "internalEndpoint": "http://pits-ai-store.ai-storage-pits.svc.cluster.local:8787/mcp",
+                                "profileConfigMap": "pits-profile",
+                                "credentialSecret": "pits-opendal-creds",
+                                "readyArchetypes": ["ws://", "mem://", "kb://"],
+                                "conditions": [{ "type": "Ready", "status": "True" }]
+                            }
+                        }]
+                    }))
+                }),
+            )
+            .route(
+                "/apis/iam.corp.io/v1alpha1/authflowbundles",
+                get(|| async {
+                    Json(json!({
+                        "items": [{
+                            "apiVersion": "iam.corp.io/v1alpha1",
+                            "kind": "AuthFlowBundle",
+                            "metadata": { "namespace": "iam-system", "name": "corp-fido2-browser" },
+                            "spec": { "realm": "corp", "flowAlias": "corp-fido2-browser", "bindAsRealmBrowserFlow": true },
+                            "status": {
+                                "activeFlowAlias": "corp-fido2-browser-32922097",
+                                "conditions": [{ "type": "Ready", "status": "True" }]
+                            }
+                        }]
+                    }))
+                }),
+            );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback mock k8s");
+        let addr = listener.local_addr().unwrap();
+        let server_task = tokio::spawn(async move {
+            axum::serve(listener, app).await.ok();
+        });
+
+        let kc = KubeClient::from_endpoint(
+            "pits-lab",
+            ResolvedKubeEndpoint {
+                context_name: "mock".to_string(),
+                server_url: format!("http://{addr}"),
+                tls_server_name: None,
+                ca_pem: None,
+                client_cert_pem: None,
+                client_key_pem: None,
+                bearer_token: None,
+                insecure_skip_tls_verify: true,
+            },
+            None,
+        )
+        .expect("build loopback KubeClient");
+
+        let found = discover_k8s_crossplane_fast(
+            &kc,
+            "cluster-pits-lab",
+            "resource:default/cluster-pits-lab",
+            None,
+        )
+        .await;
+        server_task.abort();
+
+        let mut live = LiveTelemetry::default();
+        live.any_connected = true;
+        live.discovered_k8s_resources = found;
+        let bundle = WorkspaceBundle::builtin_pits_baseline();
+        let p = std::env::temp_dir().join(format!("pits-new-xp-{}.yaml", uuid::Uuid::new_v4()));
+        let sourcing = SourcingStore::load_with_options(p, None, None, true);
+        let snap = synthesize_snapshot_from_inputs(&bundle, None, &live, &sourcing, Utc::now());
+
+        let ai = snap
+            .details
+            .get("pits-cicd/pits-agent-space")
+            .expect("AIStorageWorkspace must synthesize");
+        assert_eq!(ai.entity.kind, "Resource");
+        assert_eq!(ai.resource_type, "ai-storage-workspace");
+        assert_eq!(ai.status, "SyncedReady");
+        assert_eq!(
+            ai.entity.spec.get("mcpEndpoint").and_then(|v| v.as_str()),
+            Some("https://mcp.lab.martensite.dev/mcp")
+        );
+        assert!(ai.entity.metadata.tags.iter().any(|t| t == "crossplane"));
+
+        let auth = snap
+            .details
+            .get("iam-system/corp-fido2-browser")
+            .expect("AuthFlowBundle must synthesize");
+        assert_eq!(auth.entity.kind, "Resource");
+        assert_eq!(auth.resource_type, "auth-flow-bundle");
+        assert_eq!(
+            auth.entity
+                .spec
+                .get("activeFlowAlias")
+                .and_then(|v| v.as_str()),
+            Some("corp-fido2-browser-32922097")
+        );
+
+        let ai_rt = snap
+            .resource_types
+            .iter()
+            .find(|t| t.resource_type == "ai-storage-workspace")
+            .expect("ai-storage-workspace in resource_types");
+        assert_eq!(ai_rt.entity_count, 1);
+        assert_eq!(ai_rt.healthy_count, 1);
+
+        let auth_rt = snap
+            .resource_types
+            .iter()
+            .find(|t| t.resource_type == "auth-flow-bundle")
+            .expect("auth-flow-bundle in resource_types");
+        assert_eq!(auth_rt.entity_count, 1);
+        assert_eq!(auth_rt.healthy_count, 1);
+
+        let comp = snap
+            .details
+            .get("default/aistorage-workspace-composition")
+            .expect("Composition must synthesize");
+        assert_eq!(comp.resource_type, "crossplane-composition");
+
+        let func = snap
+            .details
+            .get("default/function-auto-ready")
+            .expect("Function must synthesize");
+        assert_eq!(func.resource_type, "crossplane-function");
     }
 }

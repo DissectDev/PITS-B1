@@ -1,0 +1,224 @@
+# Public Cloudflare Tunnel edge inside the `keycloak` namespace:
+# 1. `keycloak-public-proxy` enforces path allowlisting (/realms/corp/, /resources/, /js/)
+#    while strictly denying /admin/ and /realms/master/ from public exposure, and serves
+#    RFC 7033 WebFinger for `martensite.dev`.
+# 2. `cloudflared` connects outbound via HTTP/2 using runtime Secret `cloudflared-tunnel`
+#    (key: `token`, never committed to Git).
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-public-proxy-nginx
+  namespace: keycloak
+data:
+  nginx.conf: |
+    worker_processes 1;
+    events {
+      worker_connections 512;
+    }
+    http {
+      include /etc/nginx/mime.types;
+      default_type application/octet-stream;
+
+      map $arg_resource $webfinger_subject {
+        default "acct:admin@martensite.dev";
+        "~^acct:[A-Za-z0-9._%+\-]+@martensite\.dev$" $arg_resource;
+      }
+
+      server {
+        listen 8080;
+        server_name sso.martensite.dev martensite.dev _;
+
+        # RFC 7033 WebFinger for Tailscale Custom OIDC discovery
+        location = /.well-known/webfinger {
+          default_type application/jrd+json;
+          return 200 '{"subject":"$webfinger_subject","links":[{"rel":"http://openid.net/specs/connect/1.0/issuer","href":"https://sso.martensite.dev/realms/corp"}]}';
+        }
+
+        location = /healthz {
+          default_type text/plain;
+          return 200 "ok\n";
+        }
+
+        location = /robots.txt {
+          default_type text/plain;
+          return 200 "User-agent: *\nDisallow: /\n";
+        }
+
+        # Allowlist ONLY corp realm OIDC endpoints & static login assets
+        location ^~ /realms/corp/ {
+          proxy_pass https://keycloak-service.keycloak.svc.cluster.local:8443;
+          proxy_ssl_trusted_certificate /etc/ssl/pits-ca/ca.crt;
+          proxy_ssl_verify on;
+          proxy_ssl_name keycloak-service.keycloak.svc.cluster.local;
+          proxy_ssl_server_name on;
+
+          proxy_set_header Host sso.martensite.dev;
+          proxy_set_header X-Forwarded-Proto https;
+          proxy_set_header X-Forwarded-Host sso.martensite.dev;
+          proxy_set_header X-Forwarded-Port 443;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+          proxy_buffer_size 128k;
+          proxy_buffers 4 256k;
+          proxy_busy_buffers_size 256k;
+        }
+
+        location ^~ /resources/ {
+          proxy_pass https://keycloak-service.keycloak.svc.cluster.local:8443;
+          proxy_ssl_trusted_certificate /etc/ssl/pits-ca/ca.crt;
+          proxy_ssl_verify on;
+          proxy_ssl_name keycloak-service.keycloak.svc.cluster.local;
+          proxy_ssl_server_name on;
+          proxy_set_header Host sso.martensite.dev;
+          proxy_set_header X-Forwarded-Proto https;
+        }
+
+        location ^~ /js/ {
+          proxy_pass https://keycloak-service.keycloak.svc.cluster.local:8443;
+          proxy_ssl_trusted_certificate /etc/ssl/pits-ca/ca.crt;
+          proxy_ssl_verify on;
+          proxy_ssl_name keycloak-service.keycloak.svc.cluster.local;
+          proxy_ssl_server_name on;
+          proxy_set_header Host sso.martensite.dev;
+          proxy_set_header X-Forwarded-Proto https;
+        }
+
+        # Explicitly block /admin/, /realms/master/, and everything else
+        location / {
+          default_type text/plain;
+          return 403 "Forbidden on public tunnel\n";
+        }
+      }
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak-public-proxy
+  namespace: keycloak
+  labels:
+    app: keycloak-public-proxy
+spec:
+  selector:
+    app: keycloak-public-proxy
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak-public-proxy
+  namespace: keycloak
+  labels:
+    app: keycloak-public-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keycloak-public-proxy
+  template:
+    metadata:
+      labels:
+        app: keycloak-public-proxy
+    spec:
+      containers:
+        - name: nginx
+          image: docker.io/library/nginx:1.29-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: nginx-conf
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: pits-ca
+              mountPath: /etc/ssl/pits-ca
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: nginx-conf
+          configMap:
+            name: keycloak-public-proxy-nginx
+        - name: pits-ca
+          secret:
+            secretName: keycloak-tls
+            items:
+              - key: ca.crt
+                path: ca.crt
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflared
+  namespace: keycloak
+  labels:
+    app: cloudflared
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cloudflared
+  template:
+    metadata:
+      labels:
+        app: cloudflared
+    spec:
+      containers:
+        - name: cloudflared
+          image: docker.io/cloudflare/cloudflared:2026.11.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - tunnel
+            - --no-autoupdate
+            - --protocol
+            - http2
+            - --metrics
+            - 0.0.0.0:2000
+            - run
+          env:
+            - name: TUNNEL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: cloudflared-tunnel
+                  key: token
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: HTTPS_PROXY
+              value: http://$(HOST_IP):7890
+            - name: HTTP_PROXY
+              value: http://$(HOST_IP):7890
+            - name: NO_PROXY
+              value: localhost,127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,.svc,.cluster.local,.cluster.local.
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: 2000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 4
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
