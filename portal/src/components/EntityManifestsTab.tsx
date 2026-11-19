@@ -1,30 +1,27 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Alert,
-  Box,
-  Button,
-  Card,
-  CardContent,
-  CardHeader,
-  Chip,
-  CircularProgress,
-  Divider,
-  List,
-  ListItemButton,
-  ListItemIcon,
-  ListItemText,
-  Paper,
-  Stack,
-  Typography,
-} from '@mui/material';
-import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import CheckIcon from '@mui/icons-material/Check';
-import DownloadIcon from '@mui/icons-material/Download';
-import RefreshIcon from '@mui/icons-material/Refresh';
+  AlertTriangle,
+  Check,
+  Copy,
+  Download,
+  FileCode2,
+  Loader2,
+  RefreshCw,
+} from 'lucide-react';
 import YAML from 'yaml';
 import { useEntity } from '@backstage/plugin-catalog-react';
 import { usePitsEntityDetail } from '../hooks/usePitsEntityDetail';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from './ui/card';
+import { Alert, AlertDescription } from './ui/alert';
+import { cn } from '../lib/utils';
 
 export const EntityManifestsTab: React.FC = () => {
   const { entity } = useEntity();
@@ -55,9 +52,7 @@ export const EntityManifestsTab: React.FC = () => {
 
   const activeEntry = useMemo(() => {
     if (manifestEntries.length === 0) return null;
-    return (
-      manifestEntries.find(([k]) => k === selectedKey) ?? manifestEntries[0]
-    );
+    return manifestEntries.find(([k]) => k === selectedKey) ?? manifestEntries[0];
   }, [manifestEntries, selectedKey]);
 
   const handleCopy = async () => {
@@ -86,12 +81,13 @@ export const EntityManifestsTab: React.FC = () => {
 
   if (loading && !detail) {
     return (
-      <Card variant="outlined">
-        <CardContent sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 4 }}>
-          <CircularProgress size={24} />
-          <Typography variant="body2" color="text.secondary">
-            Rendering declarative manifests for <strong>{name}</strong>...
-          </Typography>
+      <Card>
+        <CardContent className="flex items-center gap-3 p-6">
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          <span className="text-xs text-muted-foreground">
+            Rendering declarative manifests for <strong className="text-foreground">{name}</strong>
+            ...
+          </span>
         </CardContent>
       </Card>
     );
@@ -100,152 +96,117 @@ export const EntityManifestsTab: React.FC = () => {
   const lineCount = activeEntry ? activeEntry[1].split('\n').length : 0;
 
   return (
-    <Card variant="outlined">
-      <CardHeader
-        title="Declarative Manifests & Rendered Configurations"
-        subheader="Backstage Entity Registry YAML and domain-specific Kubernetes, Talos, EdgeRouter, DRA, iPXE, or Sourcing Audit artifacts"
-        action={
-          <Button
-            size="small"
-            variant="outlined"
-            startIcon={refreshing ? <CircularProgress size={15} /> : <RefreshIcon />}
-            disabled={refreshing}
-            onClick={() => void refreshLive()}
-          >
-            {refreshing ? 'Refreshing...' : 'Refresh Manifests'}
-          </Button>
-        }
-      />
-      <Divider />
-      <CardContent>
+    <Card>
+      <CardHeader className="flex flex-col gap-3 border-b border-solid border-border sm:flex-row sm:items-center sm:justify-between">
+        <div className="space-y-1">
+          <CardTitle>Declarative Manifests &amp; Rendered Configurations</CardTitle>
+          <CardDescription>
+            Backstage Entity Registry YAML and domain-specific Kubernetes, Talos, EdgeRouter, DRA,
+            iPXE, or Sourcing Audit artifacts
+          </CardDescription>
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={refreshing}
+          onClick={() => void refreshLive()}
+          className="shrink-0"
+        >
+          {refreshing ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <RefreshCw className="h-3.5 w-3.5" />
+          )}
+          <span>{refreshing ? 'Refreshing...' : 'Refresh Manifests'}</span>
+        </Button>
+      </CardHeader>
+
+      <CardContent className="space-y-4 p-5">
         {error && (
-          <Alert severity="warning" sx={{ mb: 2 }}>
-            {error}
+          <Alert variant="warning">
+            <AlertTriangle />
+            <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}
 
         {manifestEntries.length === 0 || !activeEntry ? (
-          <Typography variant="body2" color="text.secondary">
+          <div className="text-xs text-muted-foreground">
             No manifests available for this entity.
-          </Typography>
+          </div>
         ) : (
-          <Box
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: { xs: '1fr', md: '270px 1fr' },
-              gap: 2.5,
-              alignItems: 'start',
-            }}
-          >
-            <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
-              <Box
-                sx={{
-                  px: 2,
-                  py: 1,
-                  bgcolor: 'action.hover',
-                  borderBottom: '1px solid',
-                  borderColor: 'divider',
-                }}
-              >
-                <Typography variant="caption" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>
-                  Artifacts ({manifestEntries.length})
-                </Typography>
-              </Box>
-              <List dense disablePadding>
+          <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-[270px_1fr]">
+            <div className="overflow-hidden rounded-lg border border-solid border-border">
+              <div className="border-b border-solid border-border bg-muted/50 px-3.5 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Artifacts ({manifestEntries.length})
+              </div>
+              <div className="divide-y divide-border">
                 {manifestEntries.map(([fileKey, content]) => {
                   const selected = activeEntry[0] === fileKey;
                   const lines = content.split('\n').length;
                   return (
-                    <ListItemButton
+                    <button
                       key={fileKey}
-                      selected={selected}
+                      type="button"
                       onClick={() => setSelectedKey(fileKey)}
-                      sx={{ py: 1 }}
+                      className={cn(
+                        'flex w-full cursor-pointer items-start gap-2.5 border-0 px-3.5 py-2.5 text-left transition-colors',
+                        selected
+                          ? 'bg-accent text-accent-foreground'
+                          : 'bg-card text-foreground hover:bg-muted/50',
+                      )}
                     >
-                      <ListItemIcon sx={{ minWidth: 32 }}>
-                        <DescriptionOutlinedIcon fontSize="small" color={selected ? 'primary' : 'inherit'} />
-                      </ListItemIcon>
-                      <ListItemText
-                        primary={fileKey}
-                        secondary={`${lines} lines`}
-                        primaryTypographyProps={{
-                          sx: {
-                            fontFamily: 'monospace',
-                            fontSize: '0.8rem',
-                            fontWeight: selected ? 700 : 500,
-                            wordBreak: 'break-all',
-                          },
-                        }}
+                      <FileCode2
+                        className={cn(
+                          'mt-0.5 h-4 w-4 shrink-0',
+                          selected ? 'text-foreground' : 'text-muted-foreground',
+                        )}
                       />
-                    </ListItemButton>
+                      <div className="min-w-0">
+                        <div
+                          className={cn(
+                            'break-all font-mono text-xs',
+                            selected ? 'font-semibold' : 'font-medium',
+                          )}
+                        >
+                          {fileKey}
+                        </div>
+                        <div className="text-[11px] text-muted-foreground">{lines} lines</div>
+                      </div>
+                    </button>
                   );
                 })}
-              </List>
-            </Paper>
+              </div>
+            </div>
 
-            <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
-              <Stack
-                direction="row"
-                justifyContent="space-between"
-                alignItems="center"
-                flexWrap="wrap"
-                useFlexGap
-                spacing={1}
-                sx={{
-                  px: 2,
-                  py: 1,
-                  bgcolor: 'action.hover',
-                  borderBottom: '1px solid',
-                  borderColor: 'divider',
-                }}
-              >
-                <Stack direction="row" spacing={1} alignItems="center">
-                  <Typography
-                    variant="subtitle2"
-                    sx={{ fontFamily: 'monospace', fontWeight: 700 }}
-                  >
+            <div className="overflow-hidden rounded-lg border border-solid border-border">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-solid border-border bg-muted/50 px-4 py-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-xs font-semibold text-foreground">
                     {activeEntry[0]}
-                  </Typography>
-                  <Chip size="small" variant="outlined" label={`${lineCount} lines`} />
-                </Stack>
-                <Stack direction="row" spacing={1}>
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    startIcon={copied ? <CheckIcon /> : <ContentCopyIcon />}
-                    onClick={handleCopy}
-                  >
-                    {copied ? 'Copied!' : 'Copy'}
+                  </span>
+                  <Badge variant="outline">{lineCount} lines</Badge>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Button size="xs" variant="outline" onClick={() => void handleCopy()}>
+                    {copied ? (
+                      <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+                    ) : (
+                      <Copy className="h-3 w-3" />
+                    )}
+                    <span>{copied ? 'Copied!' : 'Copy'}</span>
                   </Button>
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    startIcon={<DownloadIcon />}
-                    onClick={handleDownload}
-                  >
-                    Download
+                  <Button size="xs" variant="outline" onClick={handleDownload}>
+                    <Download className="h-3 w-3" />
+                    <span>Download</span>
                   </Button>
-                </Stack>
-              </Stack>
+                </div>
+              </div>
 
-              <Box
-                component="pre"
-                sx={{
-                  m: 0,
-                  p: 2,
-                  maxHeight: '68vh',
-                  overflow: 'auto',
-                  bgcolor: '#0f172a',
-                  color: '#e2e8f0',
-                  fontFamily: '"JetBrains Mono", "Cascadia Code", Consolas, monospace',
-                  fontSize: '0.8rem',
-                  lineHeight: 1.55,
-                }}
-              >
+              <pre className="pits-scroll m-0 max-h-[68vh] overflow-auto bg-zinc-950 p-4 font-mono text-xs leading-relaxed text-zinc-200">
                 {activeEntry[1]}
-              </Box>
-            </Paper>
-          </Box>
+              </pre>
+            </div>
+          </div>
         )}
       </CardContent>
     </Card>

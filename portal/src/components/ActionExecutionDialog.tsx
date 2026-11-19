@@ -1,37 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Alert,
-  AlertTitle,
-  Box,
-  Button,
-  Chip,
-  CircularProgress,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  Divider,
-  FormControlLabel,
-  IconButton,
-  MenuItem,
-  Paper,
-  Stack,
-  Switch,
-  Table,
-  TableBody,
-  TableCell,
-  TableRow,
-  TextField,
-  Tooltip,
-  Typography,
-} from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import ScienceIcon from '@mui/icons-material/Science';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import DownloadIcon from '@mui/icons-material/Download';
-import CheckIcon from '@mui/icons-material/Check';
-import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined';
+  AlertCircle,
+  Check,
+  Copy,
+  Download,
+  FlaskConical,
+  Loader2,
+  Play,
+  Shield,
+} from 'lucide-react';
 import YAML from 'yaml';
 import { invokeEntityAction } from '../api/pitsClient';
 import type {
@@ -40,6 +17,19 @@ import type {
   EntityActionSpec,
 } from '../types';
 import { FormattedAttributeValue, StatusPill } from './StatusPill';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import { Input } from './ui/input';
+import { Textarea } from './ui/textarea';
+import { Alert, AlertDescription, AlertTitle } from './ui/alert';
+import { Table, TableBody, TableCell, TableRow } from './ui/table';
+import {
+  PitsDialog,
+  PitsSelect,
+  PitsSwitch,
+  PitsTooltip,
+} from './ui/pits-primitives';
+import { cn } from '../lib/utils';
 
 interface ActionExecutionDialogProps {
   open: boolean;
@@ -252,394 +242,342 @@ export const ActionExecutionDialog: React.FC<ActionExecutionDialogProps> = ({
   const outputSummaryRows = result ? summarizeOutputEntries(result.output) : [];
 
   return (
-    <Dialog
+    <PitsDialog
       open={open}
-      onClose={submittingMode ? undefined : onClose}
-      maxWidth="md"
-      fullWidth
-      scroll="paper"
-    >
-      <DialogTitle sx={{ pb: 1.5 }}>
-        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={2}>
-          <Box>
-            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-              <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                {action.title}
-              </Typography>
-              <Chip
-                size="small"
-                label={action.id}
-                sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}
-              />
-              <Chip size="small" variant="outlined" label={action.category} />
-            </Stack>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-              Target Entity:{' '}
-              <Box component="code" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>
-                resource:{namespace}/{entityName}
-              </Box>{' '}
-              ({resourceType})
-            </Typography>
-          </Box>
-          <IconButton onClick={onClose} disabled={Boolean(submittingMode)} size="small">
-            <CloseIcon />
-          </IconButton>
-        </Stack>
-      </DialogTitle>
-
-      <Divider />
-
-      <DialogContent sx={{ py: 2.5 }}>
-        <Stack spacing={2.5}>
-          <Typography variant="body2" color="text.secondary">
-            {action.description}
-          </Typography>
-
-          {action.dangerous && (
-            <Alert severity="warning" icon={<ShieldOutlinedIcon />}>
-              <AlertTitle sx={{ fontWeight: 700 }}>
-                Guarded Infrastructure Operation
-              </AlertTitle>
-              This action mutates live infrastructure state and enforces PITS safety invariants
-              (such as <code>mgmt0 0000:58:00.0</code> preservation, Talos <code>netboot-guard</code>{' '}
-              WWID allowlists, or active workstation session protection).
-              {action.supportsDryRun
-                ? ' Run a Dry-Run Preview first to inspect rendered changes safely before applying.'
-                : ''}
-            </Alert>
+      onOpenChange={next => {
+        if (!next) onClose();
+      }}
+      disableClose={Boolean(submittingMode)}
+      title={
+        <span className="flex flex-wrap items-center gap-2">
+          <span>{action.title}</span>
+          <Badge variant="muted" className="font-mono">
+            {action.id}
+          </Badge>
+          <Badge variant="outline">{action.category}</Badge>
+        </span>
+      }
+      subtitle={
+        <span>
+          Target Entity:{' '}
+          <code className="font-mono font-semibold text-foreground">
+            resource:{namespace}/{entityName}
+          </code>{' '}
+          ({resourceType})
+        </span>
+      }
+      footer={
+        <>
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={Boolean(submittingMode)}>
+            Close
+          </Button>
+          {action.supportsDryRun && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={Boolean(submittingMode) || hasYamlError}
+              onClick={() => void handleRun(true)}
+            >
+              {submittingMode === 'dryRun' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <FlaskConical className="h-3.5 w-3.5" />
+              )}
+              <span>Dry-Run Preview</span>
+            </Button>
           )}
+          <Button
+            variant={action.dangerous ? 'warningSolid' : 'default'}
+            size="sm"
+            disabled={Boolean(submittingMode) || hasYamlError}
+            onClick={() => void handleRun(false)}
+          >
+            {submittingMode === 'execute' ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Play className="h-3.5 w-3.5" />
+            )}
+            <span>Execute Action</span>
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <p className="m-0 text-[13px] leading-relaxed text-muted-foreground">
+          {action.description}
+        </p>
 
-          {parameters.length === 0 ? (
-            <Paper variant="outlined" sx={{ p: 2, bgcolor: 'action.hover' }}>
-              <Typography variant="body2" color="text.secondary">
-                No additional input parameters required for <code>{action.id}</code>. Click{' '}
-                <strong>{action.supportsDryRun ? 'Dry-Run Preview or Execute Action' : 'Execute Action'}</strong>{' '}
-                below to proceed.
-              </Typography>
-            </Paper>
-          ) : (
-            <Stack spacing={2}>
-              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-                Action Parameters
-              </Typography>
-              {parameters.map(param => {
-                const currentVal = formValues[param.name];
+        {action.dangerous && (
+          <Alert variant="warning">
+            <Shield />
+            <div>
+              <AlertTitle>Guarded Infrastructure Operation</AlertTitle>
+              <AlertDescription>
+                This action mutates live infrastructure state and enforces PITS safety invariants
+                (such as{' '}
+                <code className="rounded bg-black/10 px-1 py-0.5 font-mono text-[11px] dark:bg-white/10">
+                  mgmt0 0000:58:00.0
+                </code>{' '}
+                preservation, Talos{' '}
+                <code className="rounded bg-black/10 px-1 py-0.5 font-mono text-[11px] dark:bg-white/10">
+                  netboot-guard
+                </code>{' '}
+                WWID allowlists, or active workstation session protection).
+                {action.supportsDryRun
+                  ? ' Run a Dry-Run Preview first to inspect rendered changes safely before applying.'
+                  : ''}
+              </AlertDescription>
+            </div>
+          </Alert>
+        )}
 
-                if (param.paramType === 'boolean') {
-                  return (
-                    <Paper key={param.name} variant="outlined" sx={{ p: 1.5 }}>
-                      <FormControlLabel
-                        control={
-                          <Switch
-                            checked={Boolean(currentVal)}
-                            onChange={e => setParamValue(param.name, e.target.checked)}
-                            color={action.dangerous ? 'warning' : 'primary'}
-                          />
-                        }
-                        label={
-                          <Box>
-                            <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                              {param.label}{' '}
-                              <Typography
-                                component="span"
-                                variant="caption"
-                                sx={{ fontFamily: 'monospace', color: 'text.secondary' }}
-                              >
-                                ({param.name})
-                              </Typography>
-                            </Typography>
-                            {param.description && (
-                              <Typography variant="caption" color="text.secondary">
-                                {param.description}
-                              </Typography>
-                            )}
-                          </Box>
-                        }
+        {parameters.length === 0 ? (
+          <div className="rounded-lg border border-solid border-border bg-muted/40 p-3.5 text-xs leading-relaxed text-muted-foreground">
+            No additional input parameters required for{' '}
+            <code className="font-mono text-foreground">{action.id}</code>. Click{' '}
+            <strong className="text-foreground">
+              {action.supportsDryRun ? 'Dry-Run Preview or Execute Action' : 'Execute Action'}
+            </strong>{' '}
+            below to proceed.
+          </div>
+        ) : (
+          <div className="space-y-3.5">
+            <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Action Parameters
+            </div>
+
+            {parameters.map(param => {
+              const currentVal = formValues[param.name];
+
+              if (param.paramType === 'boolean') {
+                return (
+                  <label
+                    key={param.name}
+                    className="flex cursor-pointer items-start justify-between gap-4 rounded-lg border border-solid border-border bg-muted/20 p-3.5"
+                  >
+                    <div className="space-y-0.5">
+                      <div className="text-xs font-semibold text-foreground">
+                        {param.label}{' '}
+                        <span className="font-mono text-[11px] font-normal text-muted-foreground">
+                          ({param.name})
+                        </span>
+                      </div>
+                      {param.description && (
+                        <div className="text-[11px] text-muted-foreground">
+                          {param.description}
+                        </div>
+                      )}
+                    </div>
+                    <PitsSwitch
+                      checked={Boolean(currentVal)}
+                      onCheckedChange={checked => setParamValue(param.name, checked)}
+                      tone={action.dangerous ? 'warning' : 'default'}
+                    />
+                  </label>
+                );
+              }
+
+              if (param.paramType === 'select') {
+                return (
+                  <div key={param.name} className="space-y-1.5">
+                    <label className="block text-xs font-medium text-foreground">
+                      {param.label}{' '}
+                      <span className="font-mono text-[11px] text-muted-foreground">
+                        ({param.name})
+                      </span>
+                      {param.required && <span className="ml-0.5 text-red-500">*</span>}
+                    </label>
+                    <PitsSelect
+                      value={String(currentVal ?? '')}
+                      onValueChange={val => setParamValue(param.name, val)}
+                      options={(param.options ?? []).map(opt => ({ value: opt, label: opt }))}
+                    />
+                    {param.description && (
+                      <p className="m-0 text-[11px] text-muted-foreground">{param.description}</p>
+                    )}
+                  </div>
+                );
+              }
+
+              if (param.paramType === 'yaml') {
+                const yamlErr = yamlValidationErrors[param.name];
+                return (
+                  <div key={param.name} className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="text-xs font-medium text-foreground">
+                        {param.label}{' '}
+                        <span className="font-mono text-[11px] text-muted-foreground">
+                          ({param.name})
+                        </span>
+                        {param.required && <span className="ml-0.5 text-red-500">*</span>}
+                      </label>
+                      <StatusPill
+                        label={yamlErr ? 'YAML Syntax Issue' : 'Valid YAML'}
+                        level={yamlErr ? 'error' : 'ok'}
                       />
-                    </Paper>
-                  );
-                }
-
-                if (param.paramType === 'select') {
-                  return (
-                    <TextField
-                      key={param.name}
-                      select
-                      fullWidth
-                      size="small"
-                      required={param.required}
-                      label={`${param.label} (${param.name})`}
+                    </div>
+                    <Textarea
+                      rows={11}
                       value={String(currentVal ?? '')}
                       onChange={e => setParamValue(param.name, e.target.value)}
-                      helperText={param.description}
-                    >
-                      {(param.options ?? []).map(opt => (
-                        <MenuItem key={opt} value={opt}>
-                          {opt}
-                        </MenuItem>
-                      ))}
-                    </TextField>
-                  );
-                }
-
-                if (param.paramType === 'yaml') {
-                  const yamlErr = yamlValidationErrors[param.name];
-                  return (
-                    <Box key={param.name}>
-                      <Stack
-                        direction="row"
-                        justifyContent="space-between"
-                        alignItems="center"
-                        sx={{ mb: 0.75 }}
+                      className={cn(
+                        'font-mono text-xs leading-relaxed',
+                        yamlErr && 'border-red-500 focus-visible:ring-red-500',
+                      )}
+                    />
+                    {(yamlErr || param.description) && (
+                      <p
+                        className={cn(
+                          'm-0 text-[11px]',
+                          yamlErr ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground',
+                        )}
                       >
-                        <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                          {param.label}{' '}
-                          <Typography
-                            component="span"
-                            variant="caption"
-                            sx={{ fontFamily: 'monospace', color: 'text.secondary' }}
-                          >
-                            ({param.name})
-                          </Typography>
-                        </Typography>
-                        <StatusPill
-                          label={yamlErr ? 'YAML Syntax Issue' : 'Valid YAML'}
-                          level={yamlErr ? 'error' : 'ok'}
-                        />
-                      </Stack>
-                      <TextField
-                        fullWidth
-                        multiline
-                        minRows={10}
-                        maxRows={20}
-                        required={param.required}
-                        value={String(currentVal ?? '')}
-                        onChange={e => setParamValue(param.name, e.target.value)}
-                        error={Boolean(yamlErr)}
-                        helperText={yamlErr || param.description}
-                        InputProps={{
-                          sx: {
-                            fontFamily: '"JetBrains Mono", "Cascadia Code", Consolas, monospace',
-                            fontSize: '0.8rem',
-                            lineHeight: 1.5,
-                          },
-                        }}
-                      />
-                    </Box>
-                  );
-                }
+                        {yamlErr || param.description}
+                      </p>
+                    )}
+                  </div>
+                );
+              }
 
-                return (
-                  <TextField
-                    key={param.name}
-                    fullWidth
-                    size="small"
+              return (
+                <div key={param.name} className="space-y-1.5">
+                  <label className="block text-xs font-medium text-foreground">
+                    {param.label}{' '}
+                    <span className="font-mono text-[11px] text-muted-foreground">
+                      ({param.name})
+                    </span>
+                    {param.required && <span className="ml-0.5 text-red-500">*</span>}
+                  </label>
+                  <Input
                     type={
                       param.paramType === 'integer' || param.paramType === 'number'
                         ? 'number'
                         : 'text'
                     }
-                    inputProps={param.paramType === 'number' ? { step: '0.1' } : undefined}
+                    step={param.paramType === 'number' ? '0.1' : undefined}
                     required={param.required}
-                    label={`${param.label} (${param.name})`}
-                    value={currentVal === undefined || currentVal === null ? '' : String(currentVal)}
+                    value={
+                      currentVal === undefined || currentVal === null ? '' : String(currentVal)
+                    }
                     onChange={e => setParamValue(param.name, e.target.value)}
-                    helperText={param.description}
                   />
-                );
-              })}
-            </Stack>
-          )}
-
-          {errorMsg && (
-            <Alert severity="error">
-              <AlertTitle sx={{ fontWeight: 700 }}>Action Rejected or Failed</AlertTitle>
-              {errorMsg}
-            </Alert>
-          )}
-
-          {result && (
-            <Paper
-              variant="outlined"
-              sx={{
-                p: 2,
-                borderWidth: 1.5,
-                borderColor: result.success ? 'success.main' : 'error.main',
-              }}
-            >
-              <Stack spacing={1.5}>
-                <Stack
-                  direction="row"
-                  justifyContent="space-between"
-                  alignItems="center"
-                  flexWrap="wrap"
-                  useFlexGap
-                  spacing={1}
-                >
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    <StatusPill
-                      label={result.success ? 'Succeeded' : 'Blocked / Failed'}
-                      level={result.success ? 'ok' : 'error'}
-                    />
-                    <Chip
-                      size="small"
-                      color={result.dryRun ? 'info' : 'primary'}
-                      variant="outlined"
-                      label={result.dryRun ? 'DRY-RUN PREVIEW' : 'LIVE EXECUTION'}
-                    />
-                  </Stack>
-                  <Typography variant="caption" color="text.secondary">
-                    Executed at {new Date(result.executedAt).toLocaleString()}
-                  </Typography>
-                </Stack>
-
-                <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                  {result.summary}
-                </Typography>
-
-                {result.changesOrWarnings.length > 0 && (
-                  <Box>
-                    <Typography
-                      variant="caption"
-                      color="text.secondary"
-                      sx={{ fontWeight: 700, textTransform: 'uppercase' }}
-                    >
-                      Precondition Checks, Changes & Warnings
-                    </Typography>
-                    <Stack component="ul" spacing={0.5} sx={{ m: 0, mt: 0.5, pl: 2.5 }}>
-                      {result.changesOrWarnings.map((item, idx) => (
-                        <Typography component="li" variant="body2" key={idx}>
-                          {item}
-                        </Typography>
-                      ))}
-                    </Stack>
-                  </Box>
-                )}
-
-                {outputSummaryRows.length > 0 && (
-                  <Box>
-                    <Typography
-                      variant="caption"
-                      color="text.secondary"
-                      sx={{ fontWeight: 700, textTransform: 'uppercase' }}
-                    >
-                      Structured Execution Telemetry
-                    </Typography>
-                    <Table size="small" sx={{ mt: 0.5 }}>
-                      <TableBody>
-                        {outputSummaryRows.map(row => (
-                          <TableRow key={row.key}>
-                            <TableCell
-                              sx={{ width: '34%', fontWeight: 600, color: 'text.secondary' }}
-                            >
-                              {row.key}
-                            </TableCell>
-                            <TableCell>
-                              <FormattedAttributeValue value={row.value} itemKey={row.key} />
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </Box>
-                )}
-
-                {result.renderedArtifact && (
-                  <Box>
-                    <Stack
-                      direction="row"
-                      justifyContent="space-between"
-                      alignItems="center"
-                      sx={{ mb: 0.5 }}
-                    >
-                      <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        sx={{ fontWeight: 700, textTransform: 'uppercase' }}
-                      >
-                        Rendered Declarative Artifact (YAML / iPXE / RDP)
-                      </Typography>
-                      <Stack direction="row" spacing={1}>
-                        {action.id === 'connect-pinned-rdp' && (
-                          <Tooltip title={`Download ${entityName}.rdp for mstsc.exe`}>
-                            <Button
-                              size="small"
-                              variant="outlined"
-                              startIcon={<DownloadIcon />}
-                              onClick={handleDownloadRdp}
-                            >
-                              Download .rdp
-                            </Button>
-                          </Tooltip>
-                        )}
-                        <Tooltip title={copiedArtifact ? 'Copied!' : 'Copy artifact'}>
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            startIcon={copiedArtifact ? <CheckIcon /> : <ContentCopyIcon />}
-                            onClick={handleCopyArtifact}
-                          >
-                            {copiedArtifact ? 'Copied' : 'Copy'}
-                          </Button>
-                        </Tooltip>
-                      </Stack>
-                    </Stack>
-                    <Box
-                      component="pre"
-                      sx={{
-                        m: 0,
-                        p: 1.5,
-                        maxHeight: 320,
-                        overflow: 'auto',
-                        bgcolor: '#0f172a',
-                        color: '#e2e8f0',
-                        borderRadius: 1,
-                        fontFamily: '"JetBrains Mono", "Cascadia Code", Consolas, monospace',
-                        fontSize: '0.78rem',
-                        lineHeight: 1.5,
-                      }}
-                    >
-                      {result.renderedArtifact}
-                    </Box>
-                  </Box>
-                )}
-              </Stack>
-            </Paper>
-          )}
-        </Stack>
-      </DialogContent>
-
-      <Divider />
-
-      <DialogActions sx={{ px: 3, py: 1.75 }}>
-        <Button onClick={onClose} disabled={Boolean(submittingMode)}>
-          Close
-        </Button>
-        {action.supportsDryRun && (
-          <Button
-            variant="outlined"
-            color="info"
-            disabled={Boolean(submittingMode) || hasYamlError}
-            startIcon={
-              submittingMode === 'dryRun' ? <CircularProgress size={16} /> : <ScienceIcon />
-            }
-            onClick={() => handleRun(true)}
-          >
-            Dry-Run Preview
-          </Button>
+                  {param.description && (
+                    <p className="m-0 text-[11px] text-muted-foreground">{param.description}</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         )}
-        <Button
-          variant="contained"
-          color={action.dangerous ? 'warning' : 'primary'}
-          disabled={Boolean(submittingMode) || hasYamlError}
-          startIcon={
-            submittingMode === 'execute' ? <CircularProgress size={16} color="inherit" /> : <PlayArrowIcon />
-          }
-          onClick={() => handleRun(false)}
-        >
-          Execute Action
-        </Button>
-      </DialogActions>
-    </Dialog>
+
+        {errorMsg && (
+          <Alert variant="destructive">
+            <AlertCircle />
+            <div>
+              <AlertTitle>Action Rejected or Failed</AlertTitle>
+              <AlertDescription>{errorMsg}</AlertDescription>
+            </div>
+          </Alert>
+        )}
+
+        {result && (
+          <div
+            className={cn(
+              'space-y-3.5 rounded-lg border border-solid p-4',
+              result.success
+                ? 'border-emerald-500/40 bg-emerald-500/[0.04]'
+                : 'border-red-500/40 bg-red-500/[0.04]',
+            )}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <StatusPill
+                  label={result.success ? 'Succeeded' : 'Blocked / Failed'}
+                  level={result.success ? 'ok' : 'error'}
+                />
+                <Badge variant={result.dryRun ? 'info' : 'default'}>
+                  {result.dryRun ? 'DRY-RUN PREVIEW' : 'LIVE EXECUTION'}
+                </Badge>
+              </div>
+              <span className="text-[11px] text-muted-foreground">
+                Executed at {new Date(result.executedAt).toLocaleString()}
+              </span>
+            </div>
+
+            <div className="text-[13px] font-semibold text-foreground">{result.summary}</div>
+
+            {result.changesOrWarnings.length > 0 && (
+              <div className="space-y-1">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Precondition Checks, Changes &amp; Warnings
+                </div>
+                <ul className="m-0 list-disc space-y-1 pl-5 text-xs text-foreground">
+                  {result.changesOrWarnings.map((item, idx) => (
+                    <li key={idx}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {outputSummaryRows.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Structured Execution Telemetry
+                </div>
+                <div className="overflow-hidden rounded-md border border-solid border-border bg-card">
+                  <Table>
+                    <TableBody>
+                      {outputSummaryRows.map(row => (
+                        <TableRow key={row.key}>
+                          <TableCell className="w-[34%] font-medium text-muted-foreground">
+                            {row.key}
+                          </TableCell>
+                          <TableCell>
+                            <FormattedAttributeValue value={row.value} itemKey={row.key} />
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            )}
+
+            {result.renderedArtifact && (
+              <div className="space-y-1.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Rendered Declarative Artifact (YAML / iPXE / RDP)
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {action.id === 'connect-pinned-rdp' && (
+                      <PitsTooltip content={`Download ${entityName}.rdp for mstsc.exe`}>
+                        <Button size="xs" variant="outline" onClick={handleDownloadRdp}>
+                          <Download className="h-3 w-3" />
+                          <span>Download .rdp</span>
+                        </Button>
+                      </PitsTooltip>
+                    )}
+                    <PitsTooltip content={copiedArtifact ? 'Copied!' : 'Copy artifact'}>
+                      <Button size="xs" variant="outline" onClick={() => void handleCopyArtifact()}>
+                        {copiedArtifact ? (
+                          <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+                        ) : (
+                          <Copy className="h-3 w-3" />
+                        )}
+                        <span>{copiedArtifact ? 'Copied' : 'Copy'}</span>
+                      </Button>
+                    </PitsTooltip>
+                  </div>
+                </div>
+                <pre className="pits-scroll m-0 max-h-80 overflow-auto rounded-md border border-solid border-border bg-zinc-950 p-3.5 font-mono text-xs leading-relaxed text-zinc-200">
+                  {result.renderedArtifact}
+                </pre>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </PitsDialog>
   );
 };

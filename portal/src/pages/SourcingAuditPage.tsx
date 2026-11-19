@@ -1,51 +1,24 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link as RouterLink, useLocation, useSearchParams } from 'react-router-dom';
 import {
-  Alert,
-  Box,
-  Button,
-  Card,
-  CardContent,
-  Checkbox,
-  Chip,
-  Divider,
-  FormControl,
-  FormControlLabel,
-  Grid,
-  InputLabel,
-  LinearProgress,
-  MenuItem,
-  Paper,
-  Select,
-  Slider,
-  Stack,
-  Switch,
-  Tab,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Tabs,
-  TextField,
-  Typography,
-} from '@mui/material';
-import AddTaskIcon from '@mui/icons-material/AddTask';
-import AssessmentIcon from '@mui/icons-material/Assessment';
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
-import HowToVoteIcon from '@mui/icons-material/HowToVote';
-import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
-import PolicyIcon from '@mui/icons-material/Policy';
-import PreviewIcon from '@mui/icons-material/Preview';
-import RadarIcon from '@mui/icons-material/Radar';
-import RefreshIcon from '@mui/icons-material/Refresh';
-import RuleIcon from '@mui/icons-material/Rule';
-import SaveIcon from '@mui/icons-material/Save';
-import StorageIcon from '@mui/icons-material/Storage';
-import SyncIcon from '@mui/icons-material/Sync';
-import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+  AlertCircle,
+  AlertTriangle,
+  BarChart3,
+  CheckCircle2,
+  ClipboardCheck,
+  Database,
+  Eye,
+  Info,
+  Loader2,
+  Lock,
+  PlusCircle,
+  Radar,
+  RefreshCw,
+  Save,
+  ShieldCheck,
+  Vote,
+  X,
+} from 'lucide-react';
 import {
   discoverWorkspaceDependencies,
   disposeDiscoveryCandidate,
@@ -65,6 +38,31 @@ import {
   SourcingValidationReport,
   SourcingWizardUpsertResponse,
 } from '../types';
+import { PageBody, PageHeader, PageShell } from '../components/ui/page-shell';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import { Card, CardContent } from '../components/ui/card';
+import { Input } from '../components/ui/input';
+import { Textarea } from '../components/ui/textarea';
+import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
+import { Separator } from '../components/ui/separator';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '../components/ui/table';
+import {
+  PitsCheckbox,
+  PitsSelect,
+  PitsSlider,
+  PitsSwitch,
+  PitsTabPanel,
+  PitsTabs,
+} from '../components/ui/pits-primitives';
+import { cn } from '../lib/utils';
 
 function blankSourcingRecord(defaultSystem = 'core-checkout'): SourcingResourceRecord {
   return {
@@ -101,14 +99,69 @@ function blankSourcingRecord(defaultSystem = 'core-checkout'): SourcingResourceR
   };
 }
 
+const SOURCING_TYPE_OPTIONS = [
+  { value: 'commercial-sdk', label: 'commercial-sdk' },
+  { value: 'vendor-saas', label: 'vendor-saas' },
+  { value: 'managed-infra', label: 'managed-infra' },
+  { value: 'outsourced-dev', label: 'outsourced-dev' },
+];
+
+const QUADRANT_FILTER_OPTIONS = [
+  { value: 'all', label: 'All Quadrants' },
+  { value: 'strategic', label: 'Strategic' },
+  { value: 'leverage', label: 'Leverage' },
+  { value: 'bottleneck', label: 'Bottleneck' },
+  { value: 'non-critical', label: 'Non-Critical' },
+];
+
+const TYPE_FILTER_OPTIONS = [
+  { value: 'all', label: 'All 4 Sourcing Types' },
+  ...SOURCING_TYPE_OPTIONS,
+];
+
+const REVIEWER_ROLE_OPTIONS = [
+  { value: 'architecture', label: 'architecture' },
+  { value: 'procurement', label: 'procurement' },
+  { value: 'security-compliance', label: 'security-compliance' },
+  { value: 'domain-owner', label: 'domain-owner' },
+];
+
+const SUPPLIER_STATUS_OPTIONS = [
+  { value: 'core', label: 'core (Strategic Partner)' },
+  { value: 'development', label: 'development (Growth)' },
+  { value: 'exploitable', label: 'exploitable (Captive)' },
+  { value: 'nuisance', label: 'nuisance (Low Priority)' },
+];
+
+const WALLET_SHARE_OPTIONS = [
+  { value: 'under-1pct', label: 'under-1pct' },
+  { value: '1-to-5pct', label: '1-to-5pct' },
+  { value: '5-to-15pct', label: '5-to-15pct' },
+  { value: 'over-15pct', label: 'over-15pct' },
+];
+
+const Field: React.FC<{
+  label: string;
+  helper?: string;
+  children: React.ReactNode;
+}> = ({ label, helper, children }) => (
+  <div className="space-y-1.5">
+    <label className="block text-xs font-medium text-foreground">{label}</label>
+    {children}
+    {helper && <p className="m-0 text-[11px] text-muted-foreground">{helper}</p>}
+  </div>
+);
+
 export const SourcingAuditPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
   const entityParam = searchParams.get('entity');
   const initialWizard =
-    location.pathname.includes('/wizard') || Boolean(entityParam) || searchParams.get('tab') === 'wizard';
+    location.pathname.includes('/wizard') ||
+    Boolean(entityParam) ||
+    searchParams.get('tab') === 'wizard';
 
-  const [tabIndex, setTabIndex] = useState<number>(initialWizard ? 3 : 0);
+  const [activeTab, setActiveTab] = useState<string>(initialWizard ? 'wizard' : 'matrix');
   const [overview, setOverview] = useState<SourcingOverviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -160,8 +213,8 @@ export const SourcingAuditPage: React.FC = () => {
       const data = await fetchSourcingOverview(force);
       setOverview(data);
       if (data.items.length > 0) {
-        setBallotUnit((prev) =>
-          data.items.some((i) => i.record.name === prev) ? prev : data.items[0].record.name,
+        setBallotUnit(prev =>
+          data.items.some(i => i.record.name === prev) ? prev : data.items[0].record.name,
         );
       }
     } catch (e) {
@@ -172,28 +225,25 @@ export const SourcingAuditPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    loadOverview(false);
+    void loadOverview(false);
   }, [loadOverview]);
 
-  const loadEntityIntoDraft = useCallback(
-    (item: SourcingEvaluation) => {
-      const recCopy: SourcingResourceRecord = JSON.parse(JSON.stringify(item.record));
-      if (!recCopy.dependsOnComponents || recCopy.dependsOnComponents.length === 0) {
-        recCopy.dependsOnComponents = item.lineage.map((l) => l.componentRef);
-      }
-      setDraft(recCopy);
-      setValidation(item.validation);
-      setWizardResult(null);
-      setWizardError(null);
-      setTabIndex(3);
-    },
-    [],
-  );
+  const loadEntityIntoDraft = useCallback((item: SourcingEvaluation) => {
+    const recCopy: SourcingResourceRecord = JSON.parse(JSON.stringify(item.record));
+    if (!recCopy.dependsOnComponents || recCopy.dependsOnComponents.length === 0) {
+      recCopy.dependsOnComponents = item.lineage.map(l => l.componentRef);
+    }
+    setDraft(recCopy);
+    setValidation(item.validation);
+    setWizardResult(null);
+    setWizardError(null);
+    setActiveTab('wizard');
+  }, []);
 
   useEffect(() => {
     if (entityParam && overview?.items) {
       const found = overview.items.find(
-        (i) => i.record.name.toLowerCase() === entityParam.toLowerCase(),
+        i => i.record.name.toLowerCase() === entityParam.toLowerCase(),
       );
       if (found) {
         loadEntityIntoDraft(found);
@@ -203,7 +253,7 @@ export const SourcingAuditPage: React.FC = () => {
 
   const filteredItems = useMemo(() => {
     if (!overview) return [];
-    return overview.items.filter((ev) => {
+    return overview.items.filter(ev => {
       if (quadrantFilter !== 'all' && ev.facts.quadrant !== quadrantFilter) return false;
       if (typeFilter !== 'all' && ev.record.resourceType !== typeFilter) return false;
       if (
@@ -218,10 +268,7 @@ export const SourcingAuditPage: React.FC = () => {
     });
   }, [overview, quadrantFilter, typeFilter, redlinesOnly]);
 
-  const matrixPoints = useMemo(
-    () => filteredItems.map(toMatrixPoint),
-    [filteredItems],
-  );
+  const matrixPoints = useMemo(() => filteredItems.map(toMatrixPoint), [filteredItems]);
 
   const runProcessorValidation = async () => {
     setValidating(true);
@@ -268,7 +315,7 @@ export const SourcingAuditPage: React.FC = () => {
         text: `MCP Workspace Discovery completed: ${res.totalCandidates} total candidates (${res.pendingCount} pending review).`,
       });
       await loadOverview(false);
-      setTabIndex(1);
+      setActiveTab('discovery');
     } catch (e) {
       setActionBanner({
         severity: 'error',
@@ -370,9 +417,7 @@ export const SourcingAuditPage: React.FC = () => {
       const rep = await validateSourcingManifest({ record: draft });
       setValidation(rep);
       if (!rep.valid) {
-        setWizardError(
-          `CatalogProcessor blocked submission: ${rep.errors.join(' | ')}`,
-        );
+        setWizardError(`CatalogProcessor blocked submission: ${rep.errors.join(' | ')}`);
         setSubmitting(false);
         return;
       }
@@ -396,19 +441,22 @@ export const SourcingAuditPage: React.FC = () => {
   };
 
   const toggleComponentDep = (compRef: string) => {
-    setDraft((prev) => {
+    setDraft(prev => {
       const exists = prev.dependsOnComponents.includes(compRef);
       return {
         ...prev,
         dependsOnComponents: exists
-          ? prev.dependsOnComponents.filter((c) => c !== compRef)
+          ? prev.dependsOnComponents.filter(c => c !== compRef)
           : [...prev.dependsOnComponents, compRef],
       };
     });
   };
 
-  const updateManualScore = (key: keyof SourcingResourceRecord['audit']['manualScores'], val: number) => {
-    setDraft((prev) => ({
+  const updateManualScore = (
+    key: keyof SourcingResourceRecord['audit']['manualScores'],
+    val: number,
+  ) => {
+    setDraft(prev => ({
       ...prev,
       audit: {
         ...prev.audit,
@@ -420,973 +468,971 @@ export const SourcingAuditPage: React.FC = () => {
     }));
   };
 
+  const pendingDiscoveryCount = (overview?.discoveryCandidates ?? []).filter(
+    c => c.status === 'pending',
+  ).length;
+
+  const availableSystems = overview?.availableSystems ?? [
+    { name: 'core-checkout', title: 'Core Checkout', domain: 'core-commerce' },
+    { name: 'pits-infrastructure', title: 'PITS Infrastructure', domain: 'platform-infra' },
+    { name: 'pits-city-pipeline', title: 'PITS City Pipeline', domain: 'spatial-simulation' },
+  ];
+
   return (
-    <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 1460, mx: 'auto' }}>
-      <Paper
-        elevation={0}
-        sx={{
-          p: 2.5,
-          mb: 2.5,
-          borderRadius: 2,
-          border: '1px solid',
-          borderColor: 'divider',
-        }}
-      >
-        <Stack
-          direction={{ xs: 'column', md: 'row' }}
-          justifyContent="space-between"
-          alignItems={{ xs: 'flex-start', md: 'center' }}
-          spacing={2}
-        >
-          <Box>
-            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-              <PolicyIcon color="primary" />
-              <Typography variant="h5" sx={{ fontWeight: 800 }}>
-                DB-First &amp; MCP Sourcing Governance
-              </Typography>
-              <Chip
-                size="small"
-                color="primary"
-                variant="outlined"
-                label="SQLite WAL + Postgres v3 + MCP Server"
-              />
-            </Stack>
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-              Automated workspace discovery &amp; blind multi-role ballots via <code>pitsctl mcp</code> / <code>POST /mcp</code>, persisted in ACID SQLite WAL with bi-directional PostgreSQL outbox sync.
-            </Typography>
-          </Box>
-          <Stack direction="row" spacing={1} flexWrap="wrap">
+    <PageShell>
+      <PageHeader
+        title="DB-First & MCP Sourcing Governance"
+        badge={<Badge variant="outline">SQLite WAL + Postgres v3 + MCP Server</Badge>}
+        description={
+          <span>
+            Automated workspace discovery &amp; blind multi-role ballots via{' '}
+            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">pitsctl mcp</code>{' '}
+            /{' '}
+            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">POST /mcp</code>,
+            persisted in ACID SQLite WAL with bi-directional PostgreSQL outbox sync.
+          </span>
+        }
+        actions={
+          <>
             <Button
-              variant="outlined"
-              startIcon={<RefreshIcon />}
-              onClick={() => loadOverview(true)}
+              variant="outline"
+              size="sm"
+              onClick={() => void loadOverview(true)}
               disabled={loading}
             >
-              Refresh Facts
+              {loading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+              <span>Refresh Facts</span>
             </Button>
             <Button
-              variant="outlined"
-              startIcon={<SyncIcon />}
-              onClick={handleSyncDb}
+              variant="outline"
+              size="sm"
+              onClick={() => void handleSyncDb()}
               disabled={syncingDb}
             >
-              {syncingDb ? 'Syncing DB...' : 'Sync PostgreSQL Now'}
+              {syncingDb ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Database className="h-3.5 w-3.5" />
+              )}
+              <span>{syncingDb ? 'Syncing DB...' : 'Sync PostgreSQL Now'}</span>
             </Button>
             <Button
-              variant="contained"
-              startIcon={<RadarIcon />}
-              onClick={handleScanWorkspace}
+              size="sm"
+              onClick={() => void handleScanWorkspace()}
               disabled={scanningWs}
             >
-              {scanningWs ? 'Scanning...' : 'Scan Workspace (MCP)'}
+              {scanningWs ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Radar className="h-3.5 w-3.5" />
+              )}
+              <span>{scanningWs ? 'Scanning...' : 'Scan Workspace (MCP)'}</span>
             </Button>
             <Button
-              variant="outlined"
-              color="warning"
-              startIcon={<AddTaskIcon />}
+              variant="warning"
+              size="sm"
               onClick={() => {
                 setDraft(blankSourcingRecord());
                 setValidation(null);
                 setWizardResult(null);
                 setWizardError(null);
                 setSearchParams({ tab: 'wizard' });
-                setTabIndex(3);
+                setActiveTab('wizard');
               }}
             >
-              Fallback Override
+              <PlusCircle className="h-3.5 w-3.5" />
+              <span>Fallback Override</span>
             </Button>
-          </Stack>
-        </Stack>
+          </>
+        }
+      />
 
-        {overview?.dbSync && (
-          <Paper
-            variant="outlined"
-            sx={{
-              p: 1.5,
-              mt: 2,
-              borderRadius: 1.5,
-              bgcolor: 'action.hover',
-            }}
+      <PageBody className="space-y-5">
+        {/* DB Sync & Portfolio Summary Strip */}
+        {(overview?.dbSync || overview) && (
+          <Card>
+            <CardContent className="space-y-3.5 p-4">
+              {overview?.dbSync && (
+                <div className="space-y-2 rounded-lg border border-solid border-border bg-muted/40 p-3">
+                  <div className="flex flex-col justify-between gap-2 md:flex-row md:items-center">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Database className="h-3.5 w-3.5 text-muted-foreground" />
+                      <Badge
+                        variant={
+                          overview.dbSync.backendMode === 'postgresql+sqlite-wal'
+                            ? 'ok'
+                            : overview.dbSync.backendMode === 'sqlite-wal-outbox-degraded'
+                              ? 'warn'
+                              : 'info'
+                        }
+                      >
+                        DB Mode: {overview.dbSync.backendMode}
+                      </Badge>
+                      <Badge variant="outline" className="font-mono">
+                        SQLite {overview.dbSync.sqliteVersion} (
+                        {overview.dbSync.sqliteJournalMode.toUpperCase()})
+                      </Badge>
+                      <Badge
+                        variant={overview.dbSync.pendingOutboxRows > 0 ? 'warn' : 'muted'}
+                      >
+                        Outbox Pending: {overview.dbSync.pendingOutboxRows}
+                      </Badge>
+                      {overview.dbSync.postgresConfigured && (
+                        <Badge variant="outline" className="font-mono">
+                          Postgres: {overview.dbSync.postgresEndpointRedacted ?? 'configured'}
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Badge variant="purple" className="font-mono">
+                        MCP Stdio: pitsctl mcp
+                      </Badge>
+                      <Badge variant="purple" className="font-mono">
+                        Streamable HTTP: /mcp
+                      </Badge>
+                    </div>
+                  </div>
+
+                  <div className="font-mono text-[11px] text-muted-foreground">
+                    SQLite SSOT: {overview.dbSync.sqlitePath} | Units: {overview.dbSync.totalUnits}{' '}
+                    | Ballots: {overview.dbSync.totalBallots} | Discovery Candidates:{' '}
+                    {overview.dbSync.totalCandidates} | Events: {overview.dbSync.totalEvents}
+                    {overview.dbSync.lastSyncAt
+                      ? ` | Last Sync: ${overview.dbSync.lastSyncAt} (${overview.dbSync.lastSyncDirection ?? ''})`
+                      : ''}
+                    {overview.dbSync.lastSyncError
+                      ? ` | Error: ${overview.dbSync.lastSyncError}`
+                      : ''}
+                  </div>
+                </div>
+              )}
+
+              {overview && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="default">Units: {overview.totalUnits}</Badge>
+                  <Badge variant="error">
+                    Strategic: {overview.quadrantCounts.strategic ?? 0}
+                  </Badge>
+                  <Badge variant="info">
+                    Leverage: {overview.quadrantCounts.leverage ?? 0}
+                  </Badge>
+                  <Badge variant="warn">
+                    Bottleneck: {overview.quadrantCounts.bottleneck ?? 0}
+                  </Badge>
+                  <Badge variant="ok">
+                    Non-Critical: {overview.quadrantCounts['non-critical'] ?? 0}
+                  </Badge>
+                  <Badge variant="error" className="font-semibold">
+                    Windmill Mismatch: {overview.redlineCounts.windmillMismatch ?? 0}
+                  </Badge>
+                  <Badge variant="warn" className="font-semibold">
+                    Re-Audit Due: {overview.redlineCounts.reAuditRequired ?? 0}
+                  </Badge>
+                  <Badge variant="muted">
+                    Critical Zone [2.7–3.3]: {overview.redlineCounts.inCriticalZone ?? 0}
+                  </Badge>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {error && (
+          <Alert variant="destructive">
+            <AlertCircle />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+
+        {actionBanner && (
+          <Alert
+            variant={
+              actionBanner.severity === 'error'
+                ? 'destructive'
+                : actionBanner.severity === 'success'
+                  ? 'success'
+                  : 'info'
+            }
           >
-            <Stack
-              direction={{ xs: 'column', md: 'row' }}
-              justifyContent="space-between"
-              alignItems={{ xs: 'flex-start', md: 'center' }}
-              spacing={1}
+            {actionBanner.severity === 'error' ? (
+              <AlertCircle />
+            ) : actionBanner.severity === 'success' ? (
+              <CheckCircle2 />
+            ) : (
+              <Info />
+            )}
+            <AlertDescription className="flex-1">{actionBanner.text}</AlertDescription>
+            <button
+              type="button"
+              onClick={() => setActionBanner(null)}
+              aria-label="Dismiss"
+              className="inline-flex h-5 w-5 cursor-pointer items-center justify-center rounded border-0 bg-transparent text-current opacity-70 hover:opacity-100"
             >
-              <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-                <StorageIcon fontSize="small" color="primary" />
-                <Chip
-                  size="small"
-                  color={
-                    overview.dbSync.backendMode === 'postgresql+sqlite-wal'
-                      ? 'success'
-                      : overview.dbSync.backendMode === 'sqlite-wal-outbox-degraded'
-                        ? 'warning'
-                        : 'info'
-                  }
-                  label={`DB Mode: ${overview.dbSync.backendMode}`}
-                />
-                <Chip
-                  size="small"
-                  variant="outlined"
-                  label={`SQLite ${overview.dbSync.sqliteVersion} (${overview.dbSync.sqliteJournalMode.toUpperCase()})`}
-                />
-                <Chip
-                  size="small"
-                  variant="outlined"
-                  color={overview.dbSync.pendingOutboxRows > 0 ? 'warning' : 'default'}
-                  label={`Outbox Pending: ${overview.dbSync.pendingOutboxRows}`}
-                />
-                {overview.dbSync.postgresConfigured && (
-                  <Chip
-                    size="small"
-                    variant="outlined"
-                    label={`Postgres: ${overview.dbSync.postgresEndpointRedacted ?? 'configured'}`}
-                  />
-                )}
-              </Stack>
-              <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-                <Chip size="small" color="secondary" variant="outlined" label="MCP Stdio: pitsctl mcp" />
-                <Chip size="small" color="secondary" variant="outlined" label="Streamable HTTP: /mcp" />
-              </Stack>
-            </Stack>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75, fontFamily: 'monospace' }}>
-              SQLite SSOT: {overview.dbSync.sqlitePath} | Units: {overview.dbSync.totalUnits} | Ballots: {overview.dbSync.totalBallots} | Discovery Candidates: {overview.dbSync.totalCandidates} | Events: {overview.dbSync.totalEvents}
-              {overview.dbSync.lastSyncAt ? ` | Last Sync: ${overview.dbSync.lastSyncAt} (${overview.dbSync.lastSyncDirection ?? ''})` : ''}
-              {overview.dbSync.lastSyncError ? ` | Error: ${overview.dbSync.lastSyncError}` : ''}
-            </Typography>
-          </Paper>
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </Alert>
         )}
 
-        {overview && (
-          <Stack direction="row" flexWrap="wrap" gap={1.25} sx={{ mt: 2 }}>
-            <Chip label={`Units: ${overview.totalUnits}`} sx={{ fontWeight: 700 }} />
-            <Chip
-              color="error"
-              variant="outlined"
-              label={`Strategic: ${overview.quadrantCounts.strategic ?? 0}`}
-            />
-            <Chip
-              color="info"
-              variant="outlined"
-              label={`Leverage: ${overview.quadrantCounts.leverage ?? 0}`}
-            />
-            <Chip
-              color="warning"
-              variant="outlined"
-              label={`Bottleneck: ${overview.quadrantCounts.bottleneck ?? 0}`}
-            />
-            <Chip
-              color="success"
-              variant="outlined"
-              label={`Non-Critical: ${overview.quadrantCounts['non-critical'] ?? 0}`}
-            />
-            <Chip
-              color="error"
-              label={`Windmill Mismatch: ${overview.redlineCounts.windmillMismatch ?? 0}`}
-            />
-            <Chip
-              color="warning"
-              label={`Re-Audit Due: ${overview.redlineCounts.reAuditRequired ?? 0}`}
-            />
-            <Chip
-              variant="outlined"
-              label={`Critical Zone [2.7–3.3]: ${overview.redlineCounts.inCriticalZone ?? 0}`}
-            />
-          </Stack>
-        )}
-      </Paper>
+        {/* Main 4-Tab Governance Workspace */}
+        <Card className="overflow-hidden">
+          <PitsTabs
+            value={activeTab}
+            onValueChange={setActiveTab}
+            items={[
+              {
+                value: 'matrix',
+                label: 'Portfolio Audit Matrix & Redlines',
+                icon: <BarChart3 className="h-3.5 w-3.5" />,
+              },
+              {
+                value: 'discovery',
+                label: `MCP Discovery Queue (${pendingDiscoveryCount})`,
+                icon: <Radar className="h-3.5 w-3.5" />,
+              },
+              {
+                value: 'ballots',
+                label: `Blind Ballots & Audit Ledger (${overview?.blindBallots?.length ?? 0})`,
+                icon: <Vote className="h-3.5 w-3.5" />,
+              },
+              {
+                value: 'wizard',
+                label: 'Emergency Fallback Override (Wizard)',
+                icon: <Lock className="h-3.5 w-3.5" />,
+              },
+            ]}
+          >
+            {/* TAB 0: MATRIX & REDLINES */}
+            <PitsTabPanel value="matrix">
+              <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
+                <div className="lg:col-span-5">
+                  <Card>
+                    <CardContent className="p-4">
+                      <div className="text-sm font-semibold text-foreground">
+                        2D Kraljic × Windmill Scatter Plot
+                      </div>
+                      <p className="mb-3 mt-1 text-xs text-muted-foreground">
+                        Click any sourcing node to inspect its Backstage Entity scorecard. Purple
+                        dashed arrows show 5-point redline knockout escalation.
+                      </p>
+                      <KraljicScatterMatrix points={matrixPoints} height={330} />
+                    </CardContent>
+                  </Card>
+                </div>
 
-      {loading && <LinearProgress sx={{ mb: 2 }} />}
-      {error && (
-        <Alert severity="error" sx={{ mb: 2 }}>
-          {error}
-        </Alert>
-      )}
-      {actionBanner && (
-        <Alert
-          severity={actionBanner.severity}
-          sx={{ mb: 2 }}
-          onClose={() => setActionBanner(null)}
-        >
-          {actionBanner.text}
-        </Alert>
-      )}
-
-      <Paper variant="outlined" sx={{ borderRadius: 2, mb: 2 }}>
-        <Tabs
-          value={tabIndex}
-          onChange={(_, idx) => setTabIndex(idx)}
-          variant="scrollable"
-          scrollButtons="auto"
-          sx={{ px: 2, borderBottom: '1px solid', borderColor: 'divider' }}
-        >
-          <Tab
-            icon={<AssessmentIcon />}
-            iconPosition="start"
-            label="Portfolio Audit Matrix & Redlines"
-          />
-          <Tab
-            icon={<RadarIcon />}
-            iconPosition="start"
-            label={`MCP Discovery Queue (${(overview?.discoveryCandidates ?? []).filter((c) => c.status === 'pending').length})`}
-          />
-          <Tab
-            icon={<HowToVoteIcon />}
-            iconPosition="start"
-            label={`Blind Ballots & Audit Ledger (${overview?.blindBallots?.length ?? 0})`}
-          />
-          <Tab
-            icon={<LockOutlinedIcon />}
-            iconPosition="start"
-            label="Emergency Fallback Override (Wizard)"
-          />
-        </Tabs>
-
-        {tabIndex === 0 && (
-          <Box sx={{ p: 2.5 }}>
-            <Grid container spacing={2.5}>
-              <Grid item xs={12} lg={5}>
-                <Card variant="outlined" sx={{ borderRadius: 2 }}>
-                  <CardContent>
-                    <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 0.5 }}>
-                      2D Kraljic × Windmill Scatter Plot
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-                      Click any sourcing node to inspect its Backstage Entity scorecard. Purple dashed arrows show 5-point redline knockout escalation.
-                    </Typography>
-                    <KraljicScatterMatrix points={matrixPoints} height={330} />
-                  </CardContent>
-                </Card>
-              </Grid>
-
-              <Grid item xs={12} lg={7}>
-                <Stack
-                  direction={{ xs: 'column', sm: 'row' }}
-                  spacing={1.5}
-                  alignItems={{ xs: 'stretch', sm: 'center' }}
-                  sx={{ mb: 1.5 }}
-                >
-                  <FormControl size="small" sx={{ minWidth: 160 }}>
-                    <InputLabel>Quadrant</InputLabel>
-                    <Select
-                      value={quadrantFilter}
-                      label="Quadrant"
-                      onChange={(e) => setQuadrantFilter(e.target.value)}
-                    >
-                      <MenuItem value="all">All Quadrants</MenuItem>
-                      <MenuItem value="strategic">Strategic</MenuItem>
-                      <MenuItem value="leverage">Leverage</MenuItem>
-                      <MenuItem value="bottleneck">Bottleneck</MenuItem>
-                      <MenuItem value="non-critical">Non-Critical</MenuItem>
-                    </Select>
-                  </FormControl>
-
-                  <FormControl size="small" sx={{ minWidth: 170 }}>
-                    <InputLabel>Resource Type</InputLabel>
-                    <Select
-                      value={typeFilter}
-                      label="Resource Type"
-                      onChange={(e) => setTypeFilter(e.target.value)}
-                    >
-                      <MenuItem value="all">All 4 Sourcing Types</MenuItem>
-                      <MenuItem value="commercial-sdk">commercial-sdk</MenuItem>
-                      <MenuItem value="vendor-saas">vendor-saas</MenuItem>
-                      <MenuItem value="managed-infra">managed-infra</MenuItem>
-                      <MenuItem value="outsourced-dev">outsourced-dev</MenuItem>
-                    </Select>
-                  </FormControl>
-
-                  <FormControlLabel
-                    control={
-                      <Switch
-                        checked={redlinesOnly}
-                        onChange={(e) => setRedlinesOnly(e.target.checked)}
+                <div className="space-y-4 lg:col-span-7">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="w-44">
+                      <PitsSelect
+                        size="sm"
+                        value={quadrantFilter}
+                        onValueChange={setQuadrantFilter}
+                        options={QUADRANT_FILTER_OPTIONS}
                       />
-                    }
-                    label="Redlines / Critical Only"
-                  />
-                </Stack>
+                    </div>
+                    <div className="w-48">
+                      <PitsSelect
+                        size="sm"
+                        value={typeFilter}
+                        onValueChange={setTypeFilter}
+                        options={TYPE_FILTER_OPTIONS}
+                      />
+                    </div>
+                    <label className="flex cursor-pointer items-center gap-2 text-xs text-foreground">
+                      <PitsSwitch checked={redlinesOnly} onCheckedChange={setRedlinesOnly} />
+                      <span>Redlines / Critical Only</span>
+                    </label>
+                  </div>
 
-                <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 1.5 }}>
-                  <Table size="small">
-                    <TableHead>
+                  <div className="overflow-hidden rounded-lg border border-solid border-border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Sourcing Unit</TableHead>
+                          <TableHead>System → Domain</TableHead>
+                          <TableHead>Y / X Scores</TableHead>
+                          <TableHead>Source / Ballots</TableHead>
+                          <TableHead>Quadrant</TableHead>
+                          <TableHead>Windmill Status</TableHead>
+                          <TableHead>Governance</TableHead>
+                          <TableHead className="text-right">Override</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredItems.map(ev => {
+                          const redlines = ev.checks.filter(c => c.triggered).length;
+                          return (
+                            <TableRow key={ev.record.name}>
+                              <TableCell>
+                                <RouterLink
+                                  to={`/catalog/default/resource/${encodeURIComponent(ev.record.name)}`}
+                                  className="text-xs font-semibold text-foreground hover:underline"
+                                >
+                                  {ev.record.name}
+                                </RouterLink>
+                                <div className="text-[11px] text-muted-foreground">
+                                  {ev.record.resourceType} · {ev.record.audit.contractMeta.vendorName}
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <div className="font-mono text-[11px] text-foreground">
+                                  {ev.record.system}
+                                </div>
+                                <div className="text-[11px] text-muted-foreground">
+                                  {ev.resolvedDomain.replace('domain:default/', '')} (
+                                  {ev.facts.prodDependents} deps)
+                                </div>
+                              </TableCell>
+                              <TableCell className="whitespace-nowrap">
+                                <div className="font-mono text-xs font-semibold">
+                                  Y={ev.facts.finalYScore.toFixed(2)} / X=
+                                  {ev.facts.finalXScore.toFixed(2)}
+                                </div>
+                                {ev.facts.knockoutTriggered && (
+                                  <Badge variant="purple" className="mt-1">
+                                    5-pt Knockout
+                                  </Badge>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                <Badge
+                                  variant={
+                                    ev.sourceOrigin === 'wizard-fallback' ? 'warn' : 'muted'
+                                  }
+                                >
+                                  {ev.sourceOrigin ?? 'seed-baseline'}
+                                </Badge>
+                                <div className="mt-0.5 text-[11px] text-muted-foreground">
+                                  {ev.ballotCount ?? 0} ballots · spread{' '}
+                                  {(ev.maxBallotSpread ?? 0).toFixed(2)}
+                                </div>
+                                {ev.record.audit.contractMeta.blindScoreVarianceAlert && (
+                                  <Badge variant="error" className="mt-1">
+                                    Variance &gt;= 1.5
+                                  </Badge>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant="outline">{ev.facts.quadrant}</Badge>
+                              </TableCell>
+                              <TableCell>
+                                <StatusPill
+                                  label={
+                                    ev.facts.windmillMismatch
+                                      ? `${ev.record.audit.supplierPreference.perceivedStatus} (MISMATCH)`
+                                      : ev.record.audit.supplierPreference.perceivedStatus
+                                  }
+                                  level={ev.facts.windmillMismatch ? 'error' : 'ok'}
+                                />
+                              </TableCell>
+                              <TableCell>
+                                <StatusPill
+                                  label={
+                                    redlines === 0
+                                      ? 'Healthy'
+                                      : `${redlines} Redline${redlines > 1 ? 's' : ''}`
+                                  }
+                                  level={
+                                    ev.facts.windmillMismatch
+                                      ? 'error'
+                                      : redlines > 0
+                                        ? 'warn'
+                                        : 'ok'
+                                  }
+                                />
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <Button
+                                  size="xs"
+                                  variant="warning"
+                                  onClick={() => loadEntityIntoDraft(ev)}
+                                >
+                                  Override
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              </div>
+            </PitsTabPanel>
+
+            {/* TAB 1: MCP DISCOVERY QUEUE */}
+            <PitsTabPanel value="discovery" className="space-y-4">
+              <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+                <div className="space-y-1">
+                  <div className="text-sm font-semibold text-foreground">
+                    MCP Automated Workspace Discovery Queue
+                  </div>
+                  <p className="m-0 text-xs text-muted-foreground">
+                    Scanned from{' '}
+                    <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+                      Cargo.toml
+                    </code>
+                    ,{' '}
+                    <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+                      package.json
+                    </code>
+                    ,{' '}
+                    <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+                      go.mod
+                    </code>
+                    , Nix flakes &amp; K8s manifests via{' '}
+                    <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+                      sourcing_scan_workspace
+                    </code>
+                    . Promote verified granular units into{' '}
+                    <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+                      sourcing_units
+                    </code>{' '}
+                    (FinOps secret &amp; anti-monolith rules enforced automatically).
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => void handleScanWorkspace()}
+                  disabled={scanningWs}
+                  className="shrink-0"
+                >
+                  {scanningWs ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Radar className="h-3.5 w-3.5" />
+                  )}
+                  <span>{scanningWs ? 'Scanning...' : 'Run Discovery Scan'}</span>
+                </Button>
+              </div>
+
+              <div className="overflow-hidden rounded-lg border border-solid border-border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Dependency / Package</TableHead>
+                      <TableHead>Ecosystem &amp; Source</TableHead>
+                      <TableHead>Adapter &amp; Granularity</TableHead>
+                      <TableHead>Promotion Parameters</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Disposition</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(overview?.discoveryCandidates ?? []).length === 0 ? (
                       <TableRow>
-                        <TableCell sx={{ fontWeight: 700 }}>Sourcing Unit</TableCell>
-                        <TableCell sx={{ fontWeight: 700 }}>System → Domain</TableCell>
-                        <TableCell sx={{ fontWeight: 700 }}>Y / X Scores</TableCell>
-                        <TableCell sx={{ fontWeight: 700 }}>Source / Ballots</TableCell>
-                        <TableCell sx={{ fontWeight: 700 }}>Quadrant</TableCell>
-                        <TableCell sx={{ fontWeight: 700 }}>Windmill Status</TableCell>
-                        <TableCell sx={{ fontWeight: 700 }}>Governance</TableCell>
-                        <TableCell align="right" sx={{ fontWeight: 700 }}>
-                          Override
+                        <TableCell colSpan={6} className="py-8 text-center text-xs text-muted-foreground">
+                          No candidates scanned yet. Click <strong>Run Discovery Scan</strong> or
+                          invoke MCP tool{' '}
+                          <code className="rounded bg-muted px-1 py-0.5 font-mono">
+                            sourcing_scan_workspace
+                          </code>
+                          .
                         </TableCell>
                       </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {filteredItems.map((ev) => {
-                        const redlines = ev.checks.filter((c) => c.triggered).length;
+                    ) : (
+                      (overview?.discoveryCandidates ?? []).map(cand => {
+                        const chosenType =
+                          candidateTypeMap[cand.candidateId] ?? cand.suggestedType;
+                        const chosenCost = candidateCostMap[cand.candidateId] ?? '';
+                        const chosenName = candidateNameMap[cand.candidateId] ?? '';
+                        const busy = disposingId === cand.candidateId;
                         return (
-                          <TableRow key={ev.record.name} hover>
+                          <TableRow key={cand.candidateId}>
                             <TableCell>
-                              <Typography
-                                component={RouterLink}
-                                to={`/catalog/default/resource/${encodeURIComponent(ev.record.name)}`}
-                                variant="body2"
-                                sx={{ fontWeight: 700, textDecoration: 'none', color: 'primary.main' }}
-                              >
-                                {ev.record.name}
-                              </Typography>
-                              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                                {ev.record.resourceType} · {ev.record.audit.contractMeta.vendorName}
-                              </Typography>
+                              <div className="text-xs font-semibold text-foreground">
+                                {cand.packageOrEndpoint}
+                              </div>
+                              <div className="font-mono text-[11px] text-muted-foreground">
+                                {cand.candidateId}
+                              </div>
                             </TableCell>
                             <TableCell>
-                              <Typography variant="caption" sx={{ fontFamily: 'monospace', display: 'block' }}>
-                                {ev.record.system}
-                              </Typography>
-                              <Typography variant="caption" color="text.secondary">
-                                {ev.resolvedDomain.replace('domain:default/', '')} ({ev.facts.prodDependents} deps)
-                              </Typography>
+                              <Badge variant="outline">{cand.ecosystem}</Badge>
+                              <div className="mt-1 text-[11px] text-muted-foreground">
+                                {cand.detectedInPath} · sys: {cand.inferredSystem}
+                              </div>
                             </TableCell>
                             <TableCell>
-                              <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 700 }}>
-                                Y={ev.facts.finalYScore.toFixed(2)} / X={ev.facts.finalXScore.toFixed(2)}
-                              </Typography>
-                              {ev.facts.knockoutTriggered && (
-                                <Chip size="small" color="secondary" label="5-pt Knockout" sx={{ mt: 0.25 }} />
+                              <Badge variant={cand.adapterDetected ? 'ok' : 'warn'}>
+                                {cand.adapterDetected ? 'Adapter Detected' : 'No Adapter'}
+                              </Badge>
+                              <div className="mt-1 text-[11px] text-muted-foreground">
+                                {cand.monolithRiskNote}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              {cand.status === 'pending' ? (
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <div className="w-36">
+                                    <PitsSelect
+                                      size="sm"
+                                      value={chosenType}
+                                      onValueChange={val =>
+                                        setCandidateTypeMap(m => ({
+                                          ...m,
+                                          [cand.candidateId]: val,
+                                        }))
+                                      }
+                                      options={SOURCING_TYPE_OPTIONS}
+                                    />
+                                  </div>
+                                  <Input
+                                    placeholder="Unit name (optional)"
+                                    value={chosenName}
+                                    onChange={e =>
+                                      setCandidateNameMap(m => ({
+                                        ...m,
+                                        [cand.candidateId]: e.target.value,
+                                      }))
+                                    }
+                                    className="h-8 w-36 text-xs"
+                                  />
+                                  <Input
+                                    placeholder="FinOps CC ID (cc-mcp-...)"
+                                    value={chosenCost}
+                                    onChange={e =>
+                                      setCandidateCostMap(m => ({
+                                        ...m,
+                                        [cand.candidateId]: e.target.value,
+                                      }))
+                                    }
+                                    className="h-8 w-40 text-xs"
+                                  />
+                                </div>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">
+                                  {cand.promotedUnitName ? `Unit: ${cand.promotedUnitName}` : '—'}
+                                </span>
                               )}
                             </TableCell>
                             <TableCell>
-                              <Chip
-                                size="small"
-                                variant="outlined"
-                                color={ev.sourceOrigin === 'wizard-fallback' ? 'warning' : 'default'}
-                                label={ev.sourceOrigin ?? 'seed-baseline'}
-                              />
-                              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
-                                {ev.ballotCount ?? 0} ballots · spread {(ev.maxBallotSpread ?? 0).toFixed(2)}
-                              </Typography>
-                              {ev.record.audit.contractMeta.blindScoreVarianceAlert && (
-                                <Chip size="small" color="error" label="Variance >= 1.5" sx={{ mt: 0.25 }} />
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              <Chip size="small" label={ev.facts.quadrant} variant="outlined" />
-                            </TableCell>
-                            <TableCell>
-                              <StatusPill
-                                label={
-                                  ev.facts.windmillMismatch
-                                    ? `${ev.record.audit.supplierPreference.perceivedStatus} (MISMATCH)`
-                                    : ev.record.audit.supplierPreference.perceivedStatus
+                              <Badge
+                                variant={
+                                  cand.status === 'promoted'
+                                    ? 'ok'
+                                    : cand.status === 'ignored'
+                                      ? 'muted'
+                                      : 'info'
                                 }
-                                level={ev.facts.windmillMismatch ? 'error' : 'ok'}
-                              />
-                            </TableCell>
-                            <TableCell>
-                              <StatusPill
-                                label={
-                                  redlines === 0 ? 'Healthy' : `${redlines} Redline${redlines > 1 ? 's' : ''}`
-                                }
-                                level={ev.facts.windmillMismatch ? 'error' : redlines > 0 ? 'warn' : 'ok'}
-                              />
-                            </TableCell>
-                            <TableCell align="right">
-                              <Button
-                                size="small"
-                                variant="outlined"
-                                color="warning"
-                                onClick={() => loadEntityIntoDraft(ev)}
                               >
-                                Override
-                              </Button>
+                                {cand.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {cand.status === 'pending' && (
+                                <div className="flex justify-end gap-1.5">
+                                  <Button
+                                    size="xs"
+                                    disabled={busy}
+                                    onClick={() =>
+                                      void handleDisposeCandidate(
+                                        cand.candidateId,
+                                        cand.packageOrEndpoint,
+                                        cand.suggestedType,
+                                        'promote',
+                                      )
+                                    }
+                                  >
+                                    Promote
+                                  </Button>
+                                  <Button
+                                    size="xs"
+                                    variant="outline"
+                                    disabled={busy}
+                                    onClick={() =>
+                                      void handleDisposeCandidate(
+                                        cand.candidateId,
+                                        cand.packageOrEndpoint,
+                                        cand.suggestedType,
+                                        'ignore',
+                                      )
+                                    }
+                                  >
+                                    Ignore
+                                  </Button>
+                                </div>
+                              )}
                             </TableCell>
                           </TableRow>
                         );
-                      })}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              </Grid>
-            </Grid>
-          </Box>
-        )}
+                      })
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </PitsTabPanel>
 
-        {tabIndex === 1 && (
-          <Box sx={{ p: 2.5 }}>
-            <Stack
-              direction={{ xs: 'column', sm: 'row' }}
-              justifyContent="space-between"
-              alignItems={{ xs: 'flex-start', sm: 'center' }}
-              spacing={1.5}
-              sx={{ mb: 2 }}
-            >
-              <Box>
-                <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
-                  MCP Automated Workspace Discovery Queue
-                </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  Scanned from <code>Cargo.toml</code>, <code>package.json</code>, <code>go.mod</code>, Nix flakes &amp; K8s manifests via <code>sourcing_scan_workspace</code>. Promote verified granular units into <code>sourcing_units</code> (FinOps secret &amp; anti-monolith rules enforced automatically).
-                </Typography>
-              </Box>
-              <Button
-                variant="contained"
-                size="small"
-                startIcon={<RadarIcon />}
-                onClick={handleScanWorkspace}
-                disabled={scanningWs}
-              >
-                {scanningWs ? 'Scanning...' : 'Run Discovery Scan'}
-              </Button>
-            </Stack>
+            {/* TAB 2: BLIND BALLOTS & AUDIT LEDGER */}
+            <PitsTabPanel value="ballots">
+              <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
+                <div className="lg:col-span-5">
+                  <Card>
+                    <form onSubmit={handleSubmitBlindBallot}>
+                      <CardContent className="space-y-4 p-5">
+                        <div>
+                          <div className="text-sm font-semibold text-foreground">
+                            Submit Independent Blind Role Ballot
+                          </div>
+                          <p className="mb-0 mt-1 text-xs leading-relaxed text-muted-foreground">
+                            Each role (<code className="font-mono">architecture</code>,{' '}
+                            <code className="font-mono">procurement</code>,{' '}
+                            <code className="font-mono">security-compliance</code>,{' '}
+                            <code className="font-mono">domain-owner</code>) submits scores
+                            independently into SQLite WAL. Spread &gt;= 1.5 across reviewers
+                            automatically sets{' '}
+                            <code className="font-mono">blindScoreVarianceAlert = true</code>.
+                          </p>
+                        </div>
 
-            <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 1.5 }}>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell sx={{ fontWeight: 700 }}>Dependency / Package</TableCell>
-                    <TableCell sx={{ fontWeight: 700 }}>Ecosystem &amp; Source</TableCell>
-                    <TableCell sx={{ fontWeight: 700 }}>Adapter &amp; Granularity</TableCell>
-                    <TableCell sx={{ fontWeight: 700 }}>Promotion Parameters</TableCell>
-                    <TableCell sx={{ fontWeight: 700 }}>Status</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 700 }}>Disposition</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {(overview?.discoveryCandidates ?? []).length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={6} align="center" sx={{ py: 3 }}>
-                        <Typography variant="body2" color="text.secondary">
-                          No candidates scanned yet. Click <b>Run Discovery Scan</b> or invoke MCP tool <code>sourcing_scan_workspace</code>.
-                        </Typography>
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    (overview?.discoveryCandidates ?? []).map((cand) => {
-                      const chosenType = candidateTypeMap[cand.candidateId] ?? cand.suggestedType;
-                      const chosenCost = candidateCostMap[cand.candidateId] ?? '';
-                      const chosenName = candidateNameMap[cand.candidateId] ?? '';
-                      const busy = disposingId === cand.candidateId;
-                      return (
-                        <TableRow key={cand.candidateId} hover>
-                          <TableCell>
-                            <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                              {cand.packageOrEndpoint}
-                            </Typography>
-                            <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
-                              {cand.candidateId}
-                            </Typography>
-                          </TableCell>
-                          <TableCell>
-                            <Chip size="small" label={cand.ecosystem} variant="outlined" sx={{ mr: 0.5 }} />
-                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
-                              {cand.detectedInPath} · sys: {cand.inferredSystem}
-                            </Typography>
-                          </TableCell>
-                          <TableCell>
-                            <Chip
-                              size="small"
-                              color={cand.adapterDetected ? 'success' : 'warning'}
-                              label={cand.adapterDetected ? 'Adapter Detected' : 'No Adapter'}
-                            />
-                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
-                              {cand.monolithRiskNote}
-                            </Typography>
-                          </TableCell>
-                          <TableCell>
-                            {cand.status === 'pending' ? (
-                              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                                <Select
-                                  size="small"
-                                  value={chosenType}
-                                  onChange={(e) =>
-                                    setCandidateTypeMap((m) => ({
-                                      ...m,
-                                      [cand.candidateId]: e.target.value,
-                                    }))
-                                  }
-                                  sx={{ minWidth: 135, fontSize: '0.78rem' }}
-                                >
-                                  <MenuItem value="commercial-sdk">commercial-sdk</MenuItem>
-                                  <MenuItem value="vendor-saas">vendor-saas</MenuItem>
-                                  <MenuItem value="managed-infra">managed-infra</MenuItem>
-                                  <MenuItem value="outsourced-dev">outsourced-dev</MenuItem>
-                                </Select>
-                                <TextField
-                                  size="small"
-                                  placeholder="Unit name (optional)"
-                                  value={chosenName}
-                                  onChange={(e) =>
-                                    setCandidateNameMap((m) => ({
-                                      ...m,
-                                      [cand.candidateId]: e.target.value,
-                                    }))
-                                  }
-                                  sx={{ width: 145 }}
-                                />
-                                <TextField
-                                  size="small"
-                                  placeholder="FinOps CC ID (cc-mcp-...)"
-                                  value={chosenCost}
-                                  onChange={(e) =>
-                                    setCandidateCostMap((m) => ({
-                                      ...m,
-                                      [cand.candidateId]: e.target.value,
-                                    }))
-                                  }
-                                  sx={{ width: 145 }}
-                                />
-                              </Stack>
-                            ) : (
-                              <Typography variant="caption" color="text.secondary">
-                                {cand.promotedUnitName ? `Unit: ${cand.promotedUnitName}` : '—'}
-                              </Typography>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            <Chip
-                              size="small"
-                              color={
-                                cand.status === 'promoted'
-                                  ? 'success'
-                                  : cand.status === 'ignored'
-                                    ? 'default'
-                                    : 'info'
-                              }
-                              label={cand.status}
-                            />
-                          </TableCell>
-                          <TableCell align="right">
-                            {cand.status === 'pending' && (
-                              <Stack direction="row" spacing={0.75} justifyContent="flex-end">
-                                <Button
-                                  size="small"
-                                  variant="contained"
-                                  disabled={busy}
-                                  onClick={() =>
-                                    handleDisposeCandidate(
-                                      cand.candidateId,
-                                      cand.packageOrEndpoint,
-                                      cand.suggestedType,
-                                      'promote',
-                                    )
-                                  }
-                                >
-                                  Promote
-                                </Button>
-                                <Button
-                                  size="small"
-                                  variant="outlined"
-                                  color="inherit"
-                                  disabled={busy}
-                                  onClick={() =>
-                                    handleDisposeCandidate(
-                                      cand.candidateId,
-                                      cand.packageOrEndpoint,
-                                      cand.suggestedType,
-                                      'ignore',
-                                    )
-                                  }
-                                >
-                                  Ignore
-                                </Button>
-                              </Stack>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })
-                  )}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          </Box>
-        )}
+                        <Field label="Target Sourcing Unit">
+                          <PitsSelect
+                            value={ballotUnit}
+                            onValueChange={setBallotUnit}
+                            options={(overview?.items ?? []).map(ev => ({
+                              value: ev.record.name,
+                              label: `${ev.record.name} (${ev.record.resourceType})`,
+                            }))}
+                          />
+                        </Field>
 
-        {tabIndex === 2 && (
-          <Box sx={{ p: 2.5 }}>
-            <Grid container spacing={2.5}>
-              <Grid item xs={12} lg={5}>
-                <Card variant="outlined" component="form" onSubmit={handleSubmitBlindBallot} sx={{ borderRadius: 2 }}>
-                  <CardContent>
-                    <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 0.5 }}>
-                      Submit Independent Blind Role Ballot
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-                      Each role (`architecture`, `procurement`, `security-compliance`, `domain-owner`) submits scores independently into SQLite WAL. Spread &gt;= 1.5 across reviewers automatically sets <code>blindScoreVarianceAlert = true</code>.
-                    </Typography>
-                    <Stack spacing={1.5}>
-                      <FormControl fullWidth size="small">
-                        <InputLabel>Target Sourcing Unit</InputLabel>
-                        <Select
-                          value={ballotUnit}
-                          label="Target Sourcing Unit"
-                          onChange={(e) => setBallotUnit(e.target.value)}
-                        >
-                          {(overview?.items ?? []).map((ev) => (
-                            <MenuItem key={ev.record.name} value={ev.record.name}>
-                              {ev.record.name} ({ev.record.resourceType})
-                            </MenuItem>
-                          ))}
-                        </Select>
-                      </FormControl>
-                      <Grid container spacing={1.5}>
-                        <Grid item xs={12} sm={6}>
-                          <FormControl fullWidth size="small">
-                            <InputLabel>Reviewer Role</InputLabel>
-                            <Select
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                          <Field label="Reviewer Role">
+                            <PitsSelect
                               value={ballotRole}
-                              label="Reviewer Role"
-                              onChange={(e) => setBallotRole(e.target.value)}
-                            >
-                              <MenuItem value="architecture">architecture</MenuItem>
-                              <MenuItem value="procurement">procurement</MenuItem>
-                              <MenuItem value="security-compliance">security-compliance</MenuItem>
-                              <MenuItem value="domain-owner">domain-owner</MenuItem>
-                            </Select>
-                          </FormControl>
-                        </Grid>
-                        <Grid item xs={12} sm={6}>
-                          <TextField
-                            fullWidth
-                            size="small"
-                            label="Reviewer ID / Email"
-                            value={ballotReviewerId}
-                            onChange={(e) => setBallotReviewerId(e.target.value)}
+                              onValueChange={setBallotRole}
+                              options={REVIEWER_ROLE_OPTIONS}
+                            />
+                          </Field>
+                          <Field label="Reviewer ID / Email">
+                            <Input
+                              value={ballotReviewerId}
+                              onChange={e => setBallotReviewerId(e.target.value)}
+                            />
+                          </Field>
+                        </div>
+
+                        <div className="space-y-3 pt-1">
+                          {(
+                            [
+                              ['Y2 Core Competitiveness', ballotY2, setBallotY2],
+                              ['Y4 Price Elasticity', ballotY4, setBallotY4],
+                              ['X2 Market Scarcity', ballotX2, setBallotX2],
+                              ['X3 Customization Depth', ballotX3, setBallotX3],
+                              ['X4 Compliance Fragility', ballotX4, setBallotX4],
+                            ] as const
+                          ).map(([lbl, v, setter]) => (
+                            <div key={lbl} className="space-y-1">
+                              <div className="flex items-center justify-between text-xs">
+                                <span className="font-medium text-foreground">{lbl}</span>
+                                <span className="font-mono font-semibold text-foreground">
+                                  {v.toFixed(1)}
+                                </span>
+                              </div>
+                              <PitsSlider
+                                min={1}
+                                max={5}
+                                step={0.5}
+                                value={v}
+                                onValueChange={setter}
+                              />
+                            </div>
+                          ))}
+                        </div>
+
+                        <Field label="Evidence / Justification Notes">
+                          <Textarea
+                            rows={2}
+                            value={ballotNotes}
+                            onChange={e => setBallotNotes(e.target.value)}
                           />
-                        </Grid>
-                      </Grid>
+                        </Field>
 
-                      {(
-                        [
-                          ['Y2 Core Competitiveness', ballotY2, setBallotY2],
-                          ['Y4 Price Elasticity', ballotY4, setBallotY4],
-                          ['X2 Market Scarcity', ballotX2, setBallotX2],
-                          ['X3 Customization Depth', ballotX3, setBallotX3],
-                          ['X4 Compliance Fragility', ballotX4, setBallotX4],
-                        ] as const
-                      ).map(([lbl, v, setter]) => (
-                        <Box key={lbl}>
-                          <Stack direction="row" justifyContent="space-between">
-                            <Typography variant="caption" sx={{ fontWeight: 600 }}>{lbl}</Typography>
-                            <Typography variant="caption" sx={{ fontWeight: 700 }}>{v.toFixed(1)}</Typography>
-                          </Stack>
-                          <Slider
-                            size="small"
-                            min={1}
-                            max={5}
-                            step={0.5}
-                            marks
-                            value={v}
-                            onChange={(_, n) => setter(Number(n))}
-                          />
-                        </Box>
-                      ))}
+                        <Button type="submit" className="w-full" disabled={submittingBallot}>
+                          {submittingBallot ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Vote className="h-3.5 w-3.5" />
+                          )}
+                          <span>
+                            {submittingBallot ? 'Recording Ballot...' : 'Submit Blind Role Ballot'}
+                          </span>
+                        </Button>
+                      </CardContent>
+                    </form>
+                  </Card>
+                </div>
 
-                      <TextField
-                        fullWidth
-                        size="small"
-                        multiline
-                        rows={2}
-                        label="Evidence / Justification Notes"
-                        value={ballotNotes}
-                        onChange={(e) => setBallotNotes(e.target.value)}
-                      />
-
-                      <Button
-                        type="submit"
-                        variant="contained"
-                        disabled={submittingBallot}
-                        startIcon={<HowToVoteIcon />}
-                      >
-                        {submittingBallot ? 'Recording Ballot...' : 'Submit Blind Role Ballot'}
-                      </Button>
-                    </Stack>
-                  </CardContent>
-                </Card>
-              </Grid>
-
-              <Grid item xs={12} lg={7}>
-                <Stack spacing={2}>
-                  <Card variant="outlined" sx={{ borderRadius: 2 }}>
-                    <CardContent>
-                      <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1 }}>
-                        Blind Role Ballots ({overview?.blindBallots?.length ?? 0})
-                      </Typography>
-                      <TableContainer sx={{ maxHeight: 280 }}>
-                        <Table size="small" stickyHeader>
-                          <TableHead>
-                            <TableRow>
-                              <TableCell sx={{ fontWeight: 700 }}>Unit</TableCell>
-                              <TableCell sx={{ fontWeight: 700 }}>Role / Reviewer</TableCell>
-                              <TableCell sx={{ fontWeight: 700 }}>Y2/Y4/X2/X3/X4</TableCell>
-                              <TableCell sx={{ fontWeight: 700 }}>Notes</TableCell>
+                <div className="space-y-4 lg:col-span-7">
+                  <Card className="overflow-hidden">
+                    <div className="border-b border-solid border-border bg-muted/40 px-4 py-2.5 text-xs font-semibold text-foreground">
+                      Blind Role Ballots ({overview?.blindBallots?.length ?? 0})
+                    </div>
+                    <div className="pits-scroll max-h-72 overflow-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Unit</TableHead>
+                            <TableHead>Role / Reviewer</TableHead>
+                            <TableHead>Y2/Y4/X2/X3/X4</TableHead>
+                            <TableHead>Notes</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {(overview?.blindBallots ?? []).map(b => (
+                            <TableRow key={b.ballotId}>
+                              <TableCell className="font-semibold">{b.unitName}</TableCell>
+                              <TableCell>
+                                <Badge variant="outline">{b.reviewerRole}</Badge>
+                                <div className="mt-0.5 text-[11px] text-muted-foreground">
+                                  {b.reviewerId}
+                                </div>
+                              </TableCell>
+                              <TableCell className="whitespace-nowrap font-mono text-xs">
+                                {b.y2_coreCompetitiveness.toFixed(1)} /{' '}
+                                {b.y4_priceElasticity.toFixed(1)} / {b.x2_marketScarcity.toFixed(1)}{' '}
+                                / {b.x3_customizationDepth.toFixed(1)} /{' '}
+                                {b.x4_complianceFragility.toFixed(1)}
+                              </TableCell>
+                              <TableCell className="text-xs text-muted-foreground">
+                                {b.evidenceNotes || '—'}
+                              </TableCell>
                             </TableRow>
-                          </TableHead>
-                          <TableBody>
-                            {(overview?.blindBallots ?? []).map((b) => (
-                              <TableRow key={b.ballotId} hover>
-                                <TableCell sx={{ fontWeight: 600 }}>{b.unitName}</TableCell>
-                                <TableCell>
-                                  <Chip size="small" label={b.reviewerRole} variant="outlined" sx={{ mr: 0.5 }} />
-                                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                                    {b.reviewerId}
-                                  </Typography>
-                                </TableCell>
-                                <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
-                                  {b.y2_coreCompetitiveness.toFixed(1)} / {b.y4_priceElasticity.toFixed(1)} / {b.x2_marketScarcity.toFixed(1)} / {b.x3_customizationDepth.toFixed(1)} / {b.x4_complianceFragility.toFixed(1)}
-                                </TableCell>
-                                <TableCell>
-                                  <Typography variant="caption" color="text.secondary">
-                                    {b.evidenceNotes || '—'}
-                                  </Typography>
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      </TableContainer>
-                    </CardContent>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
                   </Card>
 
-                  <Card variant="outlined" sx={{ borderRadius: 2 }}>
-                    <CardContent>
-                      <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1 }}>
-                        Immutable DB Audit Event Ledger ({overview?.recentEvents?.length ?? 0})
-                      </Typography>
-                      <TableContainer sx={{ maxHeight: 240 }}>
-                        <Table size="small" stickyHeader>
-                          <TableHead>
-                            <TableRow>
-                              <TableCell sx={{ fontWeight: 700 }}>Type / Channel</TableCell>
-                              <TableCell sx={{ fontWeight: 700 }}>Unit &amp; Actor</TableCell>
-                              <TableCell sx={{ fontWeight: 700 }}>Summary</TableCell>
+                  <Card className="overflow-hidden">
+                    <div className="border-b border-solid border-border bg-muted/40 px-4 py-2.5 text-xs font-semibold text-foreground">
+                      Immutable DB Audit Event Ledger ({overview?.recentEvents?.length ?? 0})
+                    </div>
+                    <div className="pits-scroll max-h-64 overflow-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Type / Channel</TableHead>
+                            <TableHead>Unit &amp; Actor</TableHead>
+                            <TableHead>Summary</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {(overview?.recentEvents ?? []).map(ev => (
+                            <TableRow key={ev.eventId}>
+                              <TableCell>
+                                <Badge variant="outline">{ev.eventType}</Badge>
+                                <div className="mt-0.5 text-[11px] text-muted-foreground">
+                                  via {ev.channel}
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <div className="text-xs font-semibold text-foreground">
+                                  {ev.unitName}
+                                </div>
+                                <div className="text-[11px] text-muted-foreground">
+                                  {ev.actor}
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <div className="text-xs text-foreground">{ev.summary}</div>
+                                <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
+                                  {ev.createdAt}
+                                </div>
+                              </TableCell>
                             </TableRow>
-                          </TableHead>
-                          <TableBody>
-                            {(overview?.recentEvents ?? []).map((ev) => (
-                              <TableRow key={ev.eventId} hover>
-                                <TableCell>
-                                  <Chip size="small" label={ev.eventType} variant="outlined" />
-                                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                                    via {ev.channel}
-                                  </Typography>
-                                </TableCell>
-                                <TableCell>
-                                  <Typography variant="caption" sx={{ fontWeight: 700, display: 'block' }}>
-                                    {ev.unitName}
-                                  </Typography>
-                                  <Typography variant="caption" color="text.secondary">
-                                    {ev.actor}
-                                  </Typography>
-                                </TableCell>
-                                <TableCell>
-                                  <Typography variant="caption">{ev.summary}</Typography>
-                                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontFamily: 'monospace' }}>
-                                    {ev.createdAt}
-                                  </Typography>
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      </TableContainer>
-                    </CardContent>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
                   </Card>
-                </Stack>
-              </Grid>
-            </Grid>
-          </Box>
-        )}
+                </div>
+              </div>
+            </PitsTabPanel>
 
-        {tabIndex === 3 && (
-          <Box sx={{ p: 2.5 }}>
-            <Alert
-              severity="warning"
-              icon={<WarningAmberIcon />}
-              sx={{ mb: 2 }}
-              action={
-                <FormControlLabel
-                  control={
-                    <Switch
-                      color="warning"
-                      checked={fallbackUnlocked}
-                      onChange={(e) => setFallbackUnlocked(e.target.checked)}
-                    />
-                  }
-                  label={fallbackUnlocked ? 'Override UNLOCKED' : 'Locked (Enable Override)'}
-                />
-              }
-            >
-              <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                Emergency Fallback Override Only — Primary Intake Uses MCP &amp; DB Sync
-              </Typography>
-              <Typography variant="caption">
-                Standard onboarding uses <code>pitsctl mcp</code> / <code>POST /mcp</code> (<code>sourcing_scan_workspace</code> → <code>sourcing_promote_candidate</code> → <code>sourcing_submit_blind_ballot</code>). Unlocking and committing here stamps <code>source_origin = &quot;wizard-fallback&quot;</code> and logs your mandatory override reason in the SQLite WAL + PostgreSQL audit ledger.
-              </Typography>
-            </Alert>
-            <Grid container spacing={2.5}>
-              <Grid item xs={12} lg={7}>
-                <Stack spacing={2}>
+            {/* TAB 3: EMERGENCY FALLBACK OVERRIDE WIZARD */}
+            <PitsTabPanel value="wizard" className="space-y-5">
+              <Alert variant="warning" className="items-center justify-between gap-4">
+                <div className="flex items-start gap-2.5">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <div>
+                    <AlertTitle>
+                      Emergency Fallback Override Only — Primary Intake Uses MCP &amp; DB Sync
+                    </AlertTitle>
+                    <AlertDescription>
+                      Standard onboarding uses{' '}
+                      <code className="font-mono">pitsctl mcp</code> /{' '}
+                      <code className="font-mono">POST /mcp</code> (
+                      <code className="font-mono">sourcing_scan_workspace</code> →{' '}
+                      <code className="font-mono">sourcing_promote_candidate</code> →{' '}
+                      <code className="font-mono">sourcing_submit_blind_ballot</code>). Unlocking
+                      and committing here stamps{' '}
+                      <code className="font-mono">source_origin = &quot;wizard-fallback&quot;</code>{' '}
+                      and logs your mandatory override reason in the SQLite WAL + PostgreSQL audit
+                      ledger.
+                    </AlertDescription>
+                  </div>
+                </div>
+                <label className="flex shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap text-xs font-semibold">
+                  <PitsSwitch
+                    tone="warning"
+                    checked={fallbackUnlocked}
+                    onCheckedChange={setFallbackUnlocked}
+                  />
+                  <span>{fallbackUnlocked ? 'Override UNLOCKED' : 'Locked (Enable Override)'}</span>
+                </label>
+              </Alert>
+
+              <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
+                <div className="space-y-4 lg:col-span-7">
                   {overview && overview.items.length > 0 && (
-                    <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1.5 }}>
-                      <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap">
-                        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-                          Load Existing Sourcing Unit:
-                        </Typography>
-                        {overview.items.map((ev) => (
-                          <Chip
+                    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-solid border-border bg-muted/30 p-3.5">
+                      <span className="text-xs font-semibold text-foreground">
+                        Load Existing Sourcing Unit:
+                      </span>
+                      {overview.items.map(ev => {
+                        const active = draft.name === ev.record.name;
+                        return (
+                          <button
                             key={ev.record.name}
-                            size="small"
-                            clickable
-                            color={draft.name === ev.record.name ? 'primary' : 'default'}
-                            label={ev.record.name}
+                            type="button"
                             onClick={() => loadEntityIntoDraft(ev)}
-                          />
-                        ))}
-                      </Stack>
-                    </Paper>
+                            className={cn(
+                              'cursor-pointer rounded-md border border-solid px-2.5 py-1 font-mono text-[11px] font-medium transition-colors',
+                              active
+                                ? 'border-primary bg-primary text-primary-foreground'
+                                : 'border-border bg-background text-foreground hover:bg-accent',
+                            )}
+                          >
+                            {ev.record.name}
+                          </button>
+                        );
+                      })}
+                    </div>
                   )}
 
-                  {/* Section 1: CatalogProcessor Unpacking */}
-                  <Card variant="outlined" sx={{ borderRadius: 2 }}>
-                    <CardContent>
-                      <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1.5 }}>
-                        1 · 4-Layer Catalog Unpacking &amp; FinOps Cost Attribution (CatalogProcessor)
-                      </Typography>
-                      <Grid container spacing={1.5}>
-                        <Grid item xs={12} sm={6}>
-                          <TextField
-                            fullWidth
-                            size="small"
-                            label="Entity Name (DNS-safe sourcing unit)"
+                  {/* Section 1 */}
+                  <Card>
+                    <CardContent className="space-y-4 p-5">
+                      <div className="text-sm font-semibold text-foreground">
+                        1 · 4-Layer Catalog Unpacking &amp; FinOps Cost Attribution
+                        (CatalogProcessor)
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+                        <Field
+                          label="Entity Name (DNS-safe sourcing unit)"
+                          helper="Must avoid vendor-level catch-alls like '-all' or bare vendor name"
+                        >
+                          <Input
                             placeholder="e.g. fraud-rule-engine-sdk"
                             value={draft.name}
-                            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                            helperText="Must avoid vendor-level catch-alls like '-all' or bare vendor name"
+                            onChange={e => setDraft({ ...draft, name: e.target.value })}
                           />
-                        </Grid>
-                        <Grid item xs={12} sm={6}>
-                          <FormControl fullWidth size="small">
-                            <InputLabel>Granular Resource Type (spec.type)</InputLabel>
-                            <Select
-                              value={draft.resourceType}
-                              label="Granular Resource Type (spec.type)"
-                              onChange={(e) => setDraft({ ...draft, resourceType: e.target.value })}
-                            >
-                              <MenuItem value="commercial-sdk">commercial-sdk</MenuItem>
-                              <MenuItem value="vendor-saas">vendor-saas</MenuItem>
-                              <MenuItem value="managed-infra">managed-infra</MenuItem>
-                              <MenuItem value="outsourced-dev">outsourced-dev</MenuItem>
-                            </Select>
-                          </FormControl>
-                        </Grid>
-                        <Grid item xs={12}>
-                          <TextField
-                            fullWidth
-                            size="small"
-                            label="Description"
-                            value={draft.description}
-                            onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+                        </Field>
+
+                        <Field label="Granular Resource Type (spec.type)">
+                          <PitsSelect
+                            value={draft.resourceType}
+                            onValueChange={val => setDraft({ ...draft, resourceType: val })}
+                            options={SOURCING_TYPE_OPTIONS}
                           />
-                        </Grid>
-                        <Grid item xs={12} sm={4}>
-                          <FormControl fullWidth size="small">
-                            <InputLabel>Parent System (spec.system)</InputLabel>
-                            <Select
-                              value={draft.system}
-                              label="Parent System (spec.system)"
-                              onChange={(e) => setDraft({ ...draft, system: e.target.value })}
-                            >
-                              {(overview?.availableSystems ?? [
-                                { name: 'core-checkout', title: 'Core Checkout', domain: 'core-commerce' },
-                                { name: 'pits-infrastructure', title: 'PITS Infrastructure', domain: 'platform-infra' },
-                                { name: 'pits-city-pipeline', title: 'PITS City Pipeline', domain: 'spatial-simulation' },
-                              ]).map((sys) => (
-                                <MenuItem key={sys.name} value={sys.name}>
-                                  {sys.name} ({sys.domain})
-                                </MenuItem>
-                              ))}
-                            </Select>
-                          </FormControl>
-                        </Grid>
-                        <Grid item xs={12} sm={4}>
-                          <TextField
-                            fullWidth
-                            size="small"
-                            label="Owner (spec.owner)"
+                        </Field>
+                      </div>
+
+                      <Field label="Description">
+                        <Input
+                          value={draft.description}
+                          onChange={e => setDraft({ ...draft, description: e.target.value })}
+                        />
+                      </Field>
+
+                      <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">
+                        <Field label="Parent System (spec.system)">
+                          <PitsSelect
+                            value={draft.system}
+                            onValueChange={val => setDraft({ ...draft, system: val })}
+                            options={availableSystems.map(sys => ({
+                              value: sys.name,
+                              label: `${sys.name} (${sys.domain})`,
+                            }))}
+                          />
+                        </Field>
+                        <Field label="Owner (spec.owner)">
+                          <Input
                             value={draft.owner}
-                            onChange={(e) => setDraft({ ...draft, owner: e.target.value })}
+                            onChange={e => setDraft({ ...draft, owner: e.target.value })}
                           />
-                        </Grid>
-                        <Grid item xs={12} sm={4}>
-                          <TextField
-                            fullWidth
-                            size="small"
-                            label="FinOps Cost Allocation ID"
+                        </Field>
+                        <Field
+                          label="FinOps Cost Allocation ID"
+                          helper="Never enter plaintext contract price"
+                        >
+                          <Input
                             value={draft.costAllocationId}
-                            onChange={(e) => setDraft({ ...draft, costAllocationId: e.target.value })}
-                            helperText="Never enter plaintext contract price"
-                          />
-                        </Grid>
-                        <Grid item xs={12}>
-                          <FormControlLabel
-                            control={
-                              <Switch
-                                checked={draft.adapterAbstracted}
-                                onChange={(e) =>
-                                  setDraft({ ...draft, adapterAbstracted: e.target.checked })
-                                }
-                              />
+                            onChange={e =>
+                              setDraft({ ...draft, costAllocationId: e.target.value })
                             }
-                            label={`sourcing.company.io/adapter-abstracted = "${draft.adapterAbstracted}" (reduces architectural lock-in X1)`}
                           />
-                        </Grid>
-                        <Grid item xs={12}>
-                          <Typography variant="caption" sx={{ fontWeight: 700, display: 'block', mb: 0.5 }}>
-                            Upstream Dependent Business Components (drives Y1 Blast Radius):
-                          </Typography>
-                          <Stack direction="row" flexWrap="wrap" gap={0.5}>
-                            {(overview?.availableComponents ?? []).map((comp) => (
-                              <FormControlLabel
-                                key={comp.ref}
-                                control={
-                                  <Checkbox
-                                    size="small"
-                                    checked={draft.dependsOnComponents.includes(comp.ref)}
-                                    onChange={() => toggleComponentDep(comp.ref)}
-                                  />
-                                }
-                                label={
-                                  <Typography variant="caption">
-                                    {comp.name} ({comp.system})
-                                  </Typography>
-                                }
+                        </Field>
+                      </div>
+
+                      <label className="flex cursor-pointer items-center gap-2.5 text-xs text-foreground">
+                        <PitsSwitch
+                          checked={draft.adapterAbstracted}
+                          onCheckedChange={checked =>
+                            setDraft({ ...draft, adapterAbstracted: checked })
+                          }
+                        />
+                        <span>
+                          <code className="font-mono">
+                            sourcing.company.io/adapter-abstracted = &quot;
+                            {String(draft.adapterAbstracted)}&quot;
+                          </code>{' '}
+                          (reduces architectural lock-in X1)
+                        </span>
+                      </label>
+
+                      <div className="space-y-2">
+                        <div className="text-xs font-semibold text-foreground">
+                          Upstream Dependent Business Components (drives Y1 Blast Radius):
+                        </div>
+                        <div className="flex flex-wrap gap-3">
+                          {(overview?.availableComponents ?? []).map(comp => (
+                            <label
+                              key={comp.ref}
+                              className="flex cursor-pointer items-center gap-2 text-xs text-foreground"
+                            >
+                              <PitsCheckbox
+                                checked={draft.dependsOnComponents.includes(comp.ref)}
+                                onCheckedChange={() => toggleComponentDep(comp.ref)}
                               />
-                            ))}
-                          </Stack>
-                        </Grid>
-                      </Grid>
+                              <span>
+                                {comp.name}{' '}
+                                <span className="text-muted-foreground">({comp.system})</span>
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
                     </CardContent>
                   </Card>
 
-                  {/* Section 2: Blind Review Scores */}
-                  <Card variant="outlined" sx={{ borderRadius: 2 }}>
-                    <CardContent>
-                      <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1.5 }}>
+                  {/* Section 2 */}
+                  <Card>
+                    <CardContent className="space-y-4 p-5">
+                      <div className="text-sm font-semibold text-foreground">
                         2 · Contract Meta &amp; Eight-Dimension Blind Review (5-Pt Knockout Rule)
-                      </Typography>
-                      <Grid container spacing={1.5} sx={{ mb: 1.5 }}>
-                        <Grid item xs={12} sm={4}>
-                          <TextField
-                            fullWidth
-                            size="small"
-                            label="Vendor Legal Name"
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">
+                        <Field label="Vendor Legal Name">
+                          <Input
                             value={draft.audit.contractMeta.vendorName}
-                            onChange={(e) =>
+                            onChange={e =>
                               setDraft({
                                 ...draft,
                                 audit: {
@@ -1399,16 +1445,12 @@ export const SourcingAuditPage: React.FC = () => {
                               })
                             }
                           />
-                        </Grid>
-                        <Grid item xs={12} sm={4}>
-                          <TextField
-                            fullWidth
-                            size="small"
+                        </Field>
+                        <Field label="Renewal Date (YYYY-MM-DD)">
+                          <Input
                             type="date"
-                            label="Renewal Date (YYYY-MM-DD)"
-                            InputLabelProps={{ shrink: true }}
                             value={draft.audit.contractMeta.renewalDate}
-                            onChange={(e) =>
+                            onChange={e =>
                               setDraft({
                                 ...draft,
                                 audit: {
@@ -1421,31 +1463,31 @@ export const SourcingAuditPage: React.FC = () => {
                               })
                             }
                           />
-                        </Grid>
-                        <Grid item xs={12} sm={4}>
-                          <TextField
-                            fullWidth
-                            size="small"
+                        </Field>
+                        <Field label="Baseline Prod Dependents">
+                          <Input
                             type="number"
-                            label="Baseline Prod Dependents"
                             value={draft.audit.contractMeta.baselineProdDependents}
-                            onChange={(e) =>
+                            onChange={e =>
                               setDraft({
                                 ...draft,
                                 audit: {
                                   ...draft.audit,
                                   contractMeta: {
                                     ...draft.audit.contractMeta,
-                                    baselineProdDependents: Math.max(1, Number(e.target.value) || 1),
+                                    baselineProdDependents: Math.max(
+                                      1,
+                                      Number(e.target.value) || 1,
+                                    ),
                                   },
                                 },
                               })
                             }
                           />
-                        </Grid>
-                      </Grid>
+                        </Field>
+                      </div>
 
-                      <Grid container spacing={2}>
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                         {(
                           [
                             ['y2_coreCompetitiveness', 'Y2 Core Competitiveness (25%)'],
@@ -1457,274 +1499,255 @@ export const SourcingAuditPage: React.FC = () => {
                         ).map(([fieldKey, label]) => {
                           const val = draft.audit.manualScores[fieldKey];
                           return (
-                            <Grid item xs={12} sm={6} key={fieldKey}>
-                              <Stack direction="row" justifyContent="space-between">
-                                <Typography variant="caption" sx={{ fontWeight: 600 }}>
-                                  {label}
-                                </Typography>
-                                <Typography
-                                  variant="caption"
-                                  sx={{
-                                    fontWeight: 700,
-                                    color: val >= 5 ? 'error.main' : 'primary.main',
-                                  }}
+                            <div key={fieldKey} className="space-y-1">
+                              <div className="flex items-center justify-between text-xs">
+                                <span className="font-medium text-foreground">{label}</span>
+                                <span
+                                  className={cn(
+                                    'font-mono font-semibold',
+                                    val >= 5
+                                      ? 'text-red-600 dark:text-red-400'
+                                      : 'text-foreground',
+                                  )}
                                 >
                                   {val.toFixed(1)} {val >= 5 ? '(KNOCKOUT)' : ''}
-                                </Typography>
-                              </Stack>
-                              <Slider
-                                size="small"
+                                </span>
+                              </div>
+                              <PitsSlider
                                 min={1}
                                 max={5}
                                 step={0.5}
-                                marks
                                 value={val}
-                                onChange={(_, v) => updateManualScore(fieldKey, Number(v))}
+                                onValueChange={v => updateManualScore(fieldKey, v)}
                               />
-                            </Grid>
+                            </div>
                           );
                         })}
-                      </Grid>
+                      </div>
                     </CardContent>
                   </Card>
 
-                  {/* Section 3: Dutch Windmill */}
-                  <Card variant="outlined" sx={{ borderRadius: 2 }}>
-                    <CardContent>
-                      <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1.5 }}>
+                  {/* Section 3 */}
+                  <Card>
+                    <CardContent className="space-y-4 p-5">
+                      <div className="text-sm font-semibold text-foreground">
                         3 · Dutch Windmill Reverse Audit (Supplier View of PITS)
-                      </Typography>
-                      <Grid container spacing={1.5}>
-                        <Grid item xs={12} sm={4}>
-                          <FormControl fullWidth size="small">
-                            <InputLabel>Supplier Perceived Status</InputLabel>
-                            <Select
-                              value={draft.audit.supplierPreference.perceivedStatus}
-                              label="Supplier Perceived Status"
-                              onChange={(e) =>
-                                setDraft({
-                                  ...draft,
-                                  audit: {
-                                    ...draft.audit,
-                                    supplierPreference: {
-                                      ...draft.audit.supplierPreference,
-                                      perceivedStatus: e.target.value,
-                                    },
-                                  },
-                                })
-                              }
-                            >
-                              <MenuItem value="core">core (Strategic Partner)</MenuItem>
-                              <MenuItem value="development">development (Growth)</MenuItem>
-                              <MenuItem value="exploitable">exploitable (Captive)</MenuItem>
-                              <MenuItem value="nuisance">nuisance (Low Priority)</MenuItem>
-                            </Select>
-                          </FormControl>
-                        </Grid>
-                        <Grid item xs={12} sm={4}>
-                          <FormControl fullWidth size="small">
-                            <InputLabel>Estimated Wallet Share</InputLabel>
-                            <Select
-                              value={draft.audit.supplierPreference.estimatedWalletShareTier}
-                              label="Estimated Wallet Share"
-                              onChange={(e) =>
-                                setDraft({
-                                  ...draft,
-                                  audit: {
-                                    ...draft.audit,
-                                    supplierPreference: {
-                                      ...draft.audit.supplierPreference,
-                                      estimatedWalletShareTier: e.target.value,
-                                    },
-                                  },
-                                })
-                              }
-                            >
-                              <MenuItem value="under-1pct">under-1pct</MenuItem>
-                              <MenuItem value="1-to-5pct">1-to-5pct</MenuItem>
-                              <MenuItem value="5-to-15pct">5-to-15pct</MenuItem>
-                              <MenuItem value="over-15pct">over-15pct</MenuItem>
-                            </Select>
-                          </FormControl>
-                        </Grid>
-                        <Grid item xs={12} sm={4}>
-                          <Typography variant="caption" sx={{ fontWeight: 600 }}>
-                            Account Attractiveness ({draft.audit.supplierPreference.accountAttractivenessScore.toFixed(1)})
-                          </Typography>
-                          <Slider
-                            size="small"
-                            min={1}
-                            max={5}
-                            step={0.1}
-                            value={draft.audit.supplierPreference.accountAttractivenessScore}
-                            onChange={(_, v) =>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                        <Field label="Supplier Perceived Status">
+                          <PitsSelect
+                            value={draft.audit.supplierPreference.perceivedStatus}
+                            onValueChange={val =>
                               setDraft({
                                 ...draft,
                                 audit: {
                                   ...draft.audit,
                                   supplierPreference: {
                                     ...draft.audit.supplierPreference,
-                                    accountAttractivenessScore: Number(v),
+                                    perceivedStatus: val,
+                                  },
+                                },
+                              })
+                            }
+                            options={SUPPLIER_STATUS_OPTIONS}
+                          />
+                        </Field>
+                        <Field label="Estimated Wallet Share">
+                          <PitsSelect
+                            value={draft.audit.supplierPreference.estimatedWalletShareTier}
+                            onValueChange={val =>
+                              setDraft({
+                                ...draft,
+                                audit: {
+                                  ...draft.audit,
+                                  supplierPreference: {
+                                    ...draft.audit.supplierPreference,
+                                    estimatedWalletShareTier: val,
+                                  },
+                                },
+                              })
+                            }
+                            options={WALLET_SHARE_OPTIONS}
+                          />
+                        </Field>
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-medium text-foreground">
+                              Account Attractiveness
+                            </span>
+                            <span className="font-mono font-semibold text-foreground">
+                              {draft.audit.supplierPreference.accountAttractivenessScore.toFixed(1)}
+                            </span>
+                          </div>
+                          <PitsSlider
+                            min={1}
+                            max={5}
+                            step={0.1}
+                            value={draft.audit.supplierPreference.accountAttractivenessScore}
+                            onValueChange={v =>
+                              setDraft({
+                                ...draft,
+                                audit: {
+                                  ...draft.audit,
+                                  supplierPreference: {
+                                    ...draft.audit.supplierPreference,
+                                    accountAttractivenessScore: v,
                                   },
                                 },
                               })
                             }
                           />
-                        </Grid>
-                      </Grid>
+                        </div>
+                      </div>
                     </CardContent>
                   </Card>
-                </Stack>
-              </Grid>
+                </div>
 
-              {/* Right Column: Live CatalogProcessor Gate, Save Mode & Unified Diff Preview */}
-              <Grid item xs={12} lg={5}>
-                <Stack spacing={2}>
-                  <Card variant="outlined" sx={{ borderRadius: 2 }}>
-                    <CardContent>
-                      <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1 }}>
-                        CatalogProcessor Gate &amp; Dual-Mode Persistence
-                      </Typography>
-                      <FormControlLabel
-                        sx={{ mb: 1 }}
-                        control={
-                          <Checkbox
-                            checked={writeWorkspaceYaml}
-                            onChange={(e) => setWriteWorkspaceYaml(e.target.checked)}
-                          />
-                        }
-                        label={
-                          <Typography variant="body2">
-                            Also write canonical <code>catalog/sourcing/&lt;name&gt;.yaml</code> to workspace repository
-                          </Typography>
-                        }
-                      />
+                {/* Right Column: Gate, Save Mode & Unified Diff */}
+                <div className="lg:col-span-5">
+                  <Card>
+                    <CardContent className="space-y-4 p-5">
+                      <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                        <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+                        <span>CatalogProcessor Gate &amp; Dual-Mode Persistence</span>
+                      </div>
 
-                      <TextField
-                        fullWidth
-                        size="small"
-                        required
-                        label="Emergency Override Reason (Mandatory for Save)"
-                        placeholder="e.g., Procurement DB unreachable during incident SEV-2; temporary manual entry"
-                        value={overrideReason}
-                        onChange={(e) => setOverrideReason(e.target.value)}
-                        disabled={!fallbackUnlocked}
-                        sx={{ mb: 1.5 }}
-                      />
+                      <label className="flex cursor-pointer items-start gap-2.5 text-xs text-foreground">
+                        <PitsCheckbox
+                          checked={writeWorkspaceYaml}
+                          onCheckedChange={setWriteWorkspaceYaml}
+                        />
+                        <span>
+                          Also write canonical{' '}
+                          <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+                            catalog/sourcing/&lt;name&gt;.yaml
+                          </code>{' '}
+                          to workspace repository
+                        </span>
+                      </label>
 
-                      <Stack direction="row" flexWrap="wrap" gap={1} sx={{ mb: 1.5 }}>
+                      <Field label="Emergency Override Reason (Mandatory for Save)">
+                        <Input
+                          required
+                          placeholder="e.g., Procurement DB unreachable during incident SEV-2; temporary manual entry"
+                          value={overrideReason}
+                          onChange={e => setOverrideReason(e.target.value)}
+                          disabled={!fallbackUnlocked}
+                        />
+                      </Field>
+
+                      <div className="flex flex-wrap gap-2">
                         <Button
-                          variant="outlined"
-                          size="small"
-                          startIcon={<RuleIcon />}
-                          onClick={runProcessorValidation}
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void runProcessorValidation()}
                           disabled={validating || submitting}
                         >
-                          Validate 3 Rules
+                          {validating ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <ClipboardCheck className="h-3.5 w-3.5" />
+                          )}
+                          <span>Validate 3 Rules</span>
                         </Button>
                         <Button
-                          variant="outlined"
-                          size="small"
-                          startIcon={<PreviewIcon />}
-                          onClick={() => handleSubmitWizard(true)}
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void handleSubmitWizard(true)}
                           disabled={submitting}
                         >
-                          Dry-Run Diff
+                          <Eye className="h-3.5 w-3.5" />
+                          <span>Dry-Run Diff</span>
                         </Button>
                         <Button
-                          variant="contained"
-                          color="warning"
-                          size="small"
-                          startIcon={<SaveIcon />}
-                          onClick={() => handleSubmitWizard(false)}
+                          variant="warningSolid"
+                          size="sm"
+                          onClick={() => void handleSubmitWizard(false)}
                           disabled={submitting || !fallbackUnlocked || !overrideReason.trim()}
                         >
-                          Commit Emergency Override
+                          {submitting ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Save className="h-3.5 w-3.5" />
+                          )}
+                          <span>Commit Emergency Override</span>
                         </Button>
-                      </Stack>
-
-                      {(validating || submitting) && <LinearProgress sx={{ mb: 1 }} />}
+                      </div>
 
                       {wizardError && (
-                        <Alert severity="error" sx={{ mb: 1.5 }}>
-                          {wizardError}
+                        <Alert variant="destructive">
+                          <AlertCircle />
+                          <AlertDescription>{wizardError}</AlertDescription>
                         </Alert>
                       )}
 
                       {validation && (
-                        <Stack spacing={0.75} sx={{ mb: 1.5 }}>
-                          {validation.rules.map((r) => (
-                            <Alert
-                              key={r.id}
-                              severity={r.passed ? 'success' : 'error'}
-                              icon={r.passed ? <CheckCircleOutlineIcon /> : <ErrorOutlineIcon />}
-                              sx={{ py: 0.25 }}
-                            >
-                              <Typography variant="caption" sx={{ fontWeight: 700, display: 'block' }}>
-                                {r.title}
-                              </Typography>
-                              <Typography variant="caption">{r.message}</Typography>
+                        <div className="space-y-2">
+                          {validation.rules.map(r => (
+                            <Alert key={r.id} variant={r.passed ? 'success' : 'destructive'}>
+                              {r.passed ? <CheckCircle2 /> : <AlertCircle />}
+                              <div>
+                                <AlertTitle>{r.title}</AlertTitle>
+                                <AlertDescription>{r.message}</AlertDescription>
+                              </div>
                             </Alert>
                           ))}
-                        </Stack>
+                        </div>
                       )}
 
                       {wizardResult && (
-                        <Box>
-                          <Divider sx={{ my: 1.5 }} />
-                          <Alert severity={wizardResult.dryRun ? 'info' : 'success'} sx={{ mb: 1.5 }}>
-                            <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                              {wizardResult.dryRun ? 'Dry-Run Computation Complete' : 'Persisted & Catalog Refreshed'} ({wizardResult.persistenceMode})
-                            </Typography>
-                            <Typography variant="caption" sx={{ display: 'block' }}>
-                              Quadrant: <b>{wizardResult.evaluation.facts.quadrant}</b> | Y=
-                              {wizardResult.evaluation.facts.finalYScore.toFixed(2)} | X=
-                              {wizardResult.evaluation.facts.finalXScore.toFixed(2)} | Mismatch:{' '}
-                              {String(wizardResult.evaluation.facts.windmillMismatch)}
-                            </Typography>
-                            {!wizardResult.dryRun && (
-                              <Button
-                                size="small"
-                                sx={{ mt: 0.75 }}
-                                variant="outlined"
-                                component={RouterLink}
-                                to={`/catalog/default/resource/${encodeURIComponent(
-                                  wizardResult.evaluation.record.name,
-                                )}`}
-                              >
-                                Open Entity Scorecard
-                              </Button>
-                            )}
+                        <div className="space-y-3">
+                          <Separator />
+                          <Alert variant={wizardResult.dryRun ? 'info' : 'success'}>
+                            {wizardResult.dryRun ? <Info /> : <CheckCircle2 />}
+                            <div className="space-y-1.5">
+                              <AlertTitle>
+                                {wizardResult.dryRun
+                                  ? 'Dry-Run Computation Complete'
+                                  : 'Persisted & Catalog Refreshed'}{' '}
+                                ({wizardResult.persistenceMode})
+                              </AlertTitle>
+                              <AlertDescription>
+                                Quadrant: <strong>{wizardResult.evaluation.facts.quadrant}</strong>{' '}
+                                | Y={wizardResult.evaluation.facts.finalYScore.toFixed(2)} | X=
+                                {wizardResult.evaluation.facts.finalXScore.toFixed(2)} | Mismatch:{' '}
+                                {String(wizardResult.evaluation.facts.windmillMismatch)}
+                              </AlertDescription>
+                              {!wizardResult.dryRun && (
+                                <div>
+                                  <Button size="xs" variant="outline" asChild>
+                                    <RouterLink
+                                      to={`/catalog/default/resource/${encodeURIComponent(
+                                        wizardResult.evaluation.record.name,
+                                      )}`}
+                                    >
+                                      Open Entity Scorecard
+                                    </RouterLink>
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
                           </Alert>
 
-                          <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
-                            Canonical Unified Diff (catalog-info.yaml)
-                          </Typography>
-                          <Paper
-                            variant="outlined"
-                            sx={{
-                              p: 1.25,
-                              bgcolor: '#0f172a',
-                              color: '#e2e8f0',
-                              maxHeight: 280,
-                              overflow: 'auto',
-                              fontFamily: 'monospace',
-                              fontSize: '0.74rem',
-                              whiteSpace: 'pre',
-                            }}
-                          >
-                            {wizardResult.unifiedDiff}
-                          </Paper>
-                        </Box>
+                          <div className="space-y-1.5">
+                            <div className="text-xs font-semibold text-foreground">
+                              Canonical Unified Diff (catalog-info.yaml)
+                            </div>
+                            <pre className="pits-scroll m-0 max-h-72 overflow-auto rounded-lg border border-solid border-border bg-zinc-950 p-3 font-mono text-[11px] leading-relaxed text-zinc-200">
+                              {wizardResult.unifiedDiff}
+                            </pre>
+                          </div>
+                        </div>
                       )}
                     </CardContent>
                   </Card>
-                </Stack>
-              </Grid>
-            </Grid>
-          </Box>
-        )}
-      </Paper>
-    </Box>
+                </div>
+              </div>
+            </PitsTabPanel>
+          </PitsTabs>
+        </Card>
+      </PageBody>
+    </PageShell>
   );
 };

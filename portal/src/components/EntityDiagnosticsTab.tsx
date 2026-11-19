@@ -1,30 +1,33 @@
 import React, { useState } from 'react';
 import {
-  Alert,
-  Box,
-  Button,
-  Card,
-  CardContent,
-  CardHeader,
-  Chip,
-  CircularProgress,
-  Divider,
-  Paper,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Typography,
-} from '@mui/material';
-import RefreshIcon from '@mui/icons-material/Refresh';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import CheckIcon from '@mui/icons-material/Check';
+  AlertTriangle,
+  Check,
+  Copy,
+  Info,
+  Loader2,
+  RefreshCw,
+} from 'lucide-react';
 import { useEntity } from '@backstage/plugin-catalog-react';
 import { usePitsEntityDetail } from '../hooks/usePitsEntityDetail';
 import { FormattedAttributeValue, StatusPill } from './StatusPill';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from './ui/card';
+import { Alert, AlertDescription } from './ui/alert';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from './ui/table';
 
 function humanizeKey(raw: string): string {
   return raw
@@ -42,26 +45,13 @@ const DiagnosticCellValue: React.FC<{ value: unknown; fieldKey?: string }> = ({
   fieldKey,
 }) => {
   if (value === null || value === undefined || value === '') {
-    return (
-      <Typography variant="body2" color="text.secondary">
-        —
-      </Typography>
-    );
+    return <span className="text-xs text-muted-foreground">—</span>;
   }
   if (typeof value === 'boolean') {
-    return (
-      <StatusPill
-        label={value ? 'TRUE' : 'FALSE'}
-        level={value ? 'ok' : 'warn'}
-      />
-    );
+    return <StatusPill label={value ? 'TRUE' : 'FALSE'} level={value ? 'ok' : 'warn'} />;
   }
   if (typeof value === 'number') {
-    return (
-      <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>
-        {value.toLocaleString()}
-      </Typography>
-    );
+    return <span className="font-mono text-xs font-semibold">{value.toLocaleString()}</span>;
   }
   if (typeof value === 'string') {
     const lower = value.toLowerCase();
@@ -84,48 +74,36 @@ const DiagnosticCellValue: React.FC<{ value: unknown; fieldKey?: string }> = ({
   }
   if (Array.isArray(value)) {
     if (value.length === 0) {
-      return (
-        <Typography variant="body2" color="text.secondary">
-          None
-        </Typography>
-      );
+      return <span className="text-xs text-muted-foreground">None</span>;
     }
     if (value.every(isPrimitive)) {
       return (
-        <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+        <div className="flex flex-wrap gap-1">
           {value.map((item, idx) => (
-            <Chip
-              key={idx}
-              size="small"
-              variant="outlined"
-              label={String(item)}
-              sx={{ fontFamily: 'monospace', fontSize: '0.73rem' }}
-            />
+            <Badge key={idx} variant="muted" className="font-mono text-[11px]">
+              {String(item)}
+            </Badge>
           ))}
-        </Stack>
+        </div>
       );
     }
-    return <Chip size="small" label={`${value.length} records`} variant="outlined" />;
+    return <Badge variant="outline">{value.length} records</Badge>;
   }
   if (typeof value === 'object') {
     const entries = Object.entries(value as Record<string, unknown>).filter(
       ([, v]) => v !== null && v !== undefined,
     );
     return (
-      <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+      <div className="flex flex-wrap gap-1">
         {entries.slice(0, 6).map(([k, v]) => (
-          <Chip
-            key={k}
-            size="small"
-            variant="outlined"
-            label={`${k}: ${isPrimitive(v) ? String(v) : '...'}`}
-            sx={{ fontFamily: 'monospace', fontSize: '0.72rem' }}
-          />
+          <Badge key={k} variant="muted" className="font-mono text-[11px]">
+            {k}: {isPrimitive(v) ? String(v) : '...'}
+          </Badge>
         ))}
-      </Stack>
+      </div>
     );
   }
-  return <Typography variant="body2">{String(value)}</Typography>;
+  return <span className="text-xs">{String(value)}</span>;
 };
 
 const TraceTextBlock: React.FC<{ title: string; content: string }> = ({ title, content }) => {
@@ -141,48 +119,22 @@ const TraceTextBlock: React.FC<{ title: string; content: string }> = ({ title, c
   };
 
   return (
-    <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
-      <Stack
-        direction="row"
-        justifyContent="space-between"
-        alignItems="center"
-        sx={{
-          px: 2,
-          py: 1,
-          bgcolor: 'action.hover',
-          borderBottom: '1px solid',
-          borderColor: 'divider',
-        }}
-      >
-        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-          {title}
-        </Typography>
-        <Button
-          size="small"
-          variant="outlined"
-          startIcon={copied ? <CheckIcon /> : <ContentCopyIcon />}
-          onClick={handleCopy}
-        >
-          {copied ? 'Copied' : 'Copy Trace'}
+    <div className="overflow-hidden rounded-lg border border-solid border-border">
+      <div className="flex items-center justify-between gap-2 border-b border-solid border-border bg-muted/50 px-4 py-2">
+        <span className="text-xs font-semibold text-foreground">{title}</span>
+        <Button size="xs" variant="outline" onClick={() => void handleCopy()}>
+          {copied ? (
+            <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+          ) : (
+            <Copy className="h-3 w-3" />
+          )}
+          <span>{copied ? 'Copied' : 'Copy Trace'}</span>
         </Button>
-      </Stack>
-      <Box
-        component="pre"
-        sx={{
-          m: 0,
-          p: 2,
-          maxHeight: 360,
-          overflow: 'auto',
-          bgcolor: '#0f172a',
-          color: '#e2e8f0',
-          fontFamily: '"JetBrains Mono", "Cascadia Code", Consolas, monospace',
-          fontSize: '0.78rem',
-          lineHeight: 1.5,
-        }}
-      >
+      </div>
+      <pre className="pits-scroll m-0 max-h-[360px] overflow-auto bg-zinc-950 p-4 font-mono text-xs leading-relaxed text-zinc-200">
         {content}
-      </Box>
-    </Paper>
+      </pre>
+    </div>
   );
 };
 
@@ -198,38 +150,23 @@ const ObjectArrayTableCard: React.FC<{
   ).slice(0, 10);
 
   return (
-    <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
-      <Stack
-        direction="row"
-        justifyContent="space-between"
-        alignItems="center"
-        sx={{
-          px: 2,
-          py: 1,
-          bgcolor: 'action.hover',
-          borderBottom: '1px solid',
-          borderColor: 'divider',
-        }}
-      >
-        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-          {title}
-        </Typography>
-        <Chip size="small" variant="outlined" label={`${rows.length} entries`} />
-      </Stack>
-      <TableContainer sx={{ maxHeight: 420 }}>
-        <Table size="small" stickyHeader>
-          <TableHead>
+    <div className="overflow-hidden rounded-lg border border-solid border-border">
+      <div className="flex items-center justify-between gap-2 border-b border-solid border-border bg-muted/50 px-4 py-2">
+        <span className="text-xs font-semibold text-foreground">{title}</span>
+        <Badge variant="outline">{rows.length} entries</Badge>
+      </div>
+      <div className="pits-scroll max-h-[420px] overflow-auto">
+        <Table>
+          <TableHeader>
             <TableRow>
               {columns.map(col => (
-                <TableCell key={col} sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
-                  {humanizeKey(col)}
-                </TableCell>
+                <TableHead key={col}>{humanizeKey(col)}</TableHead>
               ))}
             </TableRow>
-          </TableHead>
+          </TableHeader>
           <TableBody>
             {rows.map((row, idx) => (
-              <TableRow key={idx} hover>
+              <TableRow key={idx}>
                 {columns.map(col => (
                   <TableCell key={col}>
                     <DiagnosticCellValue value={row[col]} fieldKey={col} />
@@ -239,8 +176,8 @@ const ObjectArrayTableCard: React.FC<{
             ))}
           </TableBody>
         </Table>
-      </TableContainer>
-    </Paper>
+      </div>
+    </div>
   );
 };
 
@@ -265,39 +202,27 @@ const StructuredDiagnosticsSection: React.FC<{
   }
 
   return (
-    <Stack spacing={2.5}>
+    <div className="space-y-4">
       {scalarEntries.length > 0 && (
-        <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
-          <Box
-            sx={{
-              px: 2,
-              py: 1,
-              bgcolor: 'action.hover',
-              borderBottom: '1px solid',
-              borderColor: 'divider',
-            }}
-          >
-            <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-              {title}
-            </Typography>
-          </Box>
-          <TableContainer>
-            <Table size="small">
-              <TableBody>
-                {scalarEntries.map(([k, v]) => (
-                  <TableRow key={k} hover>
-                    <TableCell sx={{ width: '35%', fontWeight: 600, color: 'text.secondary' }}>
-                      {humanizeKey(k)}
-                    </TableCell>
-                    <TableCell>
-                      <DiagnosticCellValue value={v} fieldKey={k} />
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
-        </Paper>
+        <div className="overflow-hidden rounded-lg border border-solid border-border">
+          <div className="border-b border-solid border-border bg-muted/50 px-4 py-2 text-xs font-semibold text-foreground">
+            {title}
+          </div>
+          <Table>
+            <TableBody>
+              {scalarEntries.map(([k, v]) => (
+                <TableRow key={k}>
+                  <TableCell className="w-[35%] font-medium text-muted-foreground">
+                    {humanizeKey(k)}
+                  </TableCell>
+                  <TableCell>
+                    <DiagnosticCellValue value={v} fieldKey={k} />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       )}
 
       {nestedSections.map(([k, v]) => {
@@ -325,7 +250,7 @@ const StructuredDiagnosticsSection: React.FC<{
         }
         return null;
       })}
-    </Stack>
+    </div>
   );
 };
 
@@ -337,12 +262,13 @@ export const EntityDiagnosticsTab: React.FC = () => {
 
   if (loading && !detail) {
     return (
-      <Card variant="outlined">
-        <CardContent sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 4 }}>
-          <CircularProgress size={24} />
-          <Typography variant="body2" color="text.secondary">
-            Collecting deep protocol diagnostics for <strong>{name}</strong>...
-          </Typography>
+      <Card>
+        <CardContent className="flex items-center gap-3 p-6">
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          <span className="text-xs text-muted-foreground">
+            Collecting deep protocol diagnostics for <strong className="text-foreground">{name}</strong>
+            ...
+          </span>
         </CardContent>
       </Card>
     );
@@ -355,34 +281,47 @@ export const EntityDiagnosticsTab: React.FC = () => {
     (typeof diagnostics !== 'object' || Object.keys(diagnostics as object).length > 0);
 
   return (
-    <Card variant="outlined">
-      <CardHeader
-        title="Deep Protocol & Kernel Diagnostics"
-        subheader="Structured COSI service telemetry, Hook PCI/IOMMU inventory, GoVPP dataplane counters, NVMe/TCP GPT layout, and X.509 thumbprints"
-        action={
-          <Button
-            size="small"
-            variant="outlined"
-            startIcon={refreshing ? <CircularProgress size={15} /> : <RefreshIcon />}
-            disabled={refreshing}
-            onClick={() => void refreshLive()}
-          >
-            {refreshing ? 'Probing Live...' : 'Probe Live Telemetry'}
-          </Button>
-        }
-      />
-      <Divider />
-      <CardContent>
+    <Card>
+      <CardHeader className="flex flex-col gap-3 border-b border-solid border-border sm:flex-row sm:items-center sm:justify-between">
+        <div className="space-y-1">
+          <CardTitle>Deep Protocol &amp; Kernel Diagnostics</CardTitle>
+          <CardDescription>
+            Structured COSI service telemetry, Hook PCI/IOMMU inventory, GoVPP dataplane counters,
+            NVMe/TCP GPT layout, and X.509 thumbprints
+          </CardDescription>
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={refreshing}
+          onClick={() => void refreshLive()}
+          className="shrink-0"
+        >
+          {refreshing ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <RefreshCw className="h-3.5 w-3.5" />
+          )}
+          <span>{refreshing ? 'Probing Live...' : 'Probe Live Telemetry'}</span>
+        </Button>
+      </CardHeader>
+
+      <CardContent className="space-y-4 p-5">
         {error && (
-          <Alert severity="warning" sx={{ mb: 2 }}>
-            {error}
+          <Alert variant="warning">
+            <AlertTriangle />
+            <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}
 
         {!hasDiagnostics ? (
-          <Alert severity="info">
-            No additional deep diagnostic payload reported for <strong>{name}</strong> in current
-            snapshot. Click <strong>Probe Live Telemetry</strong> to query the live fleet endpoints.
+          <Alert variant="info">
+            <Info />
+            <AlertDescription>
+              No additional deep diagnostic payload reported for <strong>{name}</strong> in current
+              snapshot. Click <strong>Probe Live Telemetry</strong> to query the live fleet
+              endpoints.
+            </AlertDescription>
           </Alert>
         ) : typeof diagnostics === 'string' ? (
           <TraceTextBlock title="Diagnostic Output" content={diagnostics} />

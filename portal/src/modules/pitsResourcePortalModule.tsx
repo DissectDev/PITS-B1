@@ -1,8 +1,14 @@
 import React from 'react';
-import AppsIcon from '@mui/icons-material/Apps';
-import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined';
-import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
-import MonitorHeartOutlinedIcon from '@mui/icons-material/MonitorHeartOutlined';
+import {
+  Activity,
+  ClipboardCheck,
+  FileCode2,
+  FolderKanban,
+  LayoutGrid,
+  Moon,
+  SlidersHorizontal,
+  Sun,
+} from 'lucide-react';
 import {
   discoveryApiRef,
   fetchApiRef,
@@ -18,6 +24,7 @@ import {
 import {
   NavContentBlueprint,
   SignInPageBlueprint,
+  ThemeBlueprint,
   TranslationBlueprint,
 } from '@backstage/plugin-app-react';
 import { catalogTranslationRef } from '@backstage/plugin-catalog/alpha';
@@ -33,16 +40,19 @@ import {
   AutoGuestSignInPage,
   PitsSidebarNav,
 } from '../components/PitsSidebarNav';
+import { PitsShadcnThemeProvider } from '../theme/pitsShadcnTheme';
 
 export const resourceTypesRouteRef = createRouteRef();
 export const operatorProfileRouteRef = createRouteRef();
+export const projectHubRouteRef = createRouteRef();
+export const projectHubTaskDetailRouteRef = createRouteRef();
 
 const resourceTypesPage = PageBlueprint.make({
   name: 'resource-types',
   params: {
     path: '/resource-types',
     title: 'Resource Types',
-    icon: <AppsIcon />,
+    icon: <LayoutGrid className="h-4 w-4" />,
     noHeader: true,
     routeRef: resourceTypesRouteRef,
     loader: () =>
@@ -57,12 +67,40 @@ const operatorProfilePage = PageBlueprint.make({
   params: {
     path: '/settings/pits-profile',
     title: 'Operator & mTLS',
-    icon: <TuneOutlinedIcon />,
+    icon: <SlidersHorizontal className="h-4 w-4" />,
     noHeader: true,
     routeRef: operatorProfileRouteRef,
     loader: () =>
       import('../pages/OperatorProfilePage').then(m => (
         <m.OperatorProfilePage />
+      )),
+  },
+});
+
+const projectHubPage = PageBlueprint.make({
+  name: 'project-hub',
+  params: {
+    path: '/project-hub',
+    title: 'Project Hub',
+    icon: <FolderKanban className="h-4 w-4" />,
+    noHeader: true,
+    routeRef: projectHubRouteRef,
+    loader: () =>
+      import('../pages/ProjectHubPage').then(m => <m.ProjectHubPage />),
+  },
+});
+
+const projectHubTaskDetailPage = PageBlueprint.make({
+  name: 'project-hub-task-detail',
+  params: {
+    path: '/project-hub/tasks/:taskKey',
+    title: 'Task Detail',
+    icon: <ClipboardCheck className="h-4 w-4" />,
+    noHeader: true,
+    routeRef: projectHubTaskDetailRouteRef,
+    loader: () =>
+      import('../pages/ProjectHubTaskDetailPage').then(m => (
+        <m.ProjectHubTaskDetailPage />
       )),
   },
 });
@@ -109,7 +147,7 @@ const entityManifestsContent = EntityContentBlueprint.make({
     path: 'manifests',
     title: 'Manifests & YAML',
     group: 'deployment',
-    icon: <DescriptionOutlinedIcon />,
+    icon: <FileCode2 className="h-4 w-4" />,
     filter: { kind: 'resource' },
     loader: () =>
       import('../components/EntityManifestsTab').then(m => (
@@ -124,7 +162,7 @@ const entityDiagnosticsContent = EntityContentBlueprint.make({
     path: 'diagnostics',
     title: 'Diagnostics',
     group: 'observability',
-    icon: <MonitorHeartOutlinedIcon />,
+    icon: <Activity className="h-4 w-4" />,
     filter: { kind: 'resource' },
     loader: () =>
       import('../components/EntityDiagnosticsTab').then(m => (
@@ -170,16 +208,20 @@ const entitySourcingScorecardCardExtension = EntityCardBlueprint.make({
 export const pitsResourcePortalPlugin = createFrontendPlugin({
   pluginId: 'pits-portal',
   title: 'PITS Resource & Sourcing Portal',
-  icon: <AppsIcon />,
+  icon: <LayoutGrid className="h-4 w-4" />,
   routes: {
     resourceTypes: resourceTypesRouteRef,
     operatorProfile: operatorProfileRouteRef,
+    projectHub: projectHubRouteRef,
+    projectHubTaskDetail: projectHubTaskDetailRouteRef,
     sourcingAudit: sourcingAuditRouteRef,
     sourcingAuditWizard: sourcingAuditWizardRouteRef,
   },
   extensions: [
     resourceTypesPage,
     operatorProfilePage,
+    projectHubPage,
+    projectHubTaskDetailPage,
     sourcingAuditPageExtension,
     sourcingAuditWizardPageExtension,
     entityStatusSummaryCard,
@@ -189,6 +231,36 @@ export const pitsResourcePortalPlugin = createFrontendPlugin({
     entityManifestsContent,
     entityDiagnosticsContent,
   ],
+});
+
+const pitsLightThemeExtension = ThemeBlueprint.make({
+  name: 'light',
+  params: {
+    theme: {
+      id: 'light',
+      title: 'PITS Light (Zinc)',
+      variant: 'light',
+      icon: <Sun className="h-4 w-4" />,
+      Provider: ({ children }) => (
+        <PitsShadcnThemeProvider variant="light">{children}</PitsShadcnThemeProvider>
+      ),
+    },
+  },
+});
+
+const pitsDarkThemeExtension = ThemeBlueprint.make({
+  name: 'dark',
+  params: {
+    theme: {
+      id: 'dark',
+      title: 'PITS Dark (Zinc)',
+      variant: 'dark',
+      icon: <Moon className="h-4 w-4" />,
+      Provider: ({ children }) => (
+        <PitsShadcnThemeProvider variant="dark">{children}</PitsShadcnThemeProvider>
+      ),
+    },
+  },
 });
 
 const pitsNavContentExtension = NavContentBlueprint.make({
@@ -221,6 +293,8 @@ const pitsCatalogTranslationExtension = TranslationBlueprint.make({
 export const pitsAppOverridesModule = createFrontendModule({
   pluginId: 'app',
   extensions: [
+    pitsLightThemeExtension,
+    pitsDarkThemeExtension,
     pitsNavContentExtension,
     pitsAutoGuestSignInExtension,
     pitsCatalogTranslationExtension,

@@ -1,7 +1,8 @@
 # Three-stage Zero-Trust Security Policies bound to lab-zero-trust-gateway (istio-system):
 # 1. CUSTOM AuthorizationPolicy (ext_authz -> oauth2-proxy) for browser requests (non-Bearer, non-/oauth2/*).
 # 2. RequestAuthentication (Envoy jwt_authn) validating Keycloak corp JWKS on all Bearer tokens.
-# 3. ALLOW AuthorizationPolicy permitting /oauth2/* callbacks or JWT claims with acr == "fido2".
+# 3. ALLOW AuthorizationPolicy permitting /oauth2/* callbacks, JWT claims with acr == "fido2",
+#    or narrow Service Account JWT (azp == "pits-project-hub-mcp") strictly on portal.lab.martensite.dev/mcp/hub.
 ---
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
@@ -65,3 +66,17 @@ spec:
         - key: request.auth.claims[acr]
           values:
             - "fido2"
+    - from:
+        - source:
+            requestPrincipals:
+              - "*"
+      to:
+        - operation:
+            hosts:
+              - "portal.lab.martensite.dev"
+            paths:
+              - "/mcp/hub"
+      when:
+        - key: request.auth.claims[azp]
+          values:
+            - "pits-project-hub-mcp"

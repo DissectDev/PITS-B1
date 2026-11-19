@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
 
 const portalRoot = fileURLToPath(new URL('.', import.meta.url));
@@ -85,6 +86,7 @@ export default defineConfig(({ mode }) => {
     },
     plugins: [
       react(),
+      tailwindcss(),
       nodePolyfills({
         include: ['buffer', 'process', 'util', 'stream', 'events', 'path', 'url'],
         globals: {

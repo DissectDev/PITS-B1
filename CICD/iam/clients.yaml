@@ -86,3 +86,24 @@ spec:
     namespace: pits-cicd
   providerConfigRef:
     name: keycloak-provider-config
+---
+apiVersion: openidclient.keycloak.crossplane.io/v1alpha2
+kind: Client
+metadata:
+  name: project-hub-mcp
+spec:
+  forProvider:
+    realmIdRef:
+      name: corp-realm
+    clientId: "pits-project-hub-mcp"
+    name: "PITS Project Hub MCP"
+    enabled: true
+    accessType: "CONFIDENTIAL"
+    standardFlowEnabled: false
+    serviceAccountsEnabled: true
+    accessTokenLifespan: "3600"
+  writeConnectionSecretToRef:
+    name: hub-mcp-oidc-secret
+    namespace: iam-system
+  providerConfigRef:
+    name: keycloak-provider-config

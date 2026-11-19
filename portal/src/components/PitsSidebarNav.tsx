@@ -1,271 +1,433 @@
-import React, { useEffect } from 'react';
-import { Box, CircularProgress, Stack, Typography } from '@mui/material';
-import AppsIcon from '@mui/icons-material/Apps';
-import CategoryOutlinedIcon from '@mui/icons-material/CategoryOutlined';
-import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
-import DnsOutlinedIcon from '@mui/icons-material/DnsOutlined';
-import MemoryOutlinedIcon from '@mui/icons-material/MemoryOutlined';
-import DesktopWindowsOutlinedIcon from '@mui/icons-material/DesktopWindowsOutlined';
-import RouterOutlinedIcon from '@mui/icons-material/RouterOutlined';
-import SystemUpdateAltOutlinedIcon from '@mui/icons-material/SystemUpdateAltOutlined';
-import StorageOutlinedIcon from '@mui/icons-material/StorageOutlined';
-import ViewInArOutlinedIcon from '@mui/icons-material/ViewInArOutlined';
-import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
-import RocketLaunchOutlinedIcon from '@mui/icons-material/RocketLaunchOutlined';
-import CloudSyncOutlinedIcon from '@mui/icons-material/CloudSyncOutlined';
-import VerifiedUserOutlinedIcon from '@mui/icons-material/VerifiedUserOutlined';
-import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined';
-import AssessmentOutlinedIcon from '@mui/icons-material/AssessmentOutlined';
-import CloudOutlinedIcon from '@mui/icons-material/CloudOutlined';
-import CodeOutlinedIcon from '@mui/icons-material/CodeOutlined';
-import DomainOutlinedIcon from '@mui/icons-material/DomainOutlined';
-import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined';
-import LayersOutlinedIcon from '@mui/icons-material/LayersOutlined';
-import WidgetsOutlinedIcon from '@mui/icons-material/WidgetsOutlined';
+import React, { useEffect, useState } from 'react';
+import { Link as RouterLink, useLocation } from 'react-router-dom';
 import {
-  Sidebar,
-  SidebarDivider,
-  SidebarGroup,
-  SidebarItem,
-  SidebarScrollWrapper,
-  SidebarSpace,
-} from '@backstage/core-components';
+  BarChart3,
+  Box,
+  Boxes,
+  Building2,
+  ClipboardCheck,
+  Cloud,
+  CloudCog,
+  Code2,
+  Cpu,
+  Database,
+  Download,
+  FolderKanban,
+  GitBranch,
+  HardDrive,
+  History,
+  Kanban,
+  Layers,
+  LayoutGrid,
+  Loader2,
+  Menu,
+  Monitor,
+  MonitorSmartphone,
+  Moon,
+  Network,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Rocket,
+  Router,
+  Server,
+  ShieldCheck,
+  SlidersHorizontal,
+  Sun,
+  Users,
+  X,
+} from 'lucide-react';
 import type { IdentityApi } from '@backstage/frontend-plugin-api';
 import type {
   NavContentComponent,
   SignInPageProps,
 } from '@backstage/plugin-app-react';
+import { cn } from '../lib/utils';
+import { PitsTooltip } from './ui/pits-primitives';
+import { usePitsThemeMode, type PitsThemeMode } from '../theme/pitsShadcnTheme';
 
-const DomainSectionLabel: React.FC<{ label: string }> = ({ label }) => (
-  <Box sx={{ px: 2.5, pt: 1.25, pb: 0.4 }}>
-    <Typography
-      variant="caption"
-      sx={{
-        fontSize: '0.66rem',
-        fontWeight: 700,
-        letterSpacing: 0.8,
-        textTransform: 'uppercase',
-        color: 'rgba(255,255,255,0.52)',
-        display: 'block',
-        whiteSpace: 'nowrap',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-      }}
+interface NavEntry {
+  to: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  matchExact?: boolean;
+  badgeKey?: 'hubPending';
+}
+
+interface NavGroupSpec {
+  label: string;
+  items: NavEntry[];
+}
+
+const TOP_NAV_ITEMS: NavEntry[] = [
+  { to: '/resource-types', label: 'Resource Directory', icon: LayoutGrid, matchExact: true },
+  { to: '/catalog', label: 'Entity Registry', icon: Boxes, matchExact: true },
+  { to: '/catalog-graph', label: 'Topology Graph', icon: GitBranch },
+];
+
+const NAV_GROUPS: NavGroupSpec[] = [
+  {
+    label: 'Project Hub',
+    items: [
+      { to: '/project-hub', label: 'Review Queue', icon: ClipboardCheck, matchExact: true, badgeKey: 'hubPending' },
+      { to: '/project-hub?tab=board', label: 'Task Board', icon: Kanban },
+      { to: '/project-hub?tab=sessions', label: 'Sessions & RFCs', icon: History },
+      { to: '/project-hub?tab=projects', label: 'Projects (PITS)', icon: FolderKanban },
+    ],
+  },
+  {
+    label: 'Architecture · 4-Layer',
+    items: [
+      { to: '/catalog?filters%5Bkind%5D=domain', label: 'Domains', icon: Building2 },
+      { to: '/catalog?filters%5Bkind%5D=system', label: 'Systems', icon: Layers },
+      { to: '/catalog?filters%5Bkind%5D=component', label: 'Components', icon: Box },
+    ],
+  },
+  {
+    label: 'Compute',
+    items: [
+      { to: '/resource-types/baremetal-host', label: 'Baremetal Hosts', icon: Server },
+      { to: '/resource-types/npu-accelerator', label: 'AI NPU Accelerators', icon: Cpu },
+      { to: '/resource-types/gpu-accelerator', label: 'AI GPU Accelerators', icon: Cpu },
+      { to: '/resource-types/virtual-machine', label: 'Virtual Machines', icon: MonitorSmartphone },
+    ],
+  },
+  {
+    label: 'Network & Boot',
+    items: [
+      { to: '/resource-types/edge-router', label: 'Edge Routers', icon: Router },
+      { to: '/resource-types/pxe-boot-profile', label: 'PXE Boot Profiles', icon: Download },
+    ],
+  },
+  {
+    label: 'Storage',
+    items: [
+      { to: '/resource-types/storage-pool', label: 'Storage Pools', icon: Database },
+      { to: '/resource-types/san-volume', label: 'SAN Volumes', icon: HardDrive },
+      { to: '/resource-types/ai-storage-workspace', label: 'AI Storage', icon: CloudCog },
+    ],
+  },
+  {
+    label: 'Control Planes',
+    items: [
+      { to: '/resource-types/kubernetes-cluster', label: 'K8s Clusters', icon: Network },
+      { to: '/resource-types/cicd-pipeline', label: 'CI/CD Pipelines', icon: Rocket },
+      { to: '/resource-types/auth-flow-bundle', label: 'IAM Auth Flows', icon: ShieldCheck },
+    ],
+  },
+  {
+    label: 'Sourcing Governance',
+    items: [
+      { to: '/sourcing-audit', label: 'Sourcing Matrix & Sync', icon: BarChart3 },
+      { to: '/resource-types/vendor-saas', label: 'Vendor SaaS', icon: Cloud },
+      { to: '/resource-types/commercial-sdk', label: 'Commercial SDKs', icon: Code2 },
+      { to: '/resource-types/managed-infra', label: 'Managed Infra', icon: Router },
+      { to: '/resource-types/outsourced-dev', label: 'Outsourced Dev', icon: Users },
+    ],
+  },
+];
+
+function isNavEntryActive(
+  entry: NavEntry,
+  pathname: string,
+  search: string,
+): boolean {
+  const [targetPath, targetSearch] = entry.to.split('?');
+  if (targetSearch) {
+    return (
+      pathname === targetPath &&
+      decodeURIComponent(search.replace(/^\?/, '')) === decodeURIComponent(targetSearch)
+    );
+  }
+  if (entry.matchExact) {
+    return pathname === targetPath && !search;
+  }
+  return pathname === targetPath || pathname.startsWith(`${targetPath}/`);
+}
+
+const ThemeModeSwitcher: React.FC<{ collapsed: boolean }> = ({ collapsed }) => {
+  const { mode, setMode } = usePitsThemeMode();
+
+  const options: Array<{ id: PitsThemeMode; label: string; icon: React.ComponentType<{ className?: string }> }> = [
+    { id: 'system', label: 'System', icon: Monitor },
+    { id: 'light', label: 'Light', icon: Sun },
+    { id: 'dark', label: 'Dark', icon: Moon },
+  ];
+
+  if (collapsed) {
+    const nextMode: PitsThemeMode =
+      mode === 'system' ? 'light' : mode === 'light' ? 'dark' : 'system';
+    const CurrentIcon =
+      mode === 'light' ? Sun : mode === 'dark' ? Moon : Monitor;
+    return (
+      <PitsTooltip side="right" content={`Theme: ${mode} (click to cycle)`}>
+        <button
+          type="button"
+          onClick={() => setMode(nextMode)}
+          aria-label="Cycle theme mode"
+          className="mx-auto flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-solid border-sidebar-border bg-background text-sidebar-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+        >
+          <CurrentIcon className="h-3.5 w-3.5" />
+        </button>
+      </PitsTooltip>
+    );
+  }
+
+  return (
+    <div
+      role="group"
+      aria-label="Theme preference"
+      className="grid grid-cols-3 gap-0.5 rounded-lg border border-solid border-sidebar-border bg-muted/60 p-0.5"
     >
-      {label}
-    </Typography>
-  </Box>
-);
+      {options.map(opt => {
+        const Icon = opt.icon;
+        const active = mode === opt.id;
+        return (
+          <button
+            key={opt.id}
+            type="button"
+            onClick={() => setMode(opt.id)}
+            className={cn(
+              'inline-flex h-7 cursor-pointer items-center justify-center gap-1 rounded-md border border-solid px-1.5 text-[11px] font-medium transition-all',
+              active
+                ? 'border-border bg-background text-foreground shadow-sm'
+                : 'border-transparent bg-transparent text-muted-foreground hover:text-foreground',
+            )}
+          >
+            <Icon className="h-3 w-3" />
+            <span>{opt.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+};
 
 export const PitsSidebarNav: NavContentComponent = () => {
-  return (
-    <Sidebar>
-      <Box
-        sx={{
-          px: 2.5,
-          py: 2,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 1.25,
-        }}
+  const location = useLocation();
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem('pits.sidebar.collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [hubPendingCount, setHubPendingCount] = useState<number>(0);
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/pits/v1/hub/overview', { credentials: 'same-origin' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => {
+        if (active && data && typeof data.pendingReviewCount === 'number') {
+          setHubPendingCount(data.pendingReviewCount);
+        }
+      })
+      .catch(() => {
+        // Non-blocking badge fetch
+      });
+    return () => {
+      active = false;
+    };
+  }, [location.pathname, location.search]);
+
+  useEffect(() => {
+    const width = collapsed ? '64px' : '248px';
+    document.documentElement.style.setProperty('--pits-sidebar-w', width);
+    try {
+      window.localStorage.setItem('pits.sidebar.collapsed', String(collapsed));
+    } catch {
+      // Ignore storage failures
+    }
+  }, [collapsed]);
+
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [location.pathname, location.search]);
+
+  const renderItem = (entry: NavEntry, isCompact: boolean) => {
+    const Icon = entry.icon;
+    const active = isNavEntryActive(entry, location.pathname, location.search);
+
+    const linkEl = (
+      <RouterLink
+        key={entry.to}
+        to={entry.to}
+        className={cn(
+          'group relative flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] transition-colors',
+          isCompact && 'justify-center px-0 py-2',
+          active
+            ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
+            : 'font-normal text-sidebar-foreground/80 hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground',
+        )}
       >
-        <Box
-          sx={{
-            width: 30,
-            height: 30,
-            borderRadius: 1.25,
-            bgcolor: '#2563eb',
-            color: '#ffffff',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontWeight: 900,
-            fontSize: '0.88rem',
-            flexShrink: 0,
-            boxShadow: '0 2px 8px rgba(37, 99, 235, 0.45)',
-          }}
-        >
-          P
-        </Box>
-        <Box sx={{ minWidth: 0 }}>
-          <Typography
-            variant="subtitle2"
-            sx={{
-              color: '#ffffff',
-              fontWeight: 800,
-              lineHeight: 1.15,
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-            }}
-          >
-            PITS Portal
-          </Typography>
-          <Typography
-            variant="caption"
-            sx={{
-              color: 'rgba(255,255,255,0.62)',
-              fontSize: '0.68rem',
-              display: 'block',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-            }}
-          >
-            Entity Registry · Backstage v1.56
-          </Typography>
-        </Box>
-      </Box>
+        {active && (
+          <span className="absolute left-0 top-1.5 bottom-1.5 w-[2.5px] rounded-full bg-sidebar-primary" />
+        )}
+        <Icon
+          className={cn(
+            'h-4 w-4 shrink-0 transition-colors',
+            active ? 'text-sidebar-accent-foreground' : 'text-muted-foreground group-hover:text-foreground',
+          )}
+        />
+        {!isCompact && <span className="truncate">{entry.label}</span>}
+        {!isCompact && entry.badgeKey === 'hubPending' && hubPendingCount > 0 && (
+          <span className="ml-auto rounded-full bg-amber-500/20 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-amber-800 dark:text-amber-300">
+            {hubPendingCount}
+          </span>
+        )}
+      </RouterLink>
+    );
 
-      <SidebarDivider />
+    if (isCompact) {
+      return (
+        <PitsTooltip key={entry.to} side="right" content={entry.label}>
+          {linkEl}
+        </PitsTooltip>
+      );
+    }
+    return linkEl;
+  };
 
-      <SidebarGroup label="Registry" icon={<AppsIcon />}>
-        <SidebarItem
-          icon={AppsIcon}
+  const renderSidebarBody = (isCompact: boolean) => (
+    <div className="flex h-full flex-col">
+      {/* Brand header */}
+      <div
+        className={cn(
+          'flex h-14 shrink-0 items-center border-b border-solid border-sidebar-border px-3',
+          isCompact ? 'justify-center' : 'justify-between',
+        )}
+      >
+        <RouterLink
           to="/resource-types"
-          text="Resource Directory"
-        />
-        <SidebarItem
-          icon={CategoryOutlinedIcon}
-          to="/catalog"
-          text="Entity Registry"
-        />
-        <SidebarItem
-          icon={AccountTreeOutlinedIcon}
-          to="/catalog-graph"
-          text="Topology Graph"
-        />
-      </SidebarGroup>
+          className={cn('flex min-w-0 items-center gap-2.5', isCompact && 'justify-center')}
+        >
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-sidebar-primary text-xs font-bold text-sidebar-primary-foreground shadow-sm">
+            P
+          </span>
+          {!isCompact && (
+            <div className="min-w-0">
+              <div className="truncate text-[13px] font-semibold leading-tight text-foreground">
+                PITS Portal
+              </div>
+              <div className="truncate text-[11px] leading-tight text-muted-foreground">
+                Entity Registry · v1.56
+              </div>
+            </div>
+          )}
+        </RouterLink>
 
-      <SidebarDivider />
+        {!isCompact && (
+          <PitsTooltip side="right" content="Collapse sidebar">
+            <button
+              type="button"
+              onClick={() => setCollapsed(true)}
+              aria-label="Collapse sidebar"
+              className="hidden h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md border border-solid border-transparent bg-transparent text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground sm:inline-flex"
+            >
+              <PanelLeftClose className="h-4 w-4" />
+            </button>
+          </PitsTooltip>
+        )}
+      </div>
 
-      <SidebarScrollWrapper>
-        <SidebarGroup label="Architecture & Resources" icon={<DnsOutlinedIcon />}>
-          <DomainSectionLabel label="Architecture (4-Layer Model)" />
-          <SidebarItem
-            icon={DomainOutlinedIcon}
-            to="/catalog?filters%5Bkind%5D=domain"
-            text="Domains"
-          />
-          <SidebarItem
-            icon={LayersOutlinedIcon}
-            to="/catalog?filters%5Bkind%5D=system"
-            text="Systems"
-          />
-          <SidebarItem
-            icon={WidgetsOutlinedIcon}
-            to="/catalog?filters%5Bkind%5D=component"
-            text="Components"
-          />
+      {/* Expand button when collapsed */}
+      {isCompact && (
+        <div className="flex justify-center border-b border-solid border-sidebar-border py-2">
+          <PitsTooltip side="right" content="Expand sidebar">
+            <button
+              type="button"
+              onClick={() => setCollapsed(false)}
+              aria-label="Expand sidebar"
+              className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md border border-solid border-transparent bg-transparent text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+            >
+              <PanelLeftOpen className="h-4 w-4" />
+            </button>
+          </PitsTooltip>
+        </div>
+      )}
 
-          <DomainSectionLabel label="Infrastructure · Compute" />
-          <SidebarItem
-            icon={DnsOutlinedIcon}
-            to="/resource-types/baremetal-host"
-            text="Baremetal Hosts"
-          />
-          <SidebarItem
-            icon={MemoryOutlinedIcon}
-            to="/resource-types/npu-accelerator"
-            text="AI NPU Accelerators"
-          />
-          <SidebarItem
-            icon={MemoryOutlinedIcon}
-            to="/resource-types/gpu-accelerator"
-            text="AI GPU Accelerators"
-          />
-          <SidebarItem
-            icon={DesktopWindowsOutlinedIcon}
-            to="/resource-types/virtual-machine"
-            text="Virtual Machines"
-          />
+      {/* Primary Registry items */}
+      <div className="shrink-0 space-y-0.5 border-b border-solid border-sidebar-border p-2">
+        {TOP_NAV_ITEMS.map(item => renderItem(item, isCompact))}
+      </div>
 
-          <DomainSectionLabel label="Infrastructure · Network & Boot" />
-          <SidebarItem
-            icon={RouterOutlinedIcon}
-            to="/resource-types/edge-router"
-            text="Edge Routers"
-          />
-          <SidebarItem
-            icon={SystemUpdateAltOutlinedIcon}
-            to="/resource-types/pxe-boot-profile"
-            text="PXE Boot Profiles"
-          />
+      {/* Scrollable domain navigation */}
+      <nav
+        aria-label="Infrastructure navigation"
+        className="pits-scroll flex-1 space-y-3 overflow-y-auto p-2"
+      >
+        {NAV_GROUPS.map(group => (
+          <div key={group.label} className="space-y-0.5">
+            {!isCompact && (
+              <div className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/80">
+                {group.label}
+              </div>
+            )}
+            {group.items.map(item => renderItem(item, isCompact))}
+          </div>
+        ))}
+      </nav>
 
-          <DomainSectionLabel label="Infrastructure · Storage" />
-          <SidebarItem
-            icon={StorageOutlinedIcon}
-            to="/resource-types/storage-pool"
-            text="Storage Pools"
-          />
-          <SidebarItem
-            icon={ViewInArOutlinedIcon}
-            to="/resource-types/san-volume"
-            text="SAN Volumes"
-          />
-          <SidebarItem
-            icon={CloudSyncOutlinedIcon}
-            to="/resource-types/ai-storage-workspace"
-            text="AI Storage"
-          />
+      {/* Footer: Theme switcher + Settings */}
+      <div className="shrink-0 space-y-2 border-t border-solid border-sidebar-border p-2.5">
+        <ThemeModeSwitcher collapsed={isCompact} />
+        {renderItem(
+          {
+            to: '/settings/pits-profile',
+            label: 'Operator & mTLS',
+            icon: SlidersHorizontal,
+          },
+          isCompact,
+        )}
+      </div>
+    </div>
+  );
 
-          <DomainSectionLabel label="Infrastructure · Control" />
-          <SidebarItem
-            icon={HubOutlinedIcon}
-            to="/resource-types/kubernetes-cluster"
-            text="K8s Clusters"
-          />
-          <SidebarItem
-            icon={RocketLaunchOutlinedIcon}
-            to="/resource-types/cicd-pipeline"
-            text="CI/CD Pipelines"
-          />
-          <SidebarItem
-            icon={VerifiedUserOutlinedIcon}
-            to="/resource-types/auth-flow-bundle"
-            text="IAM Auth Flows"
-          />
+  return (
+    <>
+      {/* Desktop fixed sidebar */}
+      <aside
+        data-pits-sidebar="true"
+        className={cn(
+          'pits-ui fixed bottom-0 left-0 top-0 z-40 hidden overflow-hidden border-r border-solid border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-200 sm:block',
+          collapsed ? 'w-[64px]' : 'w-[248px]',
+        )}
+      >
+        {renderSidebarBody(collapsed)}
+      </aside>
 
-          <DomainSectionLabel label="Sourcing Governance" />
-          <SidebarItem
-            icon={AssessmentOutlinedIcon}
-            to="/sourcing-audit"
-            text="Sourcing Matrix & Sync"
-          />
-          <SidebarItem
-            icon={CloudOutlinedIcon}
-            to="/resource-types/vendor-saas"
-            text="Vendor SaaS"
-          />
-          <SidebarItem
-            icon={CodeOutlinedIcon}
-            to="/resource-types/commercial-sdk"
-            text="Commercial SDKs"
-          />
-          <SidebarItem
-            icon={RouterOutlinedIcon}
-            to="/resource-types/managed-infra"
-            text="Managed Infra"
-          />
-          <SidebarItem
-            icon={GroupsOutlinedIcon}
-            to="/resource-types/outsourced-dev"
-            text="Outsourced Dev"
-          />
-        </SidebarGroup>
-      </SidebarScrollWrapper>
+      {/* Mobile trigger button */}
+      <button
+        type="button"
+        onClick={() => setMobileOpen(true)}
+        aria-label="Open navigation"
+        className="pits-ui fixed bottom-4 right-4 z-40 inline-flex h-11 w-11 cursor-pointer items-center justify-center rounded-full border border-solid border-border bg-primary text-primary-foreground shadow-lg sm:hidden"
+      >
+        <Menu className="h-5 w-5" />
+      </button>
 
-      <SidebarSpace />
-      <SidebarDivider />
-
-      <SidebarGroup label="Settings" icon={<TuneOutlinedIcon />}>
-        <SidebarItem
-          icon={TuneOutlinedIcon}
-          to="/settings/pits-profile"
-          text="Operator & mTLS"
-        />
-      </SidebarGroup>
-    </Sidebar>
+      {/* Mobile slide-over drawer */}
+      {mobileOpen && (
+        <div className="pits-ui fixed inset-0 z-50 sm:hidden">
+          <div
+            className="absolute inset-0 bg-black/50 backdrop-blur-[1px]"
+            onClick={() => setMobileOpen(false)}
+          />
+          <aside className="relative z-10 h-full w-[268px] border-r border-solid border-sidebar-border bg-sidebar text-sidebar-foreground shadow-2xl">
+            <button
+              type="button"
+              onClick={() => setMobileOpen(false)}
+              aria-label="Close navigation"
+              className="absolute right-3 top-3.5 z-20 inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+            {renderSidebarBody(false)}
+          </aside>
+        </div>
+      )}
+    </>
   );
 };
 
@@ -399,16 +561,11 @@ export const AutoGuestSignInPage: React.FC<SignInPageProps> = ({ onSignInSuccess
   }, [onSignInSuccess]);
 
   return (
-    <Stack
-      alignItems="center"
-      justifyContent="center"
-      spacing={2}
-      sx={{ minHeight: '100vh', bgcolor: 'background.default' }}
-    >
-      <CircularProgress size={30} />
-      <Typography variant="body2" color="text.secondary">
+    <div className="pits-ui flex min-h-screen flex-col items-center justify-center gap-3 bg-background text-foreground">
+      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      <p className="m-0 text-xs font-medium text-muted-foreground">
         Initializing PITS Operator Guest Session...
-      </Typography>
-    </Stack>
+      </p>
+    </div>
   );
 };

@@ -105,6 +105,18 @@ in
       default = null;
       description = "Optional root-readable secret file containing a postgres:// URL exported as PITS_SOURCING_DB_URL for multi-host sourcing sync.";
     };
+
+    hubDbUrlFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = "/var/lib/pits/portal/hub-db-url";
+      description = "Optional root-readable secret file (`0600`) containing a postgres:// URL exported as PITS_HUB_DB_URL for Self-Managed Project Hub CNPG outbox sync.";
+    };
+
+    hubMcpTokenFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = "/var/lib/pits/portal/hub-mcp-token";
+      description = "Optional root-readable secret file (`0600`) containing a static token exported as PITS_HUB_MCP_TOKEN for Tailscale-direct `/mcp/hub` callers.";
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -190,17 +202,26 @@ in
       '';
 
       script =
-        if cfg.sourcingDbUrlFile != null then
-          ''
+        lib.concatStringsSep "\n" (
+          lib.optional (cfg.sourcingDbUrlFile != null) ''
             if [ -r ${lib.escapeShellArg cfg.sourcingDbUrlFile} ]; then
               export PITS_SOURCING_DB_URL="$(tr -d '\r\n' < ${lib.escapeShellArg cfg.sourcingDbUrlFile})"
             fi
-            exec ${lib.escapeShellArgs execArgs}
           ''
-        else
+          ++ lib.optional (cfg.hubDbUrlFile != null) ''
+            if [ -r ${lib.escapeShellArg cfg.hubDbUrlFile} ]; then
+              export PITS_HUB_DB_URL="$(tr -d '\r\n' < ${lib.escapeShellArg cfg.hubDbUrlFile})"
+            fi
           ''
-            exec ${lib.escapeShellArgs execArgs}
-          '';
+          ++ lib.optional (cfg.hubMcpTokenFile != null) ''
+            if [ -r ${lib.escapeShellArg cfg.hubMcpTokenFile} ]; then
+              export PITS_HUB_MCP_TOKEN="$(tr -d '\r\n' < ${lib.escapeShellArg cfg.hubMcpTokenFile})"
+            fi
+          ''
+          ++ [
+            "exec ${lib.escapeShellArgs execArgs}"
+          ]
+        );
 
       serviceConfig = {
         Type = "simple";

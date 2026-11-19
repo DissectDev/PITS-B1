@@ -10,8 +10,10 @@
 
 pub mod catalog;
 pub mod config;
+pub mod db_common;
 pub mod deploy;
 pub mod grpc_wire;
+pub mod hub;
 pub mod k8s;
 pub mod mcp;
 pub mod pxe;
@@ -36,9 +38,11 @@ use crate::catalog::{
     ResourceTypeSummary,
 };
 use crate::config::{
-    default_profile_path, effective_sourcing_db_url, generate_agent_mtls_pki,
-    load_kubeconfig_file, load_talosconfig_file, local_state_dir, ClientProfile, WorkspaceBundle,
+    default_profile_path, effective_hub_db_url, effective_hub_mcp_token, effective_sourcing_db_url,
+    generate_agent_mtls_pki, load_kubeconfig_file, load_talosconfig_file, local_state_dir,
+    ClientProfile, WorkspaceBundle,
 };
+use crate::hub::HubRegistry;
 use crate::deploy::{deploy_to_nixos_pits_core, NixosDeployMode, NixosDeployOptions};
 use crate::k8s::{
     apply_san_local_pv_pvc, audit_fleet_npus, inspect_cluster_summary, launch_npu_validation_job,
@@ -87,6 +91,10 @@ struct Cli {
     /// PostgreSQL connection string (`postgres://...`) for sourcing DB sync (defaults to `PITS_SOURCING_DB_URL` or profile)
     #[arg(long, global = true)]
     sourcing_db_url: Option<String>,
+
+    /// PostgreSQL connection string (`postgres://...`) for Project Hub DB sync (defaults to `PITS_HUB_DB_URL` or profile)
+    #[arg(long, global = true)]
+    hub_db_url: Option<String>,
 
     #[command(subcommand)]
     command: Commands,
@@ -195,6 +203,12 @@ enum Commands {
         /// Trigger an immediate PostgreSQL bi-directional sync on startup
         #[arg(long)]
         sync_on_start: bool,
+    },
+
+    /// Manage Self-Managed Project Hub (SQLite WAL + CNPG PostgreSQL sync, Markdown export, Stdio MCP)
+    Hub {
+        #[command(subcommand)]
+        action: HubAction,
     },
 
     /// Manage local operator profile & zero-trust Ed25519 mTLS PKI
@@ -310,6 +324,30 @@ enum CatalogAction {
         output: String,
         #[arg(long)]
         live: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum HubAction {
+    /// Inspect Project Hub SQLite WAL / FTS5 + CNPG PostgreSQL sync status
+    Status,
+    /// Trigger immediate SQLite WAL <-> CNPG PostgreSQL bi-directional outbox sync
+    Sync {
+        /// Optional postgres:// URL overriding PITS_HUB_DB_URL / profile
+        #[arg(long)]
+        pg_url: Option<String>,
+    },
+    /// Export projects, AGY-<n> tasks, AC checklists, and session logs as Markdown
+    ExportMd {
+        /// Optional output file path (prints to stdout if omitted)
+        #[arg(short = 'o', long = "output")]
+        output: Option<PathBuf>,
+    },
+    /// Start the Self-Managed Project Hub MCP Server over Stdio (9 tools, human-gated)
+    Mcp {
+        /// Trigger an immediate PostgreSQL bi-directional sync on startup
+        #[arg(long)]
+        sync_on_start: bool,
     },
 }
 
@@ -606,9 +644,13 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let mut profile = ClientProfile::load_or_default(cli.profile.as_deref())?;
     let resolved_sourcing_db_url = effective_sourcing_db_url(cli.sourcing_db_url.as_deref(), &profile);
+    let resolved_hub_db_url = effective_hub_db_url(cli.hub_db_url.as_deref(), &profile);
+    let resolved_hub_mcp_token = effective_hub_mcp_token(&profile);
     let runtime_profile = |base: &ClientProfile| -> ClientProfile {
         let mut out = base.clone();
         out.sourcing_db_url = resolved_sourcing_db_url.clone();
+        out.hub_db_url = resolved_hub_db_url.clone();
+        out.hub_mcp_token = resolved_hub_mcp_token.clone();
         out
     };
 
@@ -716,6 +758,42 @@ async fn main() -> Result<()> {
                 let _ = registry.sourcing_sync_db(None).await;
             }
             crate::mcp::run_mcp_stdio(registry).await?;
+        }
+
+        Commands::Hub { action } => {
+            let hub = HubRegistry::new(Arc::new(RwLock::new(runtime_profile(&profile))));
+            match action {
+                HubAction::Status => {
+                    let st = hub
+                        .db
+                        .status()
+                        .map_err(|e| anyhow!("hub status failed: {e}"))?;
+                    println!("{}", serde_json::to_string_pretty(&st)?);
+                }
+                HubAction::Sync { pg_url } => {
+                    let st = hub.sync_db(pg_url.as_deref()).await;
+                    println!("{}", serde_json::to_string_pretty(&st)?);
+                }
+                HubAction::ExportMd { output } => {
+                    let md = hub
+                        .db
+                        .export_markdown()
+                        .map_err(|e| anyhow!("hub export-md failed: {e}"))?;
+                    if let Some(path) = output {
+                        fs::write(&path, &md)
+                            .with_context(|| format!("write {}", path.display()))?;
+                        println!("Exported Project Hub Markdown to {}", path.display());
+                    } else {
+                        print!("{md}");
+                    }
+                }
+                HubAction::Mcp { sync_on_start } => {
+                    if sync_on_start {
+                        let _ = hub.sync_db(None).await;
+                    }
+                    crate::hub::run_hub_mcp_stdio(hub).await?;
+                }
+            }
         }
 
         Commands::Profile { action } => match action {

@@ -1,15 +1,29 @@
 import React, { useState } from 'react';
-import { Box, Chip, IconButton, Tooltip, Typography } from '@mui/material';
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
-import WarningAmberIcon from '@mui/icons-material/WarningAmber';
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import CheckIcon from '@mui/icons-material/Check';
+import {
+  AlertTriangle,
+  Check,
+  CheckCircle2,
+  Copy,
+  Info,
+  XCircle,
+} from 'lucide-react';
 import type { StatusLevel } from '../types';
+import { Badge } from './ui/badge';
+import { PitsTooltip } from './ui/pits-primitives';
+import { cn } from '../lib/utils';
 
-export function inferStatusLevel(status?: string, explicitLevel?: StatusLevel): StatusLevel {
-  if (explicitLevel && ['ok', 'warn', 'error', 'info'].includes(explicitLevel)) {
+export type ResolvedStatusTone = 'ok' | 'warn' | 'error' | 'info';
+
+export function inferStatusLevel(
+  status?: string,
+  explicitLevel?: StatusLevel,
+): ResolvedStatusTone {
+  if (
+    explicitLevel === 'ok' ||
+    explicitLevel === 'warn' ||
+    explicitLevel === 'error' ||
+    explicitLevel === 'info'
+  ) {
     return explicitLevel;
   }
   if (!status) return 'info';
@@ -59,68 +73,28 @@ export const StatusPill: React.FC<{
   size?: 'small' | 'medium';
 }> = ({ label, level, size = 'small' }) => {
   const resolved = inferStatusLevel(label, level);
+  const iconCls = size === 'medium' ? 'h-3.5 w-3.5' : 'h-3 w-3';
 
-  if (resolved === 'ok') {
-    return (
-      <Chip
-        size={size}
-        icon={<CheckCircleOutlineIcon />}
-        label={label}
-        sx={{
-          fontWeight: 600,
-          bgcolor: 'rgba(46, 125, 50, 0.14)',
-          color: '#2e7d32',
-          border: '1px solid rgba(46, 125, 50, 0.35)',
-          '& .MuiChip-icon': { color: '#2e7d32' },
-        }}
-      />
-    );
-  }
-  if (resolved === 'warn') {
-    return (
-      <Chip
-        size={size}
-        icon={<WarningAmberIcon />}
-        label={label}
-        sx={{
-          fontWeight: 600,
-          bgcolor: 'rgba(237, 108, 2, 0.14)',
-          color: '#ed6c02',
-          border: '1px solid rgba(237, 108, 2, 0.38)',
-          '& .MuiChip-icon': { color: '#ed6c02' },
-        }}
-      />
-    );
-  }
-  if (resolved === 'error') {
-    return (
-      <Chip
-        size={size}
-        icon={<ErrorOutlineIcon />}
-        label={label}
-        sx={{
-          fontWeight: 600,
-          bgcolor: 'rgba(211, 47, 47, 0.14)',
-          color: '#d32f2f',
-          border: '1px solid rgba(211, 47, 47, 0.38)',
-          '& .MuiChip-icon': { color: '#d32f2f' },
-        }}
-      />
-    );
-  }
+  const Icon =
+    resolved === 'ok'
+      ? CheckCircle2
+      : resolved === 'warn'
+        ? AlertTriangle
+        : resolved === 'error'
+          ? XCircle
+          : Info;
+
   return (
-    <Chip
-      size={size}
-      icon={<InfoOutlinedIcon />}
-      label={label}
-      sx={{
-        fontWeight: 600,
-        bgcolor: 'rgba(2, 136, 209, 0.12)',
-        color: '#0288d1',
-        border: '1px solid rgba(2, 136, 209, 0.32)',
-        '& .MuiChip-icon': { color: '#0288d1' },
-      }}
-    />
+    <Badge
+      variant={resolved}
+      className={cn(
+        'font-medium',
+        size === 'medium' && 'px-2.5 py-1 text-xs',
+      )}
+    >
+      <Icon className={iconCls} />
+      <span>{label}</span>
+    </Badge>
   );
 };
 
@@ -173,49 +147,33 @@ export const FormattedAttributeValue: React.FC<{
 
   if (!useMono) {
     return (
-      <Typography variant="body2" sx={{ wordBreak: 'break-word', fontWeight: 500 }}>
+      <span className="break-words text-[13px] font-medium text-foreground">
         {value || '—'}
-      </Typography>
+      </span>
     );
   }
 
   return (
-    <Box
-      sx={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 0.5,
-        maxWidth: '100%',
-        bgcolor: 'action.hover',
-        px: 1,
-        py: 0.25,
-        borderRadius: 1,
-        border: '1px solid',
-        borderColor: 'divider',
-      }}
-    >
-      <Typography
-        component="code"
-        sx={{
-          fontFamily: '"JetBrains Mono", "Cascadia Code", Consolas, monospace',
-          fontSize: '0.79rem',
-          wordBreak: 'break-all',
-          lineHeight: 1.45,
-        }}
-      >
+    <span className="pits-ui inline-flex max-w-full items-center gap-1.5 rounded-md border border-solid border-border bg-muted/60 px-2 py-0.5">
+      <code className="break-all font-mono text-xs leading-snug text-foreground">
         {value || '—'}
-      </Typography>
+      </code>
       {value && value.length >= 6 && (
-        <Tooltip title={copied ? 'Copied!' : 'Copy value'}>
-          <IconButton size="small" onClick={handleCopy} sx={{ p: 0.25 }}>
+        <PitsTooltip content={copied ? 'Copied!' : 'Copy value'}>
+          <button
+            type="button"
+            onClick={handleCopy}
+            aria-label="Copy value"
+            className="inline-flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded border-0 bg-transparent p-0 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
             {copied ? (
-              <CheckIcon sx={{ fontSize: 13, color: 'success.main' }} />
+              <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
             ) : (
-              <ContentCopyIcon sx={{ fontSize: 13, opacity: 0.65 }} />
+              <Copy className="h-3 w-3" />
             )}
-          </IconButton>
-        </Tooltip>
+          </button>
+        </PitsTooltip>
       )}
-    </Box>
+    </span>
   );
 };

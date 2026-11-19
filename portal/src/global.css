@@ -1,8 +1,261 @@
+/* Tailwind CSS v4 without global Preflight — prevents any CSS reset regressions on
+   Backstage / MUI v5 pages (/catalog, /catalog-graph) while enabling full shadcn/ui +
+   @blocknote/shadcn utility generation. */
+@import "tailwindcss/theme.css";
+@import "tailwindcss/utilities.css";
+@source "../src";
+@source "../node_modules/@blocknote/shadcn";
+
+@custom-variant dark (&:where(.dark, .dark *, [data-theme-mode='dark'], [data-theme-mode='dark'] *));
+
+@theme inline {
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-sidebar: hsl(var(--sidebar-background));
+  --color-sidebar-background: hsl(var(--sidebar-background));
+  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
+  --color-sidebar-primary: hsl(var(--sidebar-primary));
+  --color-sidebar-primary-foreground: hsl(var(--sidebar-primary-foreground));
+  --color-sidebar-accent: hsl(var(--sidebar-accent));
+  --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-foreground));
+  --color-sidebar-border: hsl(var(--sidebar-border));
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
+
+:root,
+[data-theme-mode='light'] {
+  --background: 0 0% 100%;
+  --foreground: 240 10% 3.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 240 10% 3.9%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 240 10% 3.9%;
+  --primary: 240 5.9% 10%;
+  --primary-foreground: 0 0% 98%;
+  --secondary: 240 4.8% 95.9%;
+  --secondary-foreground: 240 5.9% 10%;
+  --muted: 240 4.8% 95.9%;
+  --muted-foreground: 240 3.8% 46.1%;
+  --accent: 240 4.8% 95.9%;
+  --accent-foreground: 240 5.9% 10%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 240 5.9% 90%;
+  --input: 240 5.9% 90%;
+  --ring: 240 5.9% 10%;
+  --radius: 0.5rem;
+
+  --sidebar-background: 240 5% 98%;
+  --sidebar-foreground: 240 5.3% 26.1%;
+  --sidebar-primary: 240 5.9% 10%;
+  --sidebar-primary-foreground: 0 0% 98%;
+  --sidebar-accent: 240 4.8% 93.5%;
+  --sidebar-accent-foreground: 240 5.9% 10%;
+  --sidebar-border: 240 5.9% 90%;
+
+  --pits-sidebar-w: 248px;
+}
+
+.dark,
+[data-theme-mode='dark'] {
+  --background: 240 10% 3.9%;
+  --foreground: 0 0% 98%;
+  --card: 240 10% 5.5%;
+  --card-foreground: 0 0% 98%;
+  --popover: 240 10% 5.5%;
+  --popover-foreground: 0 0% 98%;
+  --primary: 0 0% 98%;
+  --primary-foreground: 240 5.9% 10%;
+  --secondary: 240 3.7% 15.9%;
+  --secondary-foreground: 0 0% 98%;
+  --muted: 240 3.7% 14.5%;
+  --muted-foreground: 240 5% 64.9%;
+  --accent: 240 3.7% 15.9%;
+  --accent-foreground: 0 0% 98%;
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 240 3.7% 17%;
+  --input: 240 3.7% 17%;
+  --ring: 240 4.9% 83.9%;
+
+  --sidebar-background: 240 10% 4.8%;
+  --sidebar-foreground: 240 4.8% 82%;
+  --sidebar-primary: 0 0% 98%;
+  --sidebar-primary-foreground: 240 5.9% 10%;
+  --sidebar-accent: 240 3.7% 14.5%;
+  --sidebar-accent-foreground: 0 0% 98%;
+  --sidebar-border: 240 3.7% 15.9%;
+}
+
+/* Override Backstage UI (@backstage/ui) tokens so built-in Backstage pages (/catalog, /catalog-graph)
+   automatically share the exact same Zinc palette and crisp borders */
+@layer theme {
+  :root,
+  [data-theme-mode='light'] {
+    --bui-font-regular: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --bui-font-monospace: 'JetBrains Mono', 'Cascadia Code', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --bui-bg: hsl(var(--background));
+    --bui-bg-surface-1: hsl(var(--card));
+    --bui-bg-surface-2: hsl(var(--muted));
+    --bui-fg-primary: hsl(var(--foreground));
+    --bui-fg-secondary: hsl(var(--muted-foreground));
+    --bui-border: hsl(var(--border));
+  }
+
+  .dark,
+  [data-theme-mode='dark'] {
+    --bui-bg: hsl(var(--background));
+    --bui-bg-surface-1: hsl(var(--card));
+    --bui-bg-surface-2: hsl(var(--muted));
+    --bui-fg-primary: hsl(var(--foreground));
+    --bui-fg-secondary: hsl(var(--muted-foreground));
+    --bui-border: hsl(var(--border));
+  }
+}
+
 html,
 body,
 #root {
   margin: 0;
   padding: 0;
   min-height: 100vh;
-  font-family: "Inter", "Roboto", "Helvetica Neue", Arial, sans-serif;
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scoped crisp border & box-sizing defaults for all shadcn / Radix surfaces */
+.pits-ui,
+.pits-ui *,
+.pits-ui *::before,
+.pits-ui *::after,
+.pits-shadcn-root,
+.pits-shadcn-root *,
+.pits-shadcn-root *::before,
+.pits-shadcn-root *::after {
+  box-sizing: border-box;
+  border-color: hsl(var(--border));
+}
+
+.pits-ui a,
+.pits-shadcn-root a {
+  text-decoration: none;
+}
+
+.pits-ui button,
+.pits-shadcn-root button {
+  font-family: inherit;
+}
+
+/* Harmonize @blocknote/shadcn editor inside .pits-shadcn-root with PITS Zinc tokens */
+.pits-shadcn-root .bn-container .bn-editor {
+  background-color: hsl(var(--card));
+  color: hsl(var(--foreground));
+  padding-inline: 36px;
+  padding-block: 16px;
+  min-height: 360px;
+}
+
+.pits-shadcn-root .bn-root {
+  --bn-colors-editor-background: hsl(var(--card));
+  --bn-colors-editor-text: hsl(var(--foreground));
+  --bn-colors-menu-background: hsl(var(--popover));
+  --bn-colors-menu-text: hsl(var(--popover-foreground));
+  --bn-colors-hovered-background: hsl(var(--accent));
+  --bn-colors-hovered-text: hsl(var(--accent-foreground));
+  --bn-colors-border: hsl(var(--border));
+}
+
+/* Harmonize Backstage SidebarPage layout slot with our modern shadcn sidebar width */
+@media (min-width: 600px) {
+  .BackstageSidebarPage-root {
+    padding-left: var(--pits-sidebar-w, 248px) !important;
+    transition: padding-left 180ms cubic-bezier(0.22, 1, 0.36, 1) !important;
+  }
+}
+
+/* Flatten Backstage's legacy gradient Header on built-in pages (/catalog, /catalog-graph, entity shell) */
+header[class*='BackstageHeader-header'] {
+  background-image: none !important;
+  background-color: hsl(var(--background)) !important;
+  border-bottom: 1px solid hsl(var(--border)) !important;
+  box-shadow: none !important;
+  color: hsl(var(--foreground)) !important;
+  padding-top: 20px !important;
+  padding-bottom: 18px !important;
+}
+
+header[class*='BackstageHeader-header'] [class*='BackstageHeader-title'],
+header[class*='BackstageHeader-header'] h1 {
+  color: hsl(var(--foreground)) !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.025em !important;
+}
+
+header[class*='BackstageHeader-header'] [class*='BackstageHeader-subtitle'],
+header[class*='BackstageHeader-header'] [class*='BackstageHeader-type'],
+header[class*='BackstageHeader-header'] [class*='BackstageHeaderLabel-label'] {
+  color: hsl(var(--muted-foreground)) !important;
+}
+
+header[class*='BackstageHeader-header'] [class*='BackstageHeaderLabel-value'] {
+  color: hsl(var(--foreground)) !important;
+  font-weight: 600 !important;
+}
+
+header[class*='BackstageHeader-header'] a {
+  color: hsl(var(--foreground)) !important;
+}
+
+/* Flatten Backstage Page & Entity Tabs bar on built-in /catalog pages */
+div[class*='BackstageHeaderTabs-tabsWrapper'] {
+  background-color: hsl(var(--background)) !important;
+  border-bottom: 1px solid hsl(var(--border)) !important;
+  box-shadow: none !important;
+}
+
+main[class*='BackstageContent-root'],
+article[class*='BackstageContent-root'] {
+  background-color: hsl(var(--background)) !important;
+}
+
+/* Clean, subtle scrollbars */
+.pits-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.pits-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.pits-scroll::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 9999px;
+}
+.pits-scroll::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.45);
 }

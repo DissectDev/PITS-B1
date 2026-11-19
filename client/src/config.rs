@@ -66,6 +66,12 @@ pub struct ClientProfile {
     /// Optional PostgreSQL sync URL (`postgres://user:pass@host:5432/db?sslmode=prefer`)
     #[serde(default)]
     pub sourcing_db_url: Option<String>,
+    /// Optional PostgreSQL sync URL for Self-Managed Project Hub (`PITS_HUB_DB_URL`)
+    #[serde(default)]
+    pub hub_db_url: Option<String>,
+    /// Optional static MCP token for Tailscale direct `/mcp/hub` (`PITS_HUB_MCP_TOKEN`)
+    #[serde(default)]
+    pub hub_mcp_token: Option<String>,
 }
 
 impl Default for ClientProfile {
@@ -95,6 +101,8 @@ impl Default for ClientProfile {
             talos_via_agent_bridge: true,
             extra_clusters: Vec::new(),
             sourcing_db_url: None,
+            hub_db_url: None,
+            hub_mcp_token: None,
         }
     }
 }
@@ -115,6 +123,44 @@ pub fn effective_sourcing_db_url(
     }
     profile
         .sourcing_db_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Resolves the active Project Hub PostgreSQL sync URL from CLI flag -> `PITS_HUB_DB_URL` -> profile.
+pub fn effective_hub_db_url(
+    cli_override: Option<&str>,
+    profile: &ClientProfile,
+) -> Option<String> {
+    if let Some(v) = cli_override.map(str::trim).filter(|s| !s.is_empty()) {
+        return Some(v.to_string());
+    }
+    if let Ok(env_v) = std::env::var("PITS_HUB_DB_URL") {
+        let trimmed = env_v.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    profile
+        .hub_db_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Resolves the optional static MCP token for Tailscale direct `/mcp/hub` (`PITS_HUB_MCP_TOKEN` -> profile).
+pub fn effective_hub_mcp_token(profile: &ClientProfile) -> Option<String> {
+    if let Ok(env_v) = std::env::var("PITS_HUB_MCP_TOKEN") {
+        let trimmed = env_v.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    profile
+        .hub_mcp_token
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())

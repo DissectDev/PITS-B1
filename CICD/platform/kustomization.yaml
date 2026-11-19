@@ -9,3 +9,4 @@ resources:
   - ../gateway
   - instances/pits-lab-devstack.yaml
   - instances/pits-ai-storage.yaml
+  - project-hub-pg.yaml

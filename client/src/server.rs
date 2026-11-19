@@ -8,7 +8,7 @@
 
 use anyhow::Result;
 use axum::body::{Body, Bytes};
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{header, HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
@@ -27,8 +27,14 @@ use crate::catalog::{
     CatalogRegistry, SubmitBlindBallotRequest,
 };
 use crate::config::{
-    default_profile_path, effective_sourcing_db_url, generate_agent_mtls_pki,
-    load_kubeconfig_file, load_talosconfig_file, local_state_dir, ClientProfile, WorkspaceBundle,
+    default_profile_path, effective_hub_db_url, effective_hub_mcp_token, effective_sourcing_db_url,
+    generate_agent_mtls_pki, load_kubeconfig_file, load_talosconfig_file, local_state_dir,
+    ClientProfile, WorkspaceBundle,
+};
+use crate::hub::{
+    handle_hub_mcp_jsonrpc, verify_hub_mcp_request_auth, AcceptSessionRequest,
+    CreateSessionLogRequest, CreateTaskRequest, HubError, HubRegistry, RejectSessionRequest,
+    SessionQueryFilter, TaskQueryFilter, UpdateTaskRequest, UpsertProjectRequest,
 };
 use crate::k8s::{
     audit_fleet_npus, inspect_cluster_summary, launch_npu_validation_job,
@@ -68,6 +74,7 @@ pub struct ConsoleState {
     pub profile: Arc<RwLock<ClientProfile>>,
     pub bundle: Arc<RwLock<WorkspaceBundle>>,
     pub catalog: Arc<CatalogRegistry>,
+    pub hub: Arc<HubRegistry>,
 }
 
 impl ConsoleState {
@@ -75,10 +82,26 @@ impl ConsoleState {
         let profile = Arc::new(RwLock::new(profile));
         let bundle = Arc::new(RwLock::new(bundle));
         let catalog = Arc::new(CatalogRegistry::new(profile.clone(), bundle.clone()));
+        let hub = Arc::new(HubRegistry::new(profile.clone()));
         Self {
             profile,
             bundle,
             catalog,
+            hub,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn new_with_in_memory_hub(profile: ClientProfile, bundle: WorkspaceBundle) -> Self {
+        let profile = Arc::new(RwLock::new(profile));
+        let bundle = Arc::new(RwLock::new(bundle));
+        let catalog = Arc::new(CatalogRegistry::new(profile.clone(), bundle.clone()));
+        let hub = Arc::new(HubRegistry::new_in_memory(profile.clone()));
+        Self {
+            profile,
+            bundle,
+            catalog,
+            hub,
         }
     }
 
@@ -239,6 +262,41 @@ pub fn build_console_router(state: ConsoleState) -> Router {
             "/mcp",
             post(api_mcp_post).get(api_mcp_get).delete(api_mcp_delete),
         )
+        // Self-Managed Project Hub REST API (Human Portal UI Channel)
+        .route("/api/pits/v1/hub/overview", get(api_hub_overview))
+        .route(
+            "/api/pits/v1/hub/projects",
+            get(api_hub_list_projects).post(api_hub_upsert_project),
+        )
+        .route(
+            "/api/pits/v1/hub/tasks",
+            get(api_hub_list_tasks).post(api_hub_create_task),
+        )
+        .route(
+            "/api/pits/v1/hub/tasks/:task_key",
+            get(api_hub_get_task).patch(api_hub_patch_task),
+        )
+        .route(
+            "/api/pits/v1/hub/sessions",
+            get(api_hub_list_sessions).post(api_hub_create_session),
+        )
+        .route(
+            "/api/pits/v1/hub/sessions/:id/accept",
+            post(api_hub_accept_session),
+        )
+        .route(
+            "/api/pits/v1/hub/sessions/:id/reject",
+            post(api_hub_reject_session),
+        )
+        .route("/api/pits/v1/hub/search", get(api_hub_search))
+        .route("/api/pits/v1/hub/db/sync", post(api_hub_db_sync))
+        // Self-Managed Project Hub MCP Streamable HTTP endpoint (Agent Channel, hard-gated)
+        .route(
+            "/mcp/hub",
+            post(api_hub_mcp_post)
+                .get(api_hub_mcp_get)
+                .delete(api_hub_mcp_delete),
+        )
         // Legacy v1 domain endpoints (`/api/v1/*`)
         .route("/api/v1/overview", get(api_overview))
         .route("/api/v1/profile", post(api_save_profile))
@@ -303,18 +361,25 @@ pub async fn run_console_server(addrs: &[SocketAddr], state: ConsoleState) -> Re
 
     // Periodically sync SQLite WAL outbox with PostgreSQL SSOT when configured.
     let pg_sync_catalog = state.catalog.clone();
+    let pg_sync_hub = state.hub.clone();
     let pg_sync_profile = state.profile.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(20));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
-            let configured = {
+            let (sourcing_configured, hub_configured) = {
                 let prof = pg_sync_profile.read().await;
-                effective_sourcing_db_url(None, &prof)
+                (
+                    effective_sourcing_db_url(None, &prof),
+                    effective_hub_db_url(None, &prof),
+                )
             };
-            if configured.is_some() {
+            if sourcing_configured.is_some() {
                 let _ = pg_sync_catalog.sourcing_sync_db(None).await;
+            }
+            if hub_configured.is_some() {
+                let _ = pg_sync_hub.sync_db(None).await;
             }
         }
     });
@@ -2198,6 +2263,337 @@ async fn api_mcp_delete() -> StatusCode {
     StatusCode::NO_CONTENT
 }
 
+// ---------------------------------------------------------------------------
+// Self-Managed Project Hub REST API & Streamable HTTP MCP (`/mcp/hub`)
+// ---------------------------------------------------------------------------
+
+fn hub_err_response(err: HubError) -> Response {
+    let status = match &err {
+        HubError::Forbidden(_) => StatusCode::FORBIDDEN,
+        HubError::NotFound(_) => StatusCode::NOT_FOUND,
+        HubError::BadRequest(_) => StatusCode::BAD_REQUEST,
+        HubError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (
+        status,
+        Json(serde_json::json!({
+            "error": err.to_string(),
+            "status": status.as_u16(),
+        })),
+    )
+        .into_response()
+}
+
+fn extract_portal_human_actor(headers: &HeaderMap) -> (String, String) {
+    let fido_user = headers
+        .get("x-auth-request-user")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let fido_email = headers
+        .get("x-auth-request-email")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if let Some(u) = fido_user.or(fido_email) {
+        return (u.to_string(), "keycloak-fido2".to_string());
+    }
+    let direct_op = headers
+        .get("x-pits-operator")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("pitsadmin");
+    (direct_op.to_string(), "tailscale-direct".to_string())
+}
+
+async fn api_hub_overview(State(st): State<ConsoleState>) -> Response {
+    match st.hub.db.overview() {
+        Ok(ov) => Json(ov).into_response(),
+        Err(e) => hub_err_response(e),
+    }
+}
+
+async fn api_hub_list_projects(State(st): State<ConsoleState>) -> Response {
+    match st.hub.db.list_projects() {
+        Ok(projects) => Json(serde_json::json!({ "projects": projects })).into_response(),
+        Err(e) => hub_err_response(e),
+    }
+}
+
+async fn api_hub_upsert_project(
+    State(st): State<ConsoleState>,
+    headers: HeaderMap,
+    Json(req): Json<UpsertProjectRequest>,
+) -> Response {
+    let (actor, _) = extract_portal_human_actor(&headers);
+    match st.hub.db.upsert_project(req, "portal_ui", &actor) {
+        Ok(project) => Json(serde_json::json!({ "project": project })).into_response(),
+        Err(e) => hub_err_response(e),
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct HubTasksQueryParams {
+    #[serde(default)]
+    project_id: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    tag: Option<String>,
+    #[serde(default)]
+    priority: Option<String>,
+    #[serde(default)]
+    workspace: Option<String>,
+    #[serde(default)]
+    q: Option<String>,
+    #[serde(default)]
+    query: Option<String>,
+}
+
+async fn api_hub_list_tasks(
+    State(st): State<ConsoleState>,
+    Query(q): Query<HubTasksQueryParams>,
+) -> Response {
+    let filter = TaskQueryFilter {
+        project_id: q.project_id,
+        status: q.status,
+        tag: q.tag,
+        priority: q.priority,
+        workspace: q.workspace,
+        query: q.q.or(q.query),
+    };
+    match st.hub.db.query_tasks(&filter) {
+        Ok(tasks) => Json(serde_json::json!({ "tasks": tasks })).into_response(),
+        Err(e) => hub_err_response(e),
+    }
+}
+
+async fn api_hub_create_task(
+    State(st): State<ConsoleState>,
+    headers: HeaderMap,
+    Json(req): Json<CreateTaskRequest>,
+) -> Response {
+    let (actor, _) = extract_portal_human_actor(&headers);
+    match st.hub.db.create_task(req, "portal_ui", &actor) {
+        Ok(task) => (StatusCode::CREATED, Json(serde_json::json!({ "task": task }))).into_response(),
+        Err(e) => hub_err_response(e),
+    }
+}
+
+async fn api_hub_get_task(
+    State(st): State<ConsoleState>,
+    AxumPath(task_key): AxumPath<String>,
+) -> Response {
+    match st.hub.db.get_task_detail(&task_key) {
+        Ok(detail) => Json(detail).into_response(),
+        Err(e) => hub_err_response(e),
+    }
+}
+
+async fn api_hub_patch_task(
+    State(st): State<ConsoleState>,
+    AxumPath(task_key): AxumPath<String>,
+    headers: HeaderMap,
+    Json(req): Json<UpdateTaskRequest>,
+) -> Response {
+    let (actor, _) = extract_portal_human_actor(&headers);
+    match st.hub.db.update_task(&task_key, req, "portal_ui", &actor) {
+        Ok(task) => Json(serde_json::json!({ "task": task })).into_response(),
+        Err(e) => hub_err_response(e),
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct HubSessionsQueryParams {
+    #[serde(default)]
+    project_id: Option<String>,
+    #[serde(default)]
+    log_type: Option<String>,
+    #[serde(default)]
+    tag: Option<String>,
+    #[serde(default)]
+    task_key: Option<String>,
+    #[serde(default)]
+    accepted: Option<bool>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+async fn api_hub_list_sessions(
+    State(st): State<ConsoleState>,
+    Query(q): Query<HubSessionsQueryParams>,
+) -> Response {
+    let filter = SessionQueryFilter {
+        project_id: q.project_id,
+        log_type: q.log_type,
+        tag: q.tag,
+        task_key: q.task_key,
+        accepted: q.accepted,
+        limit: q.limit,
+    };
+    match st.hub.db.query_sessions(&filter) {
+        Ok(sessions) => Json(serde_json::json!({ "sessions": sessions })).into_response(),
+        Err(e) => hub_err_response(e),
+    }
+}
+
+async fn api_hub_create_session(
+    State(st): State<ConsoleState>,
+    headers: HeaderMap,
+    Json(req): Json<CreateSessionLogRequest>,
+) -> Response {
+    let (actor, _) = extract_portal_human_actor(&headers);
+    match st.hub.db.create_session_log(req, "portal_ui", &actor) {
+        Ok(session) => {
+            (StatusCode::CREATED, Json(serde_json::json!({ "session": session }))).into_response()
+        }
+        Err(e) => hub_err_response(e),
+    }
+}
+
+async fn api_hub_accept_session(
+    State(st): State<ConsoleState>,
+    AxumPath(session_id): AxumPath<String>,
+    headers: HeaderMap,
+    payload: Option<Json<AcceptSessionRequest>>,
+) -> Response {
+    let (actor, auth_source) = extract_portal_human_actor(&headers);
+    let req = payload.map(|Json(v)| v).unwrap_or_default();
+    match st
+        .hub
+        .db
+        .accept_session(&session_id, req, "portal_ui", &actor, &auth_source)
+    {
+        Ok(outcome) => Json(outcome).into_response(),
+        Err(e) => hub_err_response(e),
+    }
+}
+
+async fn api_hub_reject_session(
+    State(st): State<ConsoleState>,
+    AxumPath(session_id): AxumPath<String>,
+    headers: HeaderMap,
+    Json(req): Json<RejectSessionRequest>,
+) -> Response {
+    let (actor, auth_source) = extract_portal_human_actor(&headers);
+    match st
+        .hub
+        .db
+        .reject_session(&session_id, req, "portal_ui", &actor, &auth_source)
+    {
+        Ok(outcome) => Json(outcome).into_response(),
+        Err(e) => hub_err_response(e),
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct HubSearchQueryParams {
+    #[serde(default)]
+    q: String,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+async fn api_hub_search(
+    State(st): State<ConsoleState>,
+    Query(params): Query<HubSearchQueryParams>,
+) -> Response {
+    match st.hub.db.search(&params.q, params.limit.unwrap_or(20)) {
+        Ok(res) => Json(res).into_response(),
+        Err(e) => hub_err_response(e),
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct HubDbSyncRequest {
+    #[serde(default)]
+    pg_url_override: Option<String>,
+}
+
+async fn api_hub_db_sync(
+    State(st): State<ConsoleState>,
+    payload: Option<Json<HubDbSyncRequest>>,
+) -> Response {
+    let pg_override = payload.and_then(|Json(r)| r.pg_url_override);
+    let status = st.hub.sync_db(pg_override.as_deref()).await;
+    Json(status).into_response()
+}
+
+async fn api_hub_mcp_post(
+    State(st): State<ConsoleState>,
+    headers: HeaderMap,
+    Json(msg): Json<serde_json::Value>,
+) -> Response {
+    let configured_token = {
+        let prof = st.profile.read().await;
+        effective_hub_mcp_token(&prof)
+    };
+    let x_token = headers
+        .get("x-pits-mcp-token")
+        .and_then(|v| v.to_str().ok());
+    let auth_hdr = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    let host_hdr = headers
+        .get("x-forwarded-host")
+        .or_else(|| headers.get(header::HOST))
+        .and_then(|v| v.to_str().ok());
+    let x_user = headers
+        .get("x-auth-request-user")
+        .and_then(|v| v.to_str().ok());
+
+    let auth_ctx = match verify_hub_mcp_request_auth(
+        configured_token.as_deref(),
+        x_token,
+        auth_hdr,
+        host_hdr,
+        x_user,
+    ) {
+        Ok(ctx) => ctx,
+        Err(msg) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": null,
+                    "error": { "code": -32001, "message": msg }
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let reply = handle_hub_mcp_jsonrpc(&st.hub, msg, &auth_ctx.actor).await;
+    let status = StatusCode::from_u16(reply.http_status).unwrap_or(StatusCode::OK);
+    match reply.body {
+        Some(body_val) => {
+            let body = serde_json::to_vec(&body_val).unwrap_or_else(|_| b"{}".to_vec());
+            (status, [(header::CONTENT_TYPE, "application/json")], body).into_response()
+        }
+        None => status.into_response(),
+    }
+}
+
+async fn api_hub_mcp_get() -> impl IntoResponse {
+    Json(serde_json::json!({
+        "name": "pits-project-hub-mcp",
+        "version": env!("CARGO_PKG_VERSION"),
+        "transport": "streamable-http",
+        "protocolVersion": "2025-03-26",
+        "postEndpoint": "/mcp/hub",
+        "stdioCommand": "pitsctl hub mcp",
+        "humanAcceptanceGate": true
+    }))
+}
+
+async fn api_hub_mcp_delete() -> StatusCode {
+    StatusCode::NO_CONTENT
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3143,5 +3539,83 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn project_hub_http_mcp_forbids_done_and_portal_human_gate_accepts() {
+        let profile = ClientProfile::default();
+        let bundle = WorkspaceBundle::builtin_pits_baseline();
+        let state = ConsoleState::new_with_in_memory_hub(profile, bundle);
+        let app = build_console_router(state);
+
+        // 1. Overview returns seeded PITS + AGY-1 + AGY-2
+        let (st_ov, ov) = call_json(
+            &app,
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/pits/v1/hub/overview")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st_ov, StatusCode::OK);
+        assert_eq!(ov["projects"][0]["id"], "pits");
+        assert!(ov["pendingReviewCount"].as_u64().unwrap_or(0) >= 2);
+
+        // 2. MCP /mcp/hub attempting to mark AGY-2 done must fail with HTTP 403
+        let (st_forbid, forbid_body) = call_json(
+            &app,
+            Request::builder()
+                .method(Method::POST)
+                .uri("/mcp/hub")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": 91,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "hub_submit_handoff",
+                            "arguments": {
+                                "taskKeys": ["AGY-2"],
+                                "summary": "Illegal self-accept",
+                                "targetStatus": "done",
+                                "accepted": true
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st_forbid, StatusCode::FORBIDDEN);
+        assert!(forbid_body["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("FORBIDDEN: Human acceptance required"));
+
+        // 3. Human channel accepts AGY-2 handoff via /api/pits/v1/hub/sessions/:id/accept
+        let (st_acc, acc_body) = call_json(
+            &app,
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/pits/v1/hub/sessions/seed-session-agy-2/accept")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-auth-request-user", "pitsadmin")
+                .body(Body::from(
+                    serde_json::json!({
+                        "markTasksDone": true,
+                        "reviewNote": "LGTM on portal"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st_acc, StatusCode::OK);
+        assert_eq!(acc_body["session"]["accepted"], true);
+        assert_eq!(acc_body["authSource"], "keycloak-fido2");
+        assert_eq!(acc_body["updatedTasks"][0]["status"], "done");
     }
 }

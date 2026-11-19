@@ -40,9 +40,19 @@ async function verifyRestContracts() {
     throw new Error(`POST /api/auth/guest/refresh failed: HTTP ${authRes.status}`);
   }
 
+  const hubRes = await fetch(`${baseUrl}/api/pits/v1/hub/overview`);
+  if (!hubRes.ok) {
+    throw new Error(`GET /api/pits/v1/hub/overview failed: HTTP ${hubRes.status}`);
+  }
+  const hubOv = await hubRes.json();
+  if (!Array.isArray(hubOv.tasks) || !hubOv.tasks.some((t) => t.taskKey === 'AGY-2')) {
+    throw new Error(`Expected seeded AGY-2 in /api/pits/v1/hub/overview`);
+  }
+
   return {
     resourceTypeCount: resourceTypes.length,
     catalogEntityCount: entities.length,
+    hubTaskCount: hubOv.tasks.length,
   };
 }
 
@@ -227,6 +237,74 @@ async function main() {
       throw new Error(`Entity page /catalog/default/resource/netboot-001 did not render expected details: ${entitySnapshot?.text?.slice(0, 300)}`);
     }
 
+    // 3. Verify existing /sourcing-audit page renders cleanly without style/JS regressions
+    await cdp.send('Page.navigate', { url: `${baseUrl}/sourcing-audit` });
+    let sourcingSnapshot = null;
+    for (let i = 0; i < 60; i++) {
+      sourcingSnapshot = await cdp.evalJs(`(() => ({
+        path: window.location.pathname,
+        text: document.body ? document.body.innerText : ''
+      }))()`);
+      if (sourcingSnapshot?.text?.includes('PITS Portal Startup Error')) {
+        throw new Error(`Sourcing page crashed: ${sourcingSnapshot.text}`);
+      }
+      if (
+        sourcingSnapshot?.text?.includes('Sourcing') ||
+        sourcingSnapshot?.text?.includes('Kraljic')
+      ) {
+        break;
+      }
+      await sleep(200);
+    }
+
+    // 4. Verify new /project-hub page renders Review Queue with AGY-1 & AGY-2
+    await cdp.send('Page.navigate', { url: `${baseUrl}/project-hub` });
+    let hubSnapshot = null;
+    for (let i = 0; i < 60; i++) {
+      hubSnapshot = await cdp.evalJs(`(() => ({
+        path: window.location.pathname,
+        text: document.body ? document.body.innerText : ''
+      }))()`);
+      if (hubSnapshot?.text?.includes('PITS Portal Startup Error')) {
+        throw new Error(`Project Hub page crashed: ${hubSnapshot.text}`);
+      }
+      if (
+        hubSnapshot?.text?.includes('Project Hub') &&
+        hubSnapshot.text.includes('AGY-2')
+      ) {
+        break;
+      }
+      await sleep(200);
+    }
+    if (!hubSnapshot?.text?.includes('AGY-2')) {
+      throw new Error(`Project Hub page /project-hub did not render AGY-2: ${hubSnapshot?.text?.slice(0, 400)}`);
+    }
+
+    // 5. Verify new /project-hub/tasks/AGY-2 task detail page renders BlockNote & Human Acceptance Gate
+    await cdp.send('Page.navigate', { url: `${baseUrl}/project-hub/tasks/AGY-2` });
+    let taskSnapshot = null;
+    for (let i = 0; i < 60; i++) {
+      taskSnapshot = await cdp.evalJs(`(() => ({
+        path: window.location.pathname,
+        text: document.body ? document.body.innerText : '',
+        hasBlockNote: Boolean(document.querySelector('.bn-editor, .bn-container'))
+      }))()`);
+      if (taskSnapshot?.text?.includes('PITS Portal Startup Error')) {
+        throw new Error(`Task detail page crashed: ${taskSnapshot.text}`);
+      }
+      if (
+        taskSnapshot?.text?.includes('AGY-2') &&
+        taskSnapshot.text.includes('Human Acceptance Gate') &&
+        taskSnapshot.hasBlockNote
+      ) {
+        break;
+      }
+      await sleep(200);
+    }
+    if (!taskSnapshot?.text?.includes('Human Acceptance Gate') || !taskSnapshot?.hasBlockNote) {
+      throw new Error(`Task detail /project-hub/tasks/AGY-2 missing gate or BlockNote editor: ${JSON.stringify(taskSnapshot)?.slice(0, 400)}`);
+    }
+
     if (cdp.exceptions.length > 0) {
       throw new Error(`Uncaught frontend JS exceptions (${cdp.exceptions.length}): ${cdp.exceptions.join(' | ')}`);
     }
@@ -241,7 +319,14 @@ async function main() {
       browser: browserVersion,
       resourceTypes: apiStats.resourceTypeCount,
       catalogEntities: apiStats.catalogEntityCount,
-      verifiedRoutes: ['/ -> /resource-types', '/catalog/default/resource/netboot-001'],
+      hubTasks: apiStats.hubTaskCount,
+      verifiedRoutes: [
+        '/ -> /resource-types',
+        '/catalog/default/resource/netboot-001',
+        '/sourcing-audit',
+        '/project-hub',
+        '/project-hub/tasks/AGY-2',
+      ],
       durationMs: Date.now() - startedAt,
     };
     process.stdout.write(JSON.stringify(report) + '\n');

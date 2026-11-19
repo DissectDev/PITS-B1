@@ -1,51 +1,29 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  Alert,
-  Box,
-  Button,
-  Card,
-  CardActions,
-  CardContent,
-  Chip,
-  CircularProgress,
-  Divider,
-  Grid,
-  InputAdornment,
-  Paper,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  TextField,
-  Tooltip,
-  Typography,
-} from '@mui/material';
-import DnsOutlinedIcon from '@mui/icons-material/DnsOutlined';
-import MemoryOutlinedIcon from '@mui/icons-material/MemoryOutlined';
-import DesktopWindowsOutlinedIcon from '@mui/icons-material/DesktopWindowsOutlined';
-import RouterOutlinedIcon from '@mui/icons-material/RouterOutlined';
-import SystemUpdateAltOutlinedIcon from '@mui/icons-material/SystemUpdateAltOutlined';
-import StorageOutlinedIcon from '@mui/icons-material/StorageOutlined';
-import ViewInArOutlinedIcon from '@mui/icons-material/ViewInArOutlined';
-import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
-import RocketLaunchOutlinedIcon from '@mui/icons-material/RocketLaunchOutlined';
-import CloudSyncOutlinedIcon from '@mui/icons-material/CloudSyncOutlined';
-import VerifiedUserOutlinedIcon from '@mui/icons-material/VerifiedUserOutlined';
-import AssessmentOutlinedIcon from '@mui/icons-material/AssessmentOutlined';
-import CloudOutlinedIcon from '@mui/icons-material/CloudOutlined';
-import CodeOutlinedIcon from '@mui/icons-material/CodeOutlined';
-import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined';
-import RefreshIcon from '@mui/icons-material/Refresh';
-import DownloadIcon from '@mui/icons-material/Download';
-import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
-import FilterListIcon from '@mui/icons-material/FilterList';
-import SearchIcon from '@mui/icons-material/Search';
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { Link as RouterLink, useParams } from 'react-router-dom';
-import { Content, Header, HeaderLabel, Page } from '@backstage/core-components';
+import {
+  AlertTriangle,
+  ArrowLeft,
+  ArrowRight,
+  BarChart3,
+  Cloud,
+  CloudCog,
+  Code2,
+  Cpu,
+  Database,
+  Download,
+  Filter,
+  HardDrive,
+  Loader2,
+  MonitorSmartphone,
+  Network,
+  RefreshCw,
+  Rocket,
+  Router,
+  Search,
+  Server,
+  ShieldCheck,
+  Users,
+} from 'lucide-react';
 import { useApi } from '@backstage/core-plugin-api';
 import { catalogApiRef } from '@backstage/plugin-catalog-react';
 import { parseEntityRef, type Entity } from '@backstage/catalog-model';
@@ -60,73 +38,36 @@ import {
   type SummaryPill,
 } from '../types';
 import { inferStatusLevel, StatusPill } from '../components/StatusPill';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import { Card, CardContent, CardFooter } from '../components/ui/card';
+import { Input } from '../components/ui/input';
+import { Alert, AlertDescription } from '../components/ui/alert';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '../components/ui/table';
+import { PageBody, PageHeader, PageShell } from '../components/ui/page-shell';
+import { PitsTooltip } from '../components/ui/pits-primitives';
+import { cn } from '../lib/utils';
 
-function observationModeBadgeStyle(mode?: ObservationMode): {
-  label: string;
-  bg: string;
-  color: string;
-  border: string;
-} {
+function observationModeBadgeVariant(
+  mode?: ObservationMode,
+): { label: string; variant: 'purple' | 'info' | 'warn' | 'teal' } {
   switch (mode) {
     case 'policy-first':
-      return {
-        label: 'policy-first',
-        bg: 'rgba(103, 58, 183, 0.12)',
-        color: '#5e35b1',
-        border: 'rgba(103, 58, 183, 0.35)',
-      };
+      return { label: 'policy-first', variant: 'purple' };
     case 'dynamic-first':
-      return {
-        label: 'dynamic-first',
-        bg: 'rgba(2, 136, 209, 0.12)',
-        color: '#0277bd',
-        border: 'rgba(2, 136, 209, 0.35)',
-      };
+      return { label: 'dynamic-first', variant: 'info' };
     case 'governance-event':
-      return {
-        label: 'governance-event',
-        bg: 'rgba(237, 108, 2, 0.12)',
-        color: '#e65100',
-        border: 'rgba(237, 108, 2, 0.35)',
-      };
+      return { label: 'governance-event', variant: 'warn' };
     default:
-      return {
-        label: mode || 'hybrid',
-        bg: 'rgba(0, 121, 107, 0.12)',
-        color: '#00695c',
-        border: 'rgba(0, 121, 107, 0.35)',
-      };
+      return { label: mode || 'hybrid', variant: 'teal' };
   }
-}
-
-function pillColorStyle(status?: string): { bg: string; color: string; border: string } {
-  const lvl = inferStatusLevel(status, status);
-  if (lvl === 'error') {
-    return {
-      bg: 'rgba(211, 47, 47, 0.10)',
-      color: '#c62828',
-      border: 'rgba(211, 47, 47, 0.32)',
-    };
-  }
-  if (lvl === 'warn') {
-    return {
-      bg: 'rgba(237, 108, 2, 0.10)',
-      color: '#e65100',
-      border: 'rgba(237, 108, 2, 0.32)',
-    };
-  }
-  if (lvl === 'ok') {
-    return {
-      bg: 'rgba(46, 125, 50, 0.10)',
-      color: '#2e7d32',
-      border: 'rgba(46, 125, 50, 0.30)',
-    };
-  }
-  return {
-    bg: 'rgba(2, 136, 209, 0.08)',
-    color: '#0277bd',
-    border: 'rgba(2, 136, 209, 0.28)',
-  };
 }
 
 const HighlightPillStrip: React.FC<{ highlights?: SummaryPill[] }> = ({ highlights }) => {
@@ -134,65 +75,57 @@ const HighlightPillStrip: React.FC<{ highlights?: SummaryPill[] }> = ({ highligh
     return null;
   }
   return (
-    <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mt: 1.5 }}>
+    <div className="mt-3 flex flex-wrap gap-1.5">
       {highlights.map(h => {
-        const st = pillColorStyle(h.status);
+        const lvl = inferStatusLevel(h.status, h.status);
         return (
-          <Chip
-            key={h.key}
-            size="small"
-            label={`${h.label}: ${h.value}`}
-            sx={{
-              fontFamily: 'monospace',
-              fontSize: '0.72rem',
-              fontWeight: 600,
-              height: 22,
-              bgcolor: st.bg,
-              color: st.color,
-              border: `1px solid ${st.border}`,
-            }}
-          />
+          <Badge key={h.key} variant={lvl} className="font-mono text-[11px]">
+            {h.label}: {h.value}
+          </Badge>
         );
       })}
-    </Stack>
+    </div>
   );
 };
 
-export function getResourceTypeIcon(resourceType: string): React.ReactElement {
+export function getResourceTypeIcon(
+  resourceType: string,
+  className = 'h-4 w-4 text-foreground',
+): React.ReactElement {
   switch (resourceType) {
     case 'baremetal-host':
-      return <DnsOutlinedIcon color="primary" />;
+      return <Server className={className} />;
     case 'npu-accelerator':
     case 'gpu-accelerator':
-      return <MemoryOutlinedIcon color="primary" />;
+      return <Cpu className={className} />;
     case 'virtual-machine':
-      return <DesktopWindowsOutlinedIcon color="primary" />;
+      return <MonitorSmartphone className={className} />;
     case 'edge-router':
-      return <RouterOutlinedIcon color="primary" />;
+      return <Router className={className} />;
     case 'pxe-boot-profile':
-      return <SystemUpdateAltOutlinedIcon color="primary" />;
+      return <Download className={className} />;
     case 'storage-pool':
-      return <StorageOutlinedIcon color="primary" />;
+      return <Database className={className} />;
     case 'san-volume':
-      return <ViewInArOutlinedIcon color="primary" />;
+      return <HardDrive className={className} />;
     case 'ai-storage-workspace':
-      return <CloudSyncOutlinedIcon color="primary" />;
+      return <CloudCog className={className} />;
     case 'kubernetes-cluster':
-      return <HubOutlinedIcon color="primary" />;
+      return <Network className={className} />;
     case 'cicd-pipeline':
-      return <RocketLaunchOutlinedIcon color="primary" />;
+      return <Rocket className={className} />;
     case 'auth-flow-bundle':
-      return <VerifiedUserOutlinedIcon color="primary" />;
+      return <ShieldCheck className={className} />;
     case 'vendor-saas':
-      return <CloudOutlinedIcon color="primary" />;
+      return <Cloud className={className} />;
     case 'commercial-sdk':
-      return <CodeOutlinedIcon color="primary" />;
+      return <Code2 className={className} />;
     case 'managed-infra':
-      return <RouterOutlinedIcon color="primary" />;
+      return <Router className={className} />;
     case 'outsourced-dev':
-      return <GroupsOutlinedIcon color="primary" />;
+      return <Users className={className} />;
     default:
-      return <ViewInArOutlinedIcon color="primary" />;
+      return <HardDrive className={className} />;
   }
 }
 
@@ -346,331 +279,254 @@ export const ResourceTypeDirectoryPage: React.FC = () => {
   }, [summaries]);
 
   return (
-    <Page themeId="home">
-      <Header
+    <PageShell>
+      <PageHeader
         title="PITS Resource & Sourcing Directory"
-        subtitle="Resource-Type-Centric Entity Registry, Guarded Fleet Operations & Sourcing Governance (Backstage v1.56)"
-      >
-        <HeaderLabel label="System" value="pits-infrastructure · 3 Domains" />
-        <HeaderLabel label="Resource Types" value={String(totals.types)} />
-        <HeaderLabel label="Catalog Entities" value={String(totals.entities || 33)} />
-      </Header>
+        description="Resource-Type-Centric Entity Registry, Guarded Fleet Operations & Sourcing Governance (Backstage v1.56)"
+        meta={[
+          { label: 'System', value: 'pits-infrastructure · 3 Domains' },
+          { label: 'Resource Types', value: String(totals.types) },
+          { label: 'Catalog Entities', value: String(totals.entities || 33) },
+        ]}
+      />
 
-      <Content>
-        <Stack spacing={3}>
-          <Paper
-            variant="outlined"
-            sx={{
-              p: 2.25,
-              display: 'flex',
-              flexDirection: { xs: 'column', md: 'row' },
-              justifyContent: 'space-between',
-              alignItems: { xs: 'flex-start', md: 'center' },
-              gap: 2,
-            }}
-          >
-            <Stack direction="row" spacing={3} flexWrap="wrap" useFlexGap>
-              <Box>
-                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
-                  RESOURCE TYPES
-                </Typography>
-                <Typography variant="h5" sx={{ fontWeight: 800 }}>
+      <PageBody className="space-y-6">
+        {/* KPI Strip & Primary Action Bar */}
+        <Card>
+          <CardContent className="flex flex-col justify-between gap-4 p-5 lg:flex-row lg:items-center">
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-5 sm:gap-6">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Resource Types
+                </div>
+                <div className="mt-0.5 text-2xl font-bold tracking-tight text-foreground">
                   {totals.types}
-                </Typography>
-              </Box>
-              <Divider orientation="vertical" flexItem />
-              <Box>
-                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
-                  ENROLLED ENTITIES
-                </Typography>
-                <Typography variant="h5" sx={{ fontWeight: 800 }}>
+                </div>
+              </div>
+              <div className="sm:border-l sm:border-solid sm:border-border sm:pl-5">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Enrolled Entities
+                </div>
+                <div className="mt-0.5 text-2xl font-bold tracking-tight text-foreground">
                   {loading ? '…' : totals.entities}
-                </Typography>
-              </Box>
-              <Divider orientation="vertical" flexItem />
-              <Box>
-                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
-                  HEALTHY / READY
-                </Typography>
-                <Typography variant="h5" sx={{ fontWeight: 800, color: 'success.main' }}>
+                </div>
+              </div>
+              <div className="sm:border-l sm:border-solid sm:border-border sm:pl-5">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Healthy / Ready
+                </div>
+                <div className="mt-0.5 text-2xl font-bold tracking-tight text-emerald-600 dark:text-emerald-400">
                   {loading ? '…' : totals.healthy}
-                </Typography>
-              </Box>
-              <Divider orientation="vertical" flexItem />
-              <Box>
-                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
-                  WARNING / GATED
-                </Typography>
-                <Typography
-                  variant="h5"
-                  sx={{
-                    fontWeight: 800,
-                    color: totals.warnings > 0 ? 'warning.main' : 'text.primary',
-                  }}
+                </div>
+              </div>
+              <div className="sm:border-l sm:border-solid sm:border-border sm:pl-5">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Warning / Gated
+                </div>
+                <div
+                  className={cn(
+                    'mt-0.5 text-2xl font-bold tracking-tight',
+                    totals.warnings > 0
+                      ? 'text-amber-600 dark:text-amber-400'
+                      : 'text-foreground',
+                  )}
                 >
                   {loading ? '…' : totals.warnings}
-                </Typography>
-              </Box>
-              <Divider orientation="vertical" flexItem />
-              <Box>
-                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
-                  DRIFTED
-                </Typography>
-                <Typography
-                  variant="h5"
-                  sx={{
-                    fontWeight: 800,
-                    color: totals.drifted > 0 ? 'error.main' : 'text.primary',
-                  }}
+                </div>
+              </div>
+              <div className="sm:border-l sm:border-solid sm:border-border sm:pl-5">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Drifted
+                </div>
+                <div
+                  className={cn(
+                    'mt-0.5 text-2xl font-bold tracking-tight',
+                    totals.drifted > 0 ? 'text-red-600 dark:text-red-400' : 'text-foreground',
+                  )}
                 >
                   {loading ? '…' : totals.drifted}
-                </Typography>
-              </Box>
-            </Stack>
+                </div>
+              </div>
+            </div>
 
-            <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap>
+            <div className="flex flex-wrap items-center gap-2">
               <Button
-                variant="outlined"
-                startIcon={refreshing ? <CircularProgress size={16} /> : <RefreshIcon />}
+                variant="outline"
+                size="sm"
                 disabled={refreshing}
                 onClick={() => void loadSummaries(true)}
               >
-                {refreshing ? 'Refreshing Fleet...' : 'Refresh Live Fleet'}
+                {refreshing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                <span>{refreshing ? 'Refreshing Fleet...' : 'Refresh Live Fleet'}</span>
               </Button>
-              <Button
-                variant="outlined"
-                component="a"
-                href="/api/pits/v1/catalog/export"
-                download="catalog-info.yaml"
-                startIcon={<DownloadIcon />}
-              >
-                Export YAML
+              <Button variant="outline" size="sm" asChild>
+                <a href="/api/pits/v1/catalog/export" download="catalog-info.yaml">
+                  <Download className="h-3.5 w-3.5" />
+                  <span>Export YAML</span>
+                </a>
               </Button>
-              <Button
-                variant="outlined"
-                component={RouterLink}
-                to="/sourcing-audit"
-                startIcon={<AssessmentOutlinedIcon />}
-              >
-                Sourcing Audit &amp; Wizard
+              <Button variant="outline" size="sm" asChild>
+                <RouterLink to="/sourcing-audit">
+                  <BarChart3 className="h-3.5 w-3.5" />
+                  <span>Sourcing Audit &amp; Wizard</span>
+                </RouterLink>
               </Button>
-              <Button
-                variant="contained"
-                component={RouterLink}
-                to="/catalog?filters%5Bkind%5D=resource"
-                endIcon={<ArrowForwardIcon />}
-              >
-                Entity Registry Index
+              <Button size="sm" asChild>
+                <RouterLink to="/catalog?filters%5Bkind%5D=resource">
+                  <span>Entity Registry Index</span>
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </RouterLink>
               </Button>
-            </Stack>
-          </Paper>
+            </div>
+          </CardContent>
+        </Card>
 
-          {error && <Alert severity="warning">{error}</Alert>}
+        {error && (
+          <Alert variant="warning">
+            <AlertTriangle />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
 
-          {loading && summaries.length === 0 ? (
-            <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-              <CircularProgress />
-            </Box>
-          ) : (
-            mergedByDomain.map(([domainName, domainItems]) => (
-              <Box key={domainName}>
-                <Stack
-                  direction="row"
-                  spacing={1.25}
-                  alignItems="center"
-                  sx={{ mb: 1.5 }}
-                >
-                  <Typography variant="h6" sx={{ fontWeight: 700 }}>
+        {loading && summaries.length === 0 ? (
+          <div className="flex items-center justify-center py-16">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          <div className="space-y-8">
+            {mergedByDomain.map(([domainName, domainItems]) => (
+              <section key={domainName} className="space-y-3.5">
+                <div className="flex items-center gap-2.5">
+                  <h2 className="m-0 text-base font-semibold tracking-tight text-foreground">
                     {domainName}
-                  </Typography>
-                  <Chip
-                    size="small"
-                    variant="outlined"
-                    label={`${domainItems.length} resource ${
-                      domainItems.length === 1 ? 'type' : 'types'
-                    }`}
-                  />
-                </Stack>
+                  </h2>
+                  <Badge variant="muted">
+                    {domainItems.length} resource {domainItems.length === 1 ? 'type' : 'types'}
+                  </Badge>
+                </div>
 
-                <Grid container spacing={2.25}>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
                   {domainItems.map(item => {
                     const meta = RESOURCE_TYPE_DIRECTORY_META[item.resourceType];
                     return (
-                      <Grid item xs={12} md={6} lg={4} key={item.resourceType}>
-                        <Card
-                          variant="outlined"
-                          sx={{
-                            height: '100%',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
-                            '&:hover': {
-                              borderColor: 'primary.main',
-                              boxShadow: 2,
-                            },
-                          }}
-                        >
-                          <CardContent sx={{ flexGrow: 1 }}>
-                            <Stack
-                              direction="row"
-                              justifyContent="space-between"
-                              alignItems="flex-start"
-                              spacing={1}
-                            >
-                              <Stack direction="row" spacing={1.25} alignItems="center">
+                      <Card
+                        key={item.resourceType}
+                        className="flex h-full flex-col transition-colors hover:border-foreground/30"
+                      >
+                        <CardContent className="flex-1 p-5">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex min-w-0 items-center gap-3">
+                              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-solid border-border bg-muted/60">
                                 {getResourceTypeIcon(item.resourceType)}
-                                <Box>
-                                  <Typography variant="subtitle1" sx={{ fontWeight: 700, lineHeight: 1.25 }}>
-                                    {meta?.shortTitle || item.title}
-                                  </Typography>
-                                  <Typography
-                                    variant="caption"
-                                    sx={{ fontFamily: 'monospace', color: 'text.secondary' }}
-                                  >
-                                    spec.type: {item.resourceType}
-                                  </Typography>
-                                </Box>
-                              </Stack>
+                              </div>
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-semibold leading-snug text-foreground">
+                                  {meta?.shortTitle || item.title}
+                                </div>
+                                <div className="truncate font-mono text-[11px] text-muted-foreground">
+                                  spec.type: {item.resourceType}
+                                </div>
+                              </div>
+                            </div>
 
-                              <Chip
-                                size="small"
-                                color="primary"
-                                label={`${item.entityCount} ${
-                                  item.entityCount === 1 ? 'Entity' : 'Entities'
-                                }`}
-                                sx={{ fontWeight: 700 }}
-                              />
-                            </Stack>
+                            <Badge variant="default" className="shrink-0 font-semibold">
+                              {item.entityCount} {item.entityCount === 1 ? 'Entity' : 'Entities'}
+                            </Badge>
+                          </div>
 
-                            <Typography
-                              variant="body2"
-                              color="text.secondary"
-                              sx={{ mt: 1.5, minHeight: 44 }}
-                            >
-                              {item.description || meta?.description}
-                            </Typography>
+                          <p className="mb-0 mt-3 min-h-[40px] text-xs leading-relaxed text-muted-foreground">
+                            {item.description || meta?.description}
+                          </p>
 
-                            <Stack
-                              direction="row"
-                              spacing={1}
-                              alignItems="center"
-                              flexWrap="wrap"
-                              useFlexGap
-                              sx={{ mt: 1.75 }}
-                            >
-                              {item.observationMode && (() => {
-                                const badge = observationModeBadgeStyle(item.observationMode);
+                          <div className="mt-3.5 flex flex-wrap items-center gap-1.5">
+                            {item.observationMode &&
+                              (() => {
+                                const badge = observationModeBadgeVariant(item.observationMode);
                                 return (
-                                  <Tooltip title={`Refresh cadence: ${item.cadenceTier || 'standard-60s'}`}>
-                                    <Chip
-                                      size="small"
-                                      label={
-                                        item.cadenceTier
-                                          ? `${badge.label} · ${item.cadenceTier}`
-                                          : badge.label
-                                      }
-                                      sx={{
-                                        fontFamily: 'monospace',
-                                        fontWeight: 700,
-                                        fontSize: '0.7rem',
-                                        bgcolor: badge.bg,
-                                        color: badge.color,
-                                        border: `1px solid ${badge.border}`,
-                                      }}
-                                    />
-                                  </Tooltip>
+                                  <PitsTooltip
+                                    content={`Refresh cadence: ${item.cadenceTier || 'standard-60s'}`}
+                                  >
+                                    <Badge variant={badge.variant} className="font-mono text-[10.5px]">
+                                      {item.cadenceTier
+                                        ? `${badge.label} · ${item.cadenceTier}`
+                                        : badge.label}
+                                    </Badge>
+                                  </PitsTooltip>
                                 );
                               })()}
+                            <StatusPill label={`${item.healthyCount} Healthy`} level="ok" />
+                            {item.warningCount > 0 && (
                               <StatusPill
-                                label={`${item.healthyCount} Healthy`}
-                                level="ok"
+                                label={`${item.warningCount} Warning / Pending`}
+                                level="warn"
                               />
-                              {item.warningCount > 0 && (
-                                <StatusPill
-                                  label={`${item.warningCount} Warning / Pending`}
-                                  level="warn"
-                                />
-                              )}
-                              {(item.driftedCount ?? 0) > 0 && (
-                                <StatusPill
-                                  label={`${item.driftedCount} Drifted`}
-                                  level="error"
-                                />
-                              )}
-                            </Stack>
-
-                            <HighlightPillStrip highlights={item.highlights} />
-
-                            {item.actionIds.length > 0 && (
-                              <Box sx={{ mt: 1.75 }}>
-                                <Typography
-                                  variant="caption"
-                                  color="text.secondary"
-                                  sx={{ fontWeight: 700, display: 'block', mb: 0.5 }}
-                                >
-                                  CONTEXTUAL ENTITY ACTIONS
-                                </Typography>
-                                <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                                  {item.actionIds.slice(0, 5).map(actId => (
-                                    <Chip
-                                      key={actId}
-                                      size="small"
-                                      variant="outlined"
-                                      label={actId}
-                                      sx={{
-                                        fontFamily: 'monospace',
-                                        fontSize: '0.69rem',
-                                        height: 20,
-                                      }}
-                                    />
-                                  ))}
-                                  {item.actionIds.length > 5 && (
-                                    <Chip
-                                      size="small"
-                                      variant="outlined"
-                                      label={`+${item.actionIds.length - 5} more`}
-                                      sx={{ height: 20, fontSize: '0.69rem' }}
-                                    />
-                                  )}
-                                </Stack>
-                              </Box>
                             )}
-                          </CardContent>
+                            {(item.driftedCount ?? 0) > 0 && (
+                              <StatusPill label={`${item.driftedCount} Drifted`} level="error" />
+                            )}
+                          </div>
 
-                          <Divider />
+                          <HighlightPillStrip highlights={item.highlights} />
 
-                          <CardActions sx={{ px: 2, py: 1.25, justifyContent: 'space-between' }}>
-                            <Button
-                              size="small"
-                              component={RouterLink}
+                          {item.actionIds.length > 0 && (
+                            <div className="mt-4">
+                              <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                                Contextual Entity Actions
+                              </div>
+                              <div className="flex flex-wrap gap-1">
+                                {item.actionIds.slice(0, 5).map(actId => (
+                                  <Badge
+                                    key={actId}
+                                    variant="muted"
+                                    className="px-1.5 py-0 font-mono text-[10.5px]"
+                                  >
+                                    {actId}
+                                  </Badge>
+                                ))}
+                                {item.actionIds.length > 5 && (
+                                  <Badge variant="muted" className="px-1.5 py-0 text-[10.5px]">
+                                    +{item.actionIds.length - 5} more
+                                  </Badge>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </CardContent>
+
+                        <CardFooter className="bg-muted/20 px-5 py-3">
+                          <Button variant="ghost" size="xs" asChild>
+                            <RouterLink
                               to={`/catalog?filters%5Bkind%5D=resource&filters%5Btype%5D=${encodeURIComponent(
                                 item.resourceType,
                               )}`}
-                              startIcon={<FilterListIcon />}
                             >
-                              Catalog Facet
-                            </Button>
-                            <Button
-                              size="small"
-                              variant="contained"
-                              component={RouterLink}
+                              <Filter className="h-3 w-3" />
+                              <span>Catalog Facet</span>
+                            </RouterLink>
+                          </Button>
+                          <Button size="xs" asChild>
+                            <RouterLink
                               to={`/resource-types/${encodeURIComponent(item.resourceType)}`}
-                              endIcon={<ArrowForwardIcon />}
                             >
-                              Explore Entities
-                            </Button>
-                          </CardActions>
-                        </Card>
-                      </Grid>
+                              <span>Explore Entities</span>
+                              <ArrowRight className="h-3 w-3" />
+                            </RouterLink>
+                          </Button>
+                        </CardFooter>
+                      </Card>
                     );
                   })}
-                </Grid>
-              </Box>
-            ))
-          )}
-        </Stack>
-      </Content>
-    </Page>
+                </div>
+              </section>
+            ))}
+          </div>
+        )}
+      </PageBody>
+    </PageShell>
   );
 };
 
@@ -788,100 +644,80 @@ export const ResourceTypeEntitiesPage: React.FC<{ fixedResourceType?: string }> 
   }, [entities, searchTerm]);
 
   return (
-    <Page themeId="service">
-      <Header
+    <PageShell>
+      <PageHeader
+        breadcrumb={{ label: 'Resource Types', to: '/resource-types' }}
         title={meta?.fullTitle || `Resource Type: ${resourceType}`}
-        subtitle={typeSummary?.description || meta?.description || 'Aggregated infrastructure entities'}
-        type="Resource Type"
-        typeLink="/resource-types"
-      >
-        <HeaderLabel label="Domain" value={meta?.domain || typeSummary?.category || 'Infrastructure'} />
-        <HeaderLabel label="Entities" value={String(entities.length)} />
-      </Header>
+        description={
+          typeSummary?.description || meta?.description || 'Aggregated infrastructure entities'
+        }
+        badge={
+          <Badge variant="muted" className="font-mono">
+            {resourceType}
+          </Badge>
+        }
+        meta={[
+          { label: 'Domain', value: meta?.domain || typeSummary?.category || 'Infrastructure' },
+          { label: 'Entities', value: String(entities.length) },
+        ]}
+      />
 
-      <Content>
-        <Stack spacing={2.5}>
-          <Stack
-            direction="row"
-            spacing={1}
-            alignItems="center"
-            flexWrap="wrap"
-            useFlexGap
-          >
-            <Button
-              size="small"
-              variant="outlined"
-              component={RouterLink}
-              to="/resource-types"
-              startIcon={<ArrowBackIcon />}
-            >
-              All Types
-            </Button>
-            <Divider orientation="vertical" flexItem />
-            {Object.values(RESOURCE_TYPE_DIRECTORY_META).map(m => (
-              <Chip
+      <PageBody className="space-y-5">
+        {/* Quick resource-type switcher strip */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Button variant="outline" size="xs" asChild>
+            <RouterLink to="/resource-types">
+              <ArrowLeft className="h-3 w-3" />
+              <span>All Types</span>
+            </RouterLink>
+          </Button>
+          <span className="mx-1 h-4 w-px bg-border" />
+          {Object.values(RESOURCE_TYPE_DIRECTORY_META).map(m => {
+            const active = m.type === resourceType;
+            return (
+              <RouterLink
                 key={m.type}
-                label={m.shortTitle}
-                component={RouterLink}
                 to={`/resource-types/${encodeURIComponent(m.type)}`}
-                clickable
-                color={m.type === resourceType ? 'primary' : 'default'}
-                variant={m.type === resourceType ? 'filled' : 'outlined'}
-                sx={{ fontWeight: m.type === resourceType ? 700 : 500 }}
+                className={cn(
+                  'inline-flex items-center rounded-md border border-solid px-2.5 py-1 text-xs transition-colors',
+                  active
+                    ? 'border-primary bg-primary font-medium text-primary-foreground'
+                    : 'border-border bg-background text-muted-foreground hover:bg-accent hover:text-foreground',
+                )}
+              >
+                {m.shortTitle}
+              </RouterLink>
+            );
+          })}
+        </div>
+
+        {/* Search & status toolbar */}
+        <Card>
+          <CardContent className="flex flex-col justify-between gap-3 p-4 lg:flex-row lg:items-center">
+            <div className="relative w-full lg:max-w-md">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+                placeholder={`Filter ${resourceType} entities by name, model, IP, WWID, PCI ID, or status...`}
+                className="pl-8"
               />
-            ))}
-          </Stack>
+            </div>
 
-          <Paper
-            variant="outlined"
-            sx={{
-              p: 2,
-              display: 'flex',
-              flexDirection: { xs: 'column', md: 'row' },
-              justifyContent: 'space-between',
-              alignItems: { xs: 'stretch', md: 'center' },
-              gap: 2,
-            }}
-          >
-            <TextField
-              size="small"
-              placeholder={`Filter ${resourceType} entities by name, model, IP, WWID, PCI ID, or status...`}
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-              sx={{ minWidth: { xs: '100%', md: 420 } }}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon fontSize="small" />
-                  </InputAdornment>
-                ),
-              }}
-            />
-
-            <Stack direction="row" spacing={1.25} alignItems="center" flexWrap="wrap" useFlexGap>
+            <div className="flex flex-wrap items-center gap-2">
               {typeSummary && (
                 <>
-                  {typeSummary.observationMode && (() => {
-                    const badge = observationModeBadgeStyle(typeSummary.observationMode);
-                    return (
-                      <Chip
-                        size="small"
-                        label={
-                          typeSummary.cadenceTier
+                  {typeSummary.observationMode &&
+                    (() => {
+                      const badge = observationModeBadgeVariant(typeSummary.observationMode);
+                      return (
+                        <Badge variant={badge.variant} className="font-mono text-[11px]">
+                          {typeSummary.cadenceTier
                             ? `${badge.label} · ${typeSummary.cadenceTier}`
-                            : badge.label
-                        }
-                        sx={{
-                          fontFamily: 'monospace',
-                          fontWeight: 700,
-                          fontSize: '0.72rem',
-                          bgcolor: badge.bg,
-                          color: badge.color,
-                          border: `1px solid ${badge.border}`,
-                        }}
-                      />
-                    );
-                  })()}
+                            : badge.label}
+                        </Badge>
+                      );
+                    })()}
                   <StatusPill label={`${typeSummary.healthyCount} Healthy`} level="ok" />
                   {typeSummary.warningCount > 0 && (
                     <StatusPill
@@ -890,203 +726,174 @@ export const ResourceTypeEntitiesPage: React.FC<{ fixedResourceType?: string }> 
                     />
                   )}
                   {(typeSummary.driftedCount ?? 0) > 0 && (
-                    <StatusPill
-                      label={`${typeSummary.driftedCount} Drifted`}
-                      level="error"
-                    />
+                    <StatusPill label={`${typeSummary.driftedCount} Drifted`} level="error" />
                   )}
                 </>
               )}
+
               <Button
-                size="small"
-                variant="outlined"
-                startIcon={refreshing ? <CircularProgress size={15} /> : <RefreshIcon />}
+                size="sm"
+                variant="outline"
                 disabled={refreshing}
                 onClick={() => void loadEntities(true)}
               >
-                {refreshing ? 'Refreshing...' : 'Refresh Live'}
+                {refreshing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                <span>{refreshing ? 'Refreshing...' : 'Refresh Live'}</span>
               </Button>
+
               {SOURCING_RESOURCE_TYPE_SET.has(resourceType) && (
-                <Button
-                  size="small"
-                  variant="contained"
-                  component={RouterLink}
-                  to="/sourcing-audit?tab=wizard"
-                  startIcon={<AssessmentOutlinedIcon />}
-                >
-                  Sourcing Audit &amp; Wizard
+                <Button size="sm" asChild>
+                  <RouterLink to="/sourcing-audit?tab=wizard">
+                    <BarChart3 className="h-3.5 w-3.5" />
+                    <span>Sourcing Audit &amp; Wizard</span>
+                  </RouterLink>
                 </Button>
               )}
-              <Button
-                size="small"
-                variant="outlined"
-                component={RouterLink}
-                to={`/catalog?filters%5Bkind%5D=resource&filters%5Btype%5D=${encodeURIComponent(
-                  resourceType,
-                )}`}
-                startIcon={<FilterListIcon />}
-              >
-                View in Entity Registry
+
+              <Button size="sm" variant="outline" asChild>
+                <RouterLink
+                  to={`/catalog?filters%5Bkind%5D=resource&filters%5Btype%5D=${encodeURIComponent(
+                    resourceType,
+                  )}`}
+                >
+                  <Filter className="h-3.5 w-3.5" />
+                  <span>View in Entity Registry</span>
+                </RouterLink>
               </Button>
-            </Stack>
-          </Paper>
+            </div>
+          </CardContent>
+        </Card>
 
-          {error && <Alert severity="error">{error}</Alert>}
+        {error && (
+          <Alert variant="destructive">
+            <AlertTriangle />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
 
-          {loading ? (
-            <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-              <CircularProgress />
-            </Box>
-          ) : (
-            <TableContainer component={Paper} variant="outlined">
-              <Table size="medium">
-                <TableHead>
-                  <TableRow sx={{ bgcolor: 'action.hover' }}>
-                    <TableCell sx={{ fontWeight: 700 }}>Entity Instance</TableCell>
-                    <TableCell sx={{ fontWeight: 700 }}>Observed Status</TableCell>
-                    <TableCell sx={{ fontWeight: 700 }}>Summary & Hardware / Spec Identity</TableCell>
-                    <TableCell sx={{ fontWeight: 700 }}>Topology Relations</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 700 }}>
-                      Landing Page
+        {loading ? (
+          <div className="flex items-center justify-center py-16">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          <Card className="overflow-hidden">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Entity Instance</TableHead>
+                  <TableHead>Observed Status</TableHead>
+                  <TableHead>Summary &amp; Hardware / Spec Identity</TableHead>
+                  <TableHead>Topology Relations</TableHead>
+                  <TableHead className="text-right">Landing Page</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredEntities.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">
+                      No entities matched for resource type{' '}
+                      <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
+                        {resourceType}
+                      </code>
+                      .
                     </TableCell>
                   </TableRow>
-                </TableHead>
-                <TableBody>
-                  {filteredEntities.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={5} align="center" sx={{ py: 4 }}>
-                        <Typography variant="body2" color="text.secondary">
-                          No entities matched for resource type <code>{resourceType}</code>.
-                        </Typography>
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    filteredEntities.map(ent => {
-                      const ns = ent.metadata.namespace || 'default';
-                      const entityUrl = `/catalog/${encodeURIComponent(ns)}/resource/${encodeURIComponent(
-                        ent.metadata.name,
-                      )}`;
-                      const { status, level } = extractEntityStatus(ent);
-                      const relations = (ent.relations ?? []).filter(
-                        r =>
-                          r.type === 'dependsOn' ||
-                          r.type === 'partOf' ||
-                          r.type === 'hasPart',
-                      );
+                ) : (
+                  filteredEntities.map(ent => {
+                    const ns = ent.metadata.namespace || 'default';
+                    const entityUrl = `/catalog/${encodeURIComponent(ns)}/resource/${encodeURIComponent(
+                      ent.metadata.name,
+                    )}`;
+                    const { status, level } = extractEntityStatus(ent);
+                    const relations = (ent.relations ?? []).filter(
+                      r =>
+                        r.type === 'dependsOn' ||
+                        r.type === 'partOf' ||
+                        r.type === 'hasPart',
+                    );
 
-                      return (
-                        <TableRow key={ent.metadata.uid || ent.metadata.name} hover>
-                          <TableCell sx={{ minWidth: 210 }}>
-                            <Typography
-                              component={RouterLink}
-                              to={entityUrl}
-                              variant="subtitle2"
-                              sx={{
-                                fontWeight: 700,
-                                fontFamily: 'monospace',
-                                color: 'primary.main',
-                                textDecoration: 'none',
-                                '&:hover': { textDecoration: 'underline' },
-                              }}
-                            >
-                              {ent.metadata.name}
-                            </Typography>
-                            {ent.metadata.title && ent.metadata.title !== ent.metadata.name && (
-                              <Typography
-                                variant="caption"
-                                color="text.secondary"
-                                sx={{ display: 'block' }}
-                              >
-                                {ent.metadata.title}
-                              </Typography>
+                    return (
+                      <TableRow key={ent.metadata.uid || ent.metadata.name}>
+                        <TableCell className="min-w-[210px]">
+                          <RouterLink
+                            to={entityUrl}
+                            className="font-mono text-[13px] font-semibold text-foreground hover:underline"
+                          >
+                            {ent.metadata.name}
+                          </RouterLink>
+                          {ent.metadata.title && ent.metadata.title !== ent.metadata.name && (
+                            <div className="mt-0.5 text-xs text-muted-foreground">
+                              {ent.metadata.title}
+                            </div>
+                          )}
+                        </TableCell>
+
+                        <TableCell className="whitespace-nowrap">
+                          <StatusPill label={status} level={level} />
+                        </TableCell>
+
+                        <TableCell className="max-w-[460px]">
+                          <div className="text-[13px] text-foreground">
+                            {ent.metadata.description || '—'}
+                          </div>
+                          {ent.metadata.tags && ent.metadata.tags.length > 0 && (
+                            <div className="mt-1.5 flex flex-wrap gap-1">
+                              {ent.metadata.tags.slice(0, 5).map(t => (
+                                <Badge key={t} variant="muted" className="px-1.5 py-0 text-[10.5px]">
+                                  {t}
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
+                        </TableCell>
+
+                        <TableCell className="max-w-[300px]">
+                          <div className="flex flex-wrap gap-1">
+                            {relations.slice(0, 4).map((rel, idx) => {
+                              const shortTarget = rel.targetRef.replace(
+                                /^(resource|system):default\//i,
+                                '',
+                              );
+                              return (
+                                <RouterLink
+                                  key={`${rel.type}-${rel.targetRef}-${idx}`}
+                                  to={entityRefToCatalogUrl(rel.targetRef)}
+                                  className="inline-flex items-center rounded border border-solid border-border bg-muted/40 px-1.5 py-0.5 font-mono text-[10.5px] text-foreground transition-colors hover:bg-accent"
+                                >
+                                  {rel.type}: {shortTarget}
+                                </RouterLink>
+                              );
+                            })}
+                            {relations.length > 4 && (
+                              <Badge variant="muted" className="px-1.5 py-0 text-[10.5px]">
+                                +{relations.length - 4}
+                              </Badge>
                             )}
-                          </TableCell>
+                          </div>
+                        </TableCell>
 
-                          <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                            <StatusPill label={status} level={level} />
-                          </TableCell>
-
-                          <TableCell sx={{ maxWidth: 460 }}>
-                            <Typography variant="body2">
-                              {ent.metadata.description || '—'}
-                            </Typography>
-                            {ent.metadata.tags && ent.metadata.tags.length > 0 && (
-                              <Stack
-                                direction="row"
-                                spacing={0.5}
-                                flexWrap="wrap"
-                                useFlexGap
-                                sx={{ mt: 0.75 }}
-                              >
-                                {ent.metadata.tags.slice(0, 5).map(t => (
-                                  <Chip
-                                    key={t}
-                                    size="small"
-                                    variant="outlined"
-                                    label={t}
-                                    sx={{ height: 19, fontSize: '0.68rem' }}
-                                  />
-                                ))}
-                              </Stack>
-                            )}
-                          </TableCell>
-
-                          <TableCell sx={{ maxWidth: 300 }}>
-                            <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                              {relations.slice(0, 4).map((rel, idx) => {
-                                const shortTarget = rel.targetRef.replace(
-                                  /^(resource|system):default\//i,
-                                  '',
-                                );
-                                return (
-                                  <Chip
-                                    key={`${rel.type}-${rel.targetRef}-${idx}`}
-                                    size="small"
-                                    variant="outlined"
-                                    component={RouterLink}
-                                    to={entityRefToCatalogUrl(rel.targetRef)}
-                                    clickable
-                                    label={`${rel.type}: ${shortTarget}`}
-                                    sx={{
-                                      fontFamily: 'monospace',
-                                      fontSize: '0.69rem',
-                                      height: 21,
-                                    }}
-                                  />
-                                );
-                              })}
-                              {relations.length > 4 && (
-                                <Chip
-                                  size="small"
-                                  label={`+${relations.length - 4}`}
-                                  sx={{ height: 21, fontSize: '0.69rem' }}
-                                />
-                              )}
-                            </Stack>
-                          </TableCell>
-
-                          <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
-                            <Button
-                              size="small"
-                              variant="contained"
-                              component={RouterLink}
-                              to={entityUrl}
-                              endIcon={<ArrowForwardIcon />}
-                            >
-                              Inspect & Act
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })
-                  )}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          )}
-        </Stack>
-      </Content>
-    </Page>
+                        <TableCell className="whitespace-nowrap text-right">
+                          <Button size="xs" asChild>
+                            <RouterLink to={entityUrl}>
+                              <span>Inspect &amp; Act</span>
+                              <ArrowRight className="h-3 w-3" />
+                            </RouterLink>
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
+                )}
+              </TableBody>
+            </Table>
+          </Card>
+        )}
+      </PageBody>
+    </PageShell>
   );
 };
 

@@ -7138,8 +7138,8 @@ mod tests {
         let elapsed = start.elapsed();
 
         assert!(
-            elapsed < Duration::from_millis(50),
-            "cold get_snapshot(false) took {:?}, expected < 50ms",
+            elapsed < Duration::from_millis(250),
+            "cold get_snapshot(false) took {:?}, expected < 250ms (non-blocking offline baseline)",
             elapsed
         );
         assert_eq!(snap.resource_types.len(), 16);

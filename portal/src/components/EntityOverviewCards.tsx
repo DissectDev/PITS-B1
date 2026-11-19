@@ -1,32 +1,15 @@
 import React, { useMemo, useState } from 'react';
-import {
-  Alert,
-  Box,
-  Button,
-  Card,
-  CardContent,
-  CardHeader,
-  Chip,
-  CircularProgress,
-  Divider,
-  Grid,
-  Paper,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableRow,
-  Tooltip,
-  Typography,
-} from '@mui/material';
-import RefreshIcon from '@mui/icons-material/Refresh';
-import PlayCircleOutlineIcon from '@mui/icons-material/PlayCircleOutline';
-import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
-import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined';
-import SensorsIcon from '@mui/icons-material/Sensors';
-import HubIcon from '@mui/icons-material/Hub';
 import { Link as RouterLink } from 'react-router-dom';
+import {
+  AlertTriangle,
+  Loader2,
+  Lock,
+  Network,
+  PlayCircle,
+  Radio,
+  RefreshCw,
+  Shield,
+} from 'lucide-react';
 import { useEntity } from '@backstage/plugin-catalog-react';
 import { usePitsEntityDetail } from '../hooks/usePitsEntityDetail';
 import {
@@ -39,6 +22,19 @@ import {
 } from '../types';
 import { FormattedAttributeValue, inferStatusLevel, StatusPill } from './StatusPill';
 import { ActionExecutionDialog } from './ActionExecutionDialog';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from './ui/card';
+import { Alert, AlertDescription } from './ui/alert';
+import { Table, TableBody, TableCell, TableRow } from './ui/table';
+import { PitsTooltip } from './ui/pits-primitives';
+import { cn } from '../lib/utils';
 
 function observationModeLabel(mode?: ObservationMode): string {
   switch (mode) {
@@ -53,33 +49,29 @@ function observationModeLabel(mode?: ObservationMode): string {
   }
 }
 
-function signalColors(status?: string): { bg: string; color: string; border: string } {
+function signalToneClasses(status?: string): { box: string; value: string } {
   const lvl = inferStatusLevel(status, status);
   if (lvl === 'error') {
     return {
-      bg: 'rgba(211, 47, 47, 0.09)',
-      color: '#c62828',
-      border: 'rgba(211, 47, 47, 0.35)',
+      box: 'border-red-500/35 bg-red-500/[0.07]',
+      value: 'text-red-700 dark:text-red-400',
     };
   }
   if (lvl === 'warn') {
     return {
-      bg: 'rgba(237, 108, 2, 0.09)',
-      color: '#e65100',
-      border: 'rgba(237, 108, 2, 0.35)',
+      box: 'border-amber-500/35 bg-amber-500/[0.07]',
+      value: 'text-amber-700 dark:text-amber-400',
     };
   }
   if (lvl === 'ok') {
     return {
-      bg: 'rgba(46, 125, 50, 0.09)',
-      color: '#2e7d32',
-      border: 'rgba(46, 125, 50, 0.32)',
+      box: 'border-emerald-500/30 bg-emerald-500/[0.07]',
+      value: 'text-emerald-700 dark:text-emerald-400',
     };
   }
   return {
-    bg: 'rgba(2, 136, 209, 0.08)',
-    color: '#0277bd',
-    border: 'rgba(2, 136, 209, 0.30)',
+    box: 'border-sky-500/30 bg-sky-500/[0.06]',
+    value: 'text-sky-700 dark:text-sky-400',
   };
 }
 
@@ -110,337 +102,255 @@ export const EntityStatusSummaryCard: React.FC = () => {
 
   if (loading && !detail) {
     return (
-      <Card variant="outlined">
-        <CardContent sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 3 }}>
-          <CircularProgress size={24} />
-          <Typography variant="body2" color="text.secondary">
-            Synthesizing live entity state for <strong>{name}</strong>...
-          </Typography>
+      <Card>
+        <CardContent className="flex items-center gap-3 p-6">
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          <span className="text-xs text-muted-foreground">
+            Synthesizing live entity state for <strong className="text-foreground">{name}</strong>
+            ...
+          </span>
         </CardContent>
       </Card>
     );
   }
 
   return (
-    <Card variant="outlined">
-      <CardHeader
-        title={
-          <Stack direction="row" spacing={1.25} alignItems="center" flexWrap="wrap" useFlexGap>
-            <Typography variant="h6" sx={{ fontWeight: 700 }}>
-              {entity.metadata.title || entity.metadata.name}
-            </Typography>
-            <Chip
-              size="small"
-              color="primary"
-              variant="outlined"
-              component={RouterLink}
-              to={`/resource-types/${encodeURIComponent(resolvedType)}`}
-              clickable
-              label={resolvedType}
-              sx={{ fontFamily: 'monospace', fontWeight: 600 }}
-            />
-            {typeMeta && (
-              <Chip size="small" variant="outlined" label={typeMeta.domain} />
-            )}
-            {detail?.summary?.observationMode && (
-              <Tooltip title={`Refresh cadence: ${detail.summary.cadenceTier || 'standard-60s'}`}>
-                <Chip
-                  size="small"
-                  variant="outlined"
-                  label={`${observationModeLabel(detail.summary.observationMode)} · ${detail.summary.cadenceTier}`}
-                  sx={{ fontFamily: 'monospace', fontWeight: 600 }}
-                />
-              </Tooltip>
-            )}
-            {detail && (
-              <StatusPill label={detail.status} level={detail.statusLevel} size="medium" />
-            )}
-          </Stack>
-        }
-        action={
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={refreshing ? <CircularProgress size={15} /> : <RefreshIcon />}
-            disabled={refreshing}
-            onClick={() => void refreshLive()}
-          >
-            {refreshing ? 'Refreshing...' : 'Refresh Live Telemetry'}
-          </Button>
-        }
-      />
-      <Divider />
-      <CardContent>
-        <Stack spacing={2}>
-          {error && <Alert severity="warning">{error}</Alert>}
-
-          {detail?.summary?.driftDetected && (
-            <Alert
-              severity={detail.statusLevel === 'error' ? 'error' : 'warning'}
-              variant="outlined"
-              sx={{ fontWeight: 500 }}
+    <Card>
+      <CardHeader className="flex flex-col gap-3 border-b border-solid border-border sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-2">
+          <CardTitle className="text-base">
+            {entity.metadata.title || entity.metadata.name}
+          </CardTitle>
+          <RouterLink to={`/resource-types/${encodeURIComponent(resolvedType)}`}>
+            <Badge variant="outline" className="font-mono hover:bg-accent">
+              {resolvedType}
+            </Badge>
+          </RouterLink>
+          {typeMeta && <Badge variant="muted">{typeMeta.domain}</Badge>}
+          {detail?.summary?.observationMode && (
+            <PitsTooltip
+              content={`Refresh cadence: ${detail.summary.cadenceTier || 'standard-60s'}`}
             >
+              <Badge variant="outline" className="font-mono">
+                {observationModeLabel(detail.summary.observationMode)} ·{' '}
+                {detail.summary.cadenceTier}
+              </Badge>
+            </PitsTooltip>
+          )}
+          {detail && <StatusPill label={detail.status} level={detail.statusLevel} size="medium" />}
+        </div>
+
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={refreshing}
+          onClick={() => void refreshLive()}
+          className="shrink-0"
+        >
+          {refreshing ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <RefreshCw className="h-3.5 w-3.5" />
+          )}
+          <span>{refreshing ? 'Refreshing...' : 'Refresh Live Telemetry'}</span>
+        </Button>
+      </CardHeader>
+
+      <CardContent className="space-y-4 p-5">
+        {error && (
+          <Alert variant="warning">
+            <AlertTriangle />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+
+        {detail?.summary?.driftDetected && (
+          <Alert variant={detail.statusLevel === 'error' ? 'destructive' : 'warning'}>
+            <AlertTriangle />
+            <AlertDescription>
               <strong>Policy / Runtime Drift Detected:</strong>{' '}
-              {detail.summary.driftSummary || 'Observed state diverges from declared static contract.'}
-            </Alert>
-          )}
+              {detail.summary.driftSummary ||
+                'Observed state diverges from declared static contract.'}
+            </AlertDescription>
+          </Alert>
+        )}
 
-          <Paper
-            variant="outlined"
-            sx={{
-              p: 1.75,
-              bgcolor: 'action.hover',
-              display: 'flex',
-              flexDirection: { xs: 'column', sm: 'row' },
-              justifyContent: 'space-between',
-              alignItems: { xs: 'flex-start', sm: 'center' },
-              gap: 1.5,
-            }}
+        <div className="flex flex-col justify-between gap-3 rounded-lg border border-solid border-border bg-muted/40 p-4 sm:flex-row sm:items-center">
+          <div className="min-w-0 space-y-1">
+            <div className="text-sm font-semibold text-foreground">
+              {detail?.summary?.headline ||
+                detail?.summaryLine ||
+                entity.metadata.description ||
+                'PITS Infrastructure Resource Entity'}
+            </div>
+            {entity.metadata.description &&
+              detail?.summaryLine &&
+              entity.metadata.description !== detail.summaryLine && (
+                <div className="text-xs text-muted-foreground">{entity.metadata.description}</div>
+              )}
+          </div>
+
+          <Badge
+            variant={detail?.liveConnected ? 'ok' : 'muted'}
+            className="shrink-0 self-start sm:self-center"
           >
-            <Box>
-              <Typography variant="body1" sx={{ fontWeight: 600 }}>
-                {detail?.summary?.headline ||
-                  detail?.summaryLine ||
-                  entity.metadata.description ||
-                  'PITS Infrastructure Resource Entity'}
-              </Typography>
-              {entity.metadata.description &&
-                detail?.summaryLine &&
-                entity.metadata.description !== detail.summaryLine && (
-                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-                    {entity.metadata.description}
-                  </Typography>
-                )}
-            </Box>
+            <Radio className="h-3 w-3" />
+            <span>{detail?.liveConnected ? 'Live Telemetry Connected' : 'Baseline / Cached State'}</span>
+          </Badge>
+        </div>
 
-            <Stack direction="row" spacing={1} alignItems="center" sx={{ flexShrink: 0 }}>
-              <Chip
-                size="small"
-                icon={<SensorsIcon />}
-                color={detail?.liveConnected ? 'success' : 'default'}
-                variant={detail?.liveConnected ? 'filled' : 'outlined'}
-                label={detail?.liveConnected ? 'Live Telemetry Connected' : 'Baseline / Cached State'}
-              />
-            </Stack>
-          </Paper>
-
-          {detail?.summary &&
-            (detail.summary.staticPolicy.length > 0 || detail.summary.dynamicSignals.length > 0) && (
-              <Grid container spacing={2}>
-                {detail.summary.staticPolicy.length > 0 && (
-                  <Grid item xs={12} md={6}>
-                    <Paper variant="outlined" sx={{ p: 1.5, height: '100%' }}>
-                      <Stack
-                        direction="row"
-                        justifyContent="space-between"
-                        alignItems="center"
-                        sx={{ mb: 1 }}
-                      >
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          sx={{ fontWeight: 700, letterSpacing: 0.5 }}
+        {detail?.summary &&
+          (detail.summary.staticPolicy.length > 0 || detail.summary.dynamicSignals.length > 0) && (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              {detail.summary.staticPolicy.length > 0 && (
+                <div className="rounded-lg border border-solid border-border p-3.5">
+                  <div className="mb-2.5 flex items-center justify-between gap-2">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      Static Policy &amp; Contract Band
+                    </span>
+                    <Badge variant={detail.summary.driftDetected ? 'warn' : 'ok'}>
+                      {detail.summary.driftDetected ? 'Drift Guard Alert' : 'Compliant'}
+                    </Badge>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {detail.summary.staticPolicy.map((p: SummaryPill) => {
+                      const tone = signalToneClasses(p.status);
+                      return (
+                        <div
+                          key={p.key}
+                          className={cn(
+                            'rounded-md border border-solid px-2.5 py-1.5',
+                            tone.box,
+                          )}
                         >
-                          STATIC POLICY &amp; CONTRACT BAND
-                        </Typography>
-                        <Chip
-                          size="small"
-                          variant="outlined"
-                          label={detail.summary.driftDetected ? 'Drift Guard Alert' : 'Compliant'}
-                          color={detail.summary.driftDetected ? 'warning' : 'success'}
-                          sx={{ height: 20, fontSize: '0.68rem', fontWeight: 700 }}
-                        />
-                      </Stack>
-                      <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
-                        {detail.summary.staticPolicy.map((p: SummaryPill) => {
-                          const c = signalColors(p.status);
-                          return (
-                            <Box
-                              key={p.key}
-                              sx={{
-                                px: 1.1,
-                                py: 0.6,
-                                borderRadius: 1,
-                                bgcolor: c.bg,
-                                border: `1px solid ${c.border}`,
-                              }}
-                            >
-                              <Typography
-                                variant="caption"
-                                color="text.secondary"
-                                sx={{ display: 'block', fontSize: '0.68rem', fontWeight: 700 }}
-                              >
-                                {p.label}
-                              </Typography>
-                              <Typography
-                                variant="body2"
-                                sx={{
-                                  fontFamily: 'monospace',
-                                  fontWeight: 700,
-                                  fontSize: '0.78rem',
-                                  color: c.color,
-                                }}
-                              >
-                                {p.value}
-                              </Typography>
-                            </Box>
-                          );
-                        })}
-                      </Stack>
-                    </Paper>
-                  </Grid>
-                )}
+                          <div className="text-[10px] font-semibold text-muted-foreground">
+                            {p.label}
+                          </div>
+                          <div className={cn('font-mono text-xs font-bold', tone.value)}>
+                            {p.value}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
-                {detail.summary.dynamicSignals.length > 0 && (
-                  <Grid item xs={12} md={6}>
-                    <Paper variant="outlined" sx={{ p: 1.5, height: '100%' }}>
-                      <Stack
-                        direction="row"
-                        justifyContent="space-between"
-                        alignItems="center"
-                        sx={{ mb: 1 }}
-                      >
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          sx={{ fontWeight: 700, letterSpacing: 0.5 }}
+              {detail.summary.dynamicSignals.length > 0 && (
+                <div className="rounded-lg border border-solid border-border p-3.5">
+                  <div className="mb-2.5 flex items-center justify-between gap-2">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      Live Dynamic Signals &amp; Occupancy Band
+                    </span>
+                    {detail.summary.lastChangedAt && (
+                      <span className="text-[11px] text-muted-foreground">
+                        Changed: {new Date(detail.summary.lastChangedAt).toLocaleTimeString()}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {detail.summary.dynamicSignals.map((s: DynamicSignal) => {
+                      const tone = signalToneClasses(s.status);
+                      const glyph = trendGlyph(s.trend);
+                      return (
+                        <div
+                          key={s.key}
+                          className={cn(
+                            'min-w-[120px] rounded-md border border-solid px-2.5 py-1.5',
+                            tone.box,
+                          )}
                         >
-                          LIVE DYNAMIC SIGNALS &amp; OCCUPANCY BAND
-                        </Typography>
-                        {detail.summary.lastChangedAt && (
-                          <Typography variant="caption" color="text.secondary">
-                            Changed: {new Date(detail.summary.lastChangedAt).toLocaleTimeString()}
-                          </Typography>
-                        )}
-                      </Stack>
-                      <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
-                        {detail.summary.dynamicSignals.map((s: DynamicSignal) => {
-                          const c = signalColors(s.status);
-                          const glyph = trendGlyph(s.trend);
-                          return (
-                            <Box
-                              key={s.key}
-                              sx={{
-                                px: 1.1,
-                                py: 0.6,
-                                borderRadius: 1,
-                                bgcolor: c.bg,
-                                border: `1px solid ${c.border}`,
-                                minWidth: 120,
-                              }}
-                            >
-                              <Stack direction="row" justifyContent="space-between" spacing={0.75}>
-                                <Typography
-                                  variant="caption"
-                                  color="text.secondary"
-                                  sx={{ fontSize: '0.68rem', fontWeight: 700 }}
-                                >
-                                  {s.label}
-                                </Typography>
-                                {typeof s.observedAgeSecs === 'number' && s.observedAgeSecs > 0 && (
-                                  <Typography
-                                    variant="caption"
-                                    color="text.secondary"
-                                    sx={{ fontFamily: 'monospace', fontSize: '0.66rem' }}
-                                  >
-                                    {s.observedAgeSecs}s
-                                  </Typography>
-                                )}
-                              </Stack>
-                              <Stack direction="row" spacing={0.5} alignItems="baseline" flexWrap="wrap">
-                                <Typography
-                                  variant="body2"
-                                  sx={{
-                                    fontFamily: 'monospace',
-                                    fontWeight: 700,
-                                    fontSize: '0.78rem',
-                                    color: c.color,
-                                  }}
-                                >
-                                  {glyph ? `${glyph} ` : ''}
-                                  {s.value}
-                                </Typography>
-                                {s.delta && (
-                                  <Chip
-                                    size="small"
-                                    label={`Δ ${s.delta}`}
-                                    sx={{
-                                      height: 18,
-                                      fontFamily: 'monospace',
-                                      fontSize: '0.66rem',
-                                      fontWeight: 700,
-                                    }}
-                                  />
-                                )}
-                              </Stack>
-                            </Box>
-                          );
-                        })}
-                      </Stack>
-                    </Paper>
-                  </Grid>
-                )}
-              </Grid>
-            )}
-
-          <Grid container spacing={2}>
-            <Grid item xs={12} sm={6} md={3}>
-              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-                ENTITY REF
-              </Typography>
-              <Box sx={{ mt: 0.4 }}>
-                <FormattedAttributeValue
-                  value={`resource:${namespace}/${name}`}
-                  monospace
-                />
-              </Box>
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-                SYSTEM
-              </Typography>
-              <Box sx={{ mt: 0.4 }}>
-                <Chip
-                  size="small"
-                  icon={<HubIcon />}
-                  label={String((entity.spec as Record<string, unknown> | undefined)?.system ?? 'pits-infrastructure')}
-                  component={RouterLink}
-                  to="/catalog?filters%5Bkind%5D=resource"
-                  clickable
-                  variant="outlined"
-                />
-              </Box>
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-                OWNER & LIFECYCLE
-              </Typography>
-              <Typography variant="body2" sx={{ mt: 0.4, fontWeight: 500 }}>
-                {String((entity.spec as Record<string, unknown> | undefined)?.owner ?? 'group:default/operators')}
-                {' · '}
-                {String((entity.spec as Record<string, unknown> | undefined)?.lifecycle ?? 'production')}
-              </Typography>
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-                LAST SYNTHESIZED
-              </Typography>
-              <Typography variant="body2" sx={{ mt: 0.4, fontWeight: 500 }}>
-                {detail?.refreshedAt
-                  ? new Date(detail.refreshedAt).toLocaleTimeString()
-                  : 'Just now'}
-              </Typography>
-            </Grid>
-          </Grid>
-
-          {entity.metadata.tags && entity.metadata.tags.length > 0 && (
-            <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
-              {entity.metadata.tags.map(tag => (
-                <Chip key={tag} size="small" label={`#${tag}`} variant="outlined" />
-              ))}
-            </Stack>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[10px] font-semibold text-muted-foreground">
+                              {s.label}
+                            </span>
+                            {typeof s.observedAgeSecs === 'number' && s.observedAgeSecs > 0 && (
+                              <span className="font-mono text-[10px] text-muted-foreground">
+                                {s.observedAgeSecs}s
+                              </span>
+                            )}
+                          </div>
+                          <div className="mt-0.5 flex flex-wrap items-baseline gap-1.5">
+                            <span className={cn('font-mono text-xs font-bold', tone.value)}>
+                              {glyph ? `${glyph} ` : ''}
+                              {s.value}
+                            </span>
+                            {s.delta && (
+                              <Badge variant="muted" className="px-1 py-0 font-mono text-[10px]">
+                                Δ {s.delta}
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
           )}
-        </Stack>
+
+        <div className="grid grid-cols-1 gap-4 pt-1 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="space-y-1">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Entity Ref
+            </div>
+            <FormattedAttributeValue value={`resource:${namespace}/${name}`} monospace />
+          </div>
+          <div className="space-y-1">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              System
+            </div>
+            <div>
+              <RouterLink to="/catalog?filters%5Bkind%5D=resource">
+                <Badge variant="outline" className="hover:bg-accent">
+                  <Network className="h-3 w-3" />
+                  <span>
+                    {String(
+                      (entity.spec as Record<string, unknown> | undefined)?.system ??
+                        'pits-infrastructure',
+                    )}
+                  </span>
+                </Badge>
+              </RouterLink>
+            </div>
+          </div>
+          <div className="space-y-1">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Owner &amp; Lifecycle
+            </div>
+            <div className="text-xs font-medium text-foreground">
+              {String(
+                (entity.spec as Record<string, unknown> | undefined)?.owner ??
+                  'group:default/operators',
+              )}
+              {' · '}
+              {String(
+                (entity.spec as Record<string, unknown> | undefined)?.lifecycle ?? 'production',
+              )}
+            </div>
+          </div>
+          <div className="space-y-1">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Last Synthesized
+            </div>
+            <div className="text-xs font-medium text-foreground">
+              {detail?.refreshedAt
+                ? new Date(detail.refreshedAt).toLocaleTimeString()
+                : 'Just now'}
+            </div>
+          </div>
+        </div>
+
+        {entity.metadata.tags && entity.metadata.tags.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {entity.metadata.tags.map(tag => (
+              <Badge key={tag} variant="muted">
+                #{tag}
+              </Badge>
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -454,11 +364,12 @@ export const EntityAttributesCard: React.FC = () => {
 
   if (loading && !detail) {
     return (
-      <Card variant="outlined">
-        <CardHeader title="Desired vs Observed Attributes" />
-        <Divider />
-        <CardContent sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-          <CircularProgress size={26} />
+      <Card>
+        <CardHeader className="border-b border-solid border-border">
+          <CardTitle>Desired vs Observed Attributes</CardTitle>
+        </CardHeader>
+        <CardContent className="flex justify-center p-8">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
         </CardContent>
       </Card>
     );
@@ -467,81 +378,62 @@ export const EntityAttributesCard: React.FC = () => {
   const sections: AttributeSection[] = detail?.attributeSections ?? [];
 
   return (
-    <Card variant="outlined">
-      <CardHeader
-        title="Structured Entity Attributes"
-        subheader="Desired contract specification reconciled against live hardware, kernel, and control-plane state"
-      />
-      <Divider />
-      <CardContent>
+    <Card>
+      <CardHeader className="border-b border-solid border-border">
+        <CardTitle>Structured Entity Attributes</CardTitle>
+        <CardDescription>
+          Desired contract specification reconciled against live hardware, kernel, and
+          control-plane state
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="p-5">
         {sections.length === 0 ? (
-          <Typography variant="body2" color="text.secondary">
+          <div className="text-xs text-muted-foreground">
             No structured attribute sections reported for this entity.
-          </Typography>
+          </div>
         ) : (
-          <Stack spacing={2.5}>
+          <div className="space-y-4">
             {sections.map(section => (
-              <Paper key={section.id} variant="outlined" sx={{ overflow: 'hidden' }}>
-                <Box
-                  sx={{
-                    px: 2,
-                    py: 1,
-                    bgcolor: 'action.hover',
-                    borderBottom: '1px solid',
-                    borderColor: 'divider',
-                  }}
-                >
-                  <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-                    {section.title}
-                  </Typography>
-                </Box>
-                <TableContainer>
-                  <Table size="small">
-                    <TableBody>
-                      {section.items.map(item => (
-                        <TableRow key={item.key} hover>
-                          <TableCell
-                            sx={{
-                              width: '36%',
-                              fontWeight: 600,
-                              color: 'text.secondary',
-                              verticalAlign: 'middle',
-                            }}
-                          >
-                            <Tooltip title={item.key} placement="top-start">
-                              <span>{item.label}</span>
-                            </Tooltip>
-                          </TableCell>
-                          <TableCell sx={{ verticalAlign: 'middle' }}>
-                            <Stack
-                              direction="row"
-                              spacing={1}
-                              alignItems="center"
-                              justifyContent="space-between"
-                              flexWrap="wrap"
-                              useFlexGap
-                            >
-                              <FormattedAttributeValue
-                                value={item.value}
-                                monospace={item.monospace}
-                                itemKey={item.key}
+              <div
+                key={section.id}
+                className="overflow-hidden rounded-lg border border-solid border-border"
+              >
+                <div className="border-b border-solid border-border bg-muted/50 px-3.5 py-2 text-xs font-semibold text-foreground">
+                  {section.title}
+                </div>
+                <Table>
+                  <TableBody>
+                    {section.items.map(item => (
+                      <TableRow key={item.key}>
+                        <TableCell className="w-[36%] font-medium text-muted-foreground">
+                          <PitsTooltip content={item.key}>
+                            <span className="cursor-help border-b border-dashed border-border">
+                              {item.label}
+                            </span>
+                          </PitsTooltip>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <FormattedAttributeValue
+                              value={item.value}
+                              monospace={item.monospace}
+                              itemKey={item.key}
+                            />
+                            {item.status && (
+                              <StatusPill
+                                label={item.status.toUpperCase()}
+                                level={item.status}
                               />
-                              {item.status && (
-                                <StatusPill
-                                  label={item.status.toUpperCase()}
-                                  level={item.status}
-                                />
-                              )}
-                            </Stack>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              </Paper>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             ))}
-          </Stack>
+          </div>
         )}
       </CardContent>
     </Card>
@@ -568,11 +460,12 @@ export const EntityContextualActionsCard: React.FC = () => {
 
   if (loading && !detail) {
     return (
-      <Card variant="outlined">
-        <CardHeader title="Contextual Entity Actions" />
-        <Divider />
-        <CardContent sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-          <CircularProgress size={26} />
+      <Card>
+        <CardHeader className="border-b border-solid border-border">
+          <CardTitle>Contextual Entity Actions</CardTitle>
+        </CardHeader>
+        <CardContent className="flex justify-center p-8">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
         </CardContent>
       </Card>
     );
@@ -580,149 +473,102 @@ export const EntityContextualActionsCard: React.FC = () => {
 
   return (
     <>
-      <Card variant="outlined">
-        <CardHeader
-          title="Contextual Entity Actions"
-          subheader={`Precondition-gated operations scoped strictly to ${name}`}
-        />
-        <Divider />
-        <CardContent>
+      <Card>
+        <CardHeader className="border-b border-solid border-border">
+          <CardTitle>Contextual Entity Actions</CardTitle>
+          <CardDescription>
+            Precondition-gated operations scoped strictly to {name}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="p-5">
           {groupedActions.length === 0 ? (
-            <Typography variant="body2" color="text.secondary">
+            <div className="text-xs text-muted-foreground">
               No contextual actions registered for this entity.
-            </Typography>
+            </div>
           ) : (
-            <Stack spacing={2.25}>
+            <div className="space-y-5">
               {groupedActions.map(([category, actions]) => (
-                <Box key={category}>
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    sx={{
-                      fontWeight: 700,
-                      textTransform: 'uppercase',
-                      letterSpacing: 0.6,
-                      display: 'block',
-                      mb: 1,
-                    }}
-                  >
+                <div key={category} className="space-y-2.5">
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                     {category}
-                  </Typography>
-                  <Stack spacing={1.25}>
+                  </div>
+                  <div className="space-y-2">
                     {actions.map(act => {
                       const isDisabled = !act.enabled;
                       return (
-                        <Paper
+                        <div
                           key={act.id}
-                          variant="outlined"
-                          sx={{
-                            p: 1.5,
-                            opacity: isDisabled ? 0.85 : 1,
-                            bgcolor: isDisabled ? 'action.hover' : 'background.paper',
-                          }}
+                          className={cn(
+                            'space-y-2 rounded-lg border border-solid border-border p-3.5 transition-colors',
+                            isDisabled ? 'bg-muted/40 opacity-85' : 'bg-card hover:border-foreground/25',
+                          )}
                         >
-                          <Stack spacing={1}>
-                            <Stack
-                              direction="row"
-                              justifyContent="space-between"
-                              alignItems="flex-start"
-                              spacing={1.5}
-                            >
-                              <Box sx={{ minWidth: 0 }}>
-                                <Stack
-                                  direction="row"
-                                  spacing={0.75}
-                                  alignItems="center"
-                                  flexWrap="wrap"
-                                  useFlexGap
-                                >
-                                  <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-                                    {act.title}
-                                  </Typography>
-                                  <Chip
-                                    size="small"
-                                    label={act.id}
-                                    sx={{
-                                      fontFamily: 'monospace',
-                                      fontSize: '0.7rem',
-                                      height: 20,
-                                    }}
-                                  />
-                                  {act.dangerous && (
-                                    <Chip
-                                      size="small"
-                                      color="warning"
-                                      variant="outlined"
-                                      icon={<ShieldOutlinedIcon />}
-                                      label="Guarded"
-                                      sx={{ height: 20, fontSize: '0.7rem' }}
-                                    />
-                                  )}
-                                  {act.supportsDryRun && (
-                                    <Chip
-                                      size="small"
-                                      color="info"
-                                      variant="outlined"
-                                      label="Dry-Run"
-                                      sx={{ height: 20, fontSize: '0.7rem' }}
-                                    />
-                                  )}
-                                </Stack>
-                                <Typography
-                                  variant="body2"
-                                  color="text.secondary"
-                                  sx={{ mt: 0.5, fontSize: '0.82rem' }}
-                                >
-                                  {act.description}
-                                </Typography>
-                              </Box>
-
-                              <Tooltip
-                                title={
-                                  isDisabled
-                                    ? act.disabledReason || 'Precondition gate not satisfied'
-                                    : `Open ${act.title}`
-                                }
-                              >
-                                <span>
-                                  <Button
-                                    size="small"
-                                    variant={act.dangerous ? 'outlined' : 'contained'}
-                                    color={act.dangerous ? 'warning' : 'primary'}
-                                    disabled={isDisabled}
-                                    startIcon={
-                                      isDisabled ? (
-                                        <LockOutlinedIcon />
-                                      ) : (
-                                        <PlayCircleOutlineIcon />
-                                      )
-                                    }
-                                    onClick={() => setSelectedAction(act)}
-                                    sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}
-                                  >
-                                    {isDisabled ? 'Gated' : 'Run'}
-                                  </Button>
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 space-y-1">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="text-[13px] font-semibold text-foreground">
+                                  {act.title}
                                 </span>
-                              </Tooltip>
-                            </Stack>
+                                <Badge variant="muted" className="font-mono text-[10.5px]">
+                                  {act.id}
+                                </Badge>
+                                {act.dangerous && (
+                                  <Badge variant="warn" className="text-[10.5px]">
+                                    <Shield className="h-3 w-3" />
+                                    <span>Guarded</span>
+                                  </Badge>
+                                )}
+                                {act.supportsDryRun && (
+                                  <Badge variant="info" className="text-[10.5px]">
+                                    Dry-Run
+                                  </Badge>
+                                )}
+                              </div>
+                              <p className="m-0 text-xs leading-relaxed text-muted-foreground">
+                                {act.description}
+                              </p>
+                            </div>
 
-                            {isDisabled && act.disabledReason && (
-                              <Alert
-                                severity="warning"
-                                icon={<LockOutlinedIcon fontSize="small" />}
-                                sx={{ py: 0.25, px: 1.25, '& .MuiAlert-message': { fontSize: '0.78rem' } }}
-                              >
+                            <PitsTooltip
+                              content={
+                                isDisabled
+                                  ? act.disabledReason || 'Precondition gate not satisfied'
+                                  : `Open ${act.title}`
+                              }
+                            >
+                              <span className="shrink-0">
+                                <Button
+                                  size="xs"
+                                  variant={act.dangerous ? 'warning' : 'default'}
+                                  disabled={isDisabled}
+                                  onClick={() => setSelectedAction(act)}
+                                >
+                                  {isDisabled ? (
+                                    <Lock className="h-3 w-3" />
+                                  ) : (
+                                    <PlayCircle className="h-3 w-3" />
+                                  )}
+                                  <span>{isDisabled ? 'Gated' : 'Run'}</span>
+                                </Button>
+                              </span>
+                            </PitsTooltip>
+                          </div>
+
+                          {isDisabled && act.disabledReason && (
+                            <Alert variant="warning" className="py-2">
+                              <Lock />
+                              <AlertDescription>
                                 <strong>Precondition Blocked:</strong> {act.disabledReason}
-                              </Alert>
-                            )}
-                          </Stack>
-                        </Paper>
+                              </AlertDescription>
+                            </Alert>
+                          )}
+                        </div>
                       );
                     })}
-                  </Stack>
-                </Box>
+                  </div>
+                </div>
               ))}
-            </Stack>
+            </div>
           )}
         </CardContent>
       </Card>
